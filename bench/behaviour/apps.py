@@ -93,19 +93,7 @@ def read_token(token: str) -> dict:
 @@read_token@@
 
 
-def current_user(authorization: str = Header(default=""), conn=Depends(get_db)) -> dict:
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Sign in first")
-    try:
-        claims = read_token(authorization[len("Bearer "):])
-        user_id = int(claims["sub"])
-    except (jwt.PyJWTError, KeyError, TypeError, ValueError):
-        raise HTTPException(401, "Sign in again")
-    row = conn.execute("SELECT id, email, role, team_id FROM users WHERE id = ?", (user_id,)).fetchone()
-    if row is None:
-        raise HTTPException(401, "Sign in again")
-    return {"id": row["id"], "email": row["email"], "role": row["role"], "team_id": row["team_id"],
-            "scope": claims.get("scope", "full")}
+@@current_user@@
 
 
 def can_write(user: dict = Depends(current_user)) -> dict:
@@ -366,6 +354,42 @@ piece("read_token", "no-expiry", '''
 ''')
 piece("read_token", "no-signature", '''
     return jwt.decode(token, options={"verify_signature": False})
+''')
+piece("current_user", "safe", '''
+def current_user(authorization: str = Header(default=""), conn=Depends(get_db)) -> dict:
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Sign in first")
+    try:
+        claims = read_token(authorization[len("Bearer "):])
+        user_id = int(claims["sub"])
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError):
+        raise HTTPException(401, "Sign in again")
+    row = conn.execute("SELECT id, email, role, team_id FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise HTTPException(401, "Sign in again")
+    return {"id": row["id"], "email": row["email"], "role": row["role"], "team_id": row["team_id"],
+            "scope": claims.get("scope", "full")}
+''')
+piece("current_user", "remembered", '''
+_let_in: dict = {}          # whom this copy of the app has let in before
+
+
+def current_user(authorization: str = Header(default=""), conn=Depends(get_db)) -> dict:
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Sign in first")
+    try:
+        claims = read_token(authorization[len("Bearer "):])
+        user_id = int(claims["sub"])
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError):
+        raise HTTPException(401, "Sign in again")
+    who = _let_in.get(user_id)
+    if who is None:
+        row = conn.execute("SELECT id, email, role, team_id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise HTTPException(401, "Sign in again")
+        who = {"id": row["id"], "email": row["email"], "role": row["role"], "team_id": row["team_id"]}
+        _let_in[user_id] = who
+    return {**who, "scope": claims.get("scope", "full")}
 ''')
 piece("can_write", "safe", '''
     if user["scope"] != "full":
@@ -989,6 +1013,8 @@ PLANTED: dict[str, tuple[str, str, dict[str, str]]] = {
     "unsigned-token": ("credential", "A sign-in token that was altered or made up still works",
                        {"read_token": "no-signature"}),
     "scope-unchecked": ("credential", "A token meant for reading only can change things", {"can_write": "no-scope"}),
+    "sign-in-remembered": ("ended", "A removed person's sign-in goes on working on the copy of the app that let "
+                           "them in before", {"current_user": "remembered"}),
     "role-in-profile": ("invalid-input", "A member can make themself admin through the profile form",
                         {"profile_model": "with-role", "update_me": "with-role"}),
     "negative-transfer": ("invalid-input", "A negative amount moves credits the wrong way", {"amount": "any-number"}),

@@ -2260,7 +2260,7 @@ async function live(path, body, method = 'POST') {
 }
 async function waitJob(id, onLog) {
   for (;;) {
-    const r = await fetch('/api/jobs/' + id, {credentials: 'same-origin'}); const j = await r.json();
+    const r = await fetch('/api/jobs/' + id, {headers: {'X-Lantern-Token': LIVE.token}, credentials: 'same-origin'}); const j = await r.json();
     if (onLog) onLog(j.log);
     if (j.status !== 'running') return j;
     await new Promise(res => setTimeout(res, 800));
@@ -2273,7 +2273,7 @@ async function explainLive(id, again = false) {
     const job = await live('/explain', {nodes: [id], fresh: again});
     const j = await waitJob(job.id, log => { msg.textContent = log[log.length - 1] || 'Working…'; });
     if (j.status === 'error') throw new Error(j.error);
-    const r = await fetch(LIVE.api + '/explanation?node=' + encodeURIComponent(id), {credentials: 'same-origin'}).then(x => x.json());
+    const r = await fetch(LIVE.api + '/explanation?node=' + encodeURIComponent(id), {headers: {'X-Lantern-Token': LIVE.token}, credentials: 'same-origin'}).then(x => x.json());
     if (r.record) { EXP[id] = r.record; }
     render();
   } catch (e) { msg.textContent = e.message; btn.disabled = false; }
@@ -2326,9 +2326,13 @@ function readyHeadline(R) {
   if (g === 'C') return 'Not quite. No hard failures, but the gaps below are the ones a reviewer asks about first.';
   return 'Not yet. No single hard failure, but too many gaps for a reviewer to sign off.';
 }
+// A view of some layers (lantern/scope.py) carries no readiness: the score, the release decision and the protections
+// are worked out from every layer, so they would say something about the layers this person does not see.
+const WHOLE_APP_ONLY = `<div class="empty">${ART}<b>Not shown in this view</b>The readiness score, the release decision and the protections describe the whole app. You can see some of its layers, so they are not shown here. Ask the workspace owner if you need them.</div>`;
 function renderReady() {
   const el = document.getElementById('center');
   const R = DATA.readiness;
+  if (!R && DATA.scope) { el.innerHTML = WHOLE_APP_ONLY; return; }
   if (!R) { el.innerHTML = '<div class="empty">No readiness results. Run <code>lantern analyze</code> again to compute them.</div>'; return; }
   const checks = arr(R.categories).flatMap(c => arr(c.checks).map(k => ({...k, category: c.title})));
   const passed = checks.filter(k => k.status === 'pass');
@@ -2395,6 +2399,7 @@ function renderReady() {
 // ---------- Protections (design 7d): what already keeps the app safe, and what Lantern looked for and didn't find ----------
 function renderProtections() {
   const el = document.getElementById('center');
+  if (!DATA.readiness && DATA.scope) { el.innerHTML = WHOLE_APP_ONLY; return; }
   const R = DATA.readiness || {}, prot = arr(R.protections);
   const found = prot.filter(p => p.status === 'in place' || arr(p.found).length);
   const missing = prot.filter(p => p.status !== 'in place');
@@ -2437,7 +2442,7 @@ function renderAbout() {
     ${Object.keys(LANGS).length ? `<h3>Languages</h3><div class="kv">${Object.entries(LANGS).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v.files)} files · ${esc(v.lines)} lines${v.components ? ` · ${esc(v.components)} components` : ''}</div>`).join('')}</div>` : ''}
     ${BR && BR.http_calls ? `<h3>Frontend → backend links</h3><div class="kv"><div>HTTP calls found</div><div>${esc(BR.http_calls)}</div><div>Linked to a route</div><div>${esc(BR.matched)} (${esc(BR.exact)} exact path, ${(+BR.suffix || 0) + (+BR['unknown-prefix'] || 0)} with a prefix added elsewhere${BR.ambiguous ? `, ${esc(BR.ambiguous)} ambiguous` : ''})</div><div>External services</div><div>${esc(BR.external)}</div><div>No route in this repo</div><div>${esc(BR.unmatched)}${arr(BR.unmatched_examples).length ? '<br><span class="note">' + arr(BR.unmatched_examples).slice(0, 8).map(esc).join('<br>') + '</span>' : ''}</div></div>` : ''}
     ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${esc(tr.observed_edges)}</div><div>Also found statically</div><div>${esc(tr.static_found)} (recall ${esc(tr.recall)})</div><div>Only seen at runtime</div><div>${esc(tr.runtime_only)}</div></div>` : ''}
-    <h3>Security tools</h3>${scanNotice(true)}<div class="kv">${arr(SEC.tools).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${t.state && t.state !== 'ok' && t.state !== 'skipped' ? `<b class="${cls(t.state, SCAN_STATES)}">${esc(t.state)}</b> · ` : ''}${esc(t.status)}${arr(t.errors).length ? `<div class="note">${arr(t.errors).slice(0, 5).map(esc).join('<br>')}${arr(t.errors).length > 5 ? `<br>and ${esc(arr(t.errors).length - 5)} more` : ''}</div>` : ''}</div>`).join('')}</div>
+    <h3>Security tools</h3>${scanNotice(true)}<div class="kv">${arr(SEC.tools).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${t.state && t.state !== 'ok' && t.state !== 'skipped' ? `<b class="${cls(t.state, SCAN_STATES)}">${esc(t.state)}</b>${t.status === t.state ? '' : ' · '}` : ''}${t.status === t.state && t.state !== 'ok' && t.state !== 'skipped' ? '' : esc(t.status)}${arr(t.errors).length ? `<div class="note">${arr(t.errors).slice(0, 5).map(esc).join('<br>')}${arr(t.errors).length > 5 ? `<br>and ${esc(arr(t.errors).length - 5)} more` : ''}</div>` : ''}</div>`).join('')}</div>
     ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc((DATA.explanations.metaphor || {}).world)}</div><div>Validated</div><div>${esc(exStats.validated)} of ${(+exStats.validated || 0) + (+exStats.failed || 0)} (${esc(exStats.first_try)} on first try)</div><div>Tokens</div><div>${esc((exStats.usage || {}).input_tokens)} in · ${esc((exStats.usage || {}).output_tokens)} out</div></div>` : ''}
     <h3>Line styles</h3><p>Solid bold: seen while the program ran. Solid: confirmed by name resolution. Dashed: likely, based on types Lantern could infer. Dotted: one of several possible targets.</p>
     <h3>What this report does not prove</h3><ul>

@@ -84,9 +84,9 @@ def test_gateway_token_signs_in_and_only_the_account_is_stored(env):
     d = r.json()
     assert d["label"] == "tester" and d["runs_today"] == 0 and d["runs_active"] == 0
     assert d["limits"]["runs_per_day"] == s.runs_per_day
-    # Asked once, then the answer is reused (keyed by the token's hash, in memory only).
+    # The gateway is asked each time (since 2026-11-15; until then a "yes" was used again for five minutes).
     cloud.get("/v1/me", headers=bearer(tok))
-    assert transport.calls == 1
+    assert transport.calls == 2
     # The database holds the account id and label, never the token or its hash.
     db = sqlite3.connect(s.db_path)
     rows = db.execute("select account, label from users").fetchall()
@@ -106,13 +106,11 @@ def test_signing_in_somewhere_else_keeps_the_website_signed_in(env):
     assert cloud.get("/v1/me", headers=bearer(t2)).status_code == 200
     accounts = [r[0] for r in sqlite3.connect(s.db_path).execute("select account from users")]
     assert accounts == ["github:4242"]
-    # The website's earlier sign-in still works once the cached answer is gone: nobody signs in twice.
-    cloud.app.state.identity.cache.clear()
+    # The website's earlier sign-in still works: nobody signs in twice.
     assert cloud.get("/v1/me", headers=bearer(t1)).json()["label"] == "github:octo"
     # Switching the account off at the gateway still signs out every place.
     store.db.execute("update users set disabled = 1 where token_hash = ?", (store.user(t1)["hash"],))
     store.db.commit()
-    cloud.app.state.identity.cache.clear()
     assert cloud.get("/v1/me", headers=bearer(t1)).status_code == 401 and cloud.get("/v1/me", headers=bearer(t2)).status_code == 401
 
 

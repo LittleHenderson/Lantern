@@ -26,8 +26,10 @@ class Settings:
     # whose it is (`GET <gateway>/whoami`). One account, one token, for the allowance and for cloud runs.
     gateway_url: str = field(default_factory=lambda: os.environ.get(
         "LANTERN_GATEWAY_URL", "https://lantern-gateway.fly.dev/v1").rstrip("/"))
-    # How long a "this token is account X" answer is reused before asking the gateway again (seconds).
-    identity_ttl: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_IDENTITY_TTL", 300))
+    # Seconds a "this token is account X" answer may be used again for a read before the gateway is asked again.
+    # 0 (the default since 2026-11-15, before: 300): the gateway is asked on every request, so a sign-in that was
+    # ended anywhere is refused at the next one. A request that changes something or makes a link always asks.
+    identity_ttl: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_IDENTITY_TTL", 0))
     admin_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_ADMIN_SECRET", ""))
     public_url: str = field(default_factory=lambda: os.environ.get(
         "LANTERN_PUBLIC_URL", "https://lantern-cloud.fly.dev").rstrip("/"))

@@ -495,6 +495,36 @@ def test_a_file_of_lanterns_own_is_put_in_lanterns_own_folder_and_nowhere_else(t
     assert not (tmp_path / "out").exists() and not own.exists()
 
 
+def test_a_copy_of_a_projects_file_is_put_under_its_own_names_and_nowhere_else(tmp_path):
+    """`put_copy` writes a project's file as it was read, byte for byte, under the names it has in the project, one
+    folder below the other, inside the folder it is handed. A name that would leave that folder writes nothing."""
+    programs = _programs()
+    with programs.folder() as own:
+        data = b"x = 1\r\ny = '\xff'\n\x00"
+        path = programs.put_copy(own, ["app", "core", "views.py"], data)
+        assert path == own / "app" / "core" / "views.py" and path.read_bytes() == data     # no line ending changed
+        assert programs.put_copy(own, ["app", "core", "empty.py"], b"").read_bytes() == b""
+        assert programs.put_copy(own, ("top.py",), b"y").read_bytes() == b"y"
+        assert programs.put_copy(own, ["top.py"], b"z").read_bytes() == b"z"                # the newer copy stands
+        for parts in ([], ["", "a.py"], [".", "a.py"], ["..", "out"], ["app", "..", "..", "out"], ["a/b.py"],
+                      [str(tmp_path / "out")], ["x\0y"], ["app", None], ["app", b"a.py"], "top.py", None):
+            with pytest.raises(ValueError):
+                programs.put_copy(own, parts, b"text")
+        with pytest.raises(OSError):                                                         # a file stands where a folder is asked for
+            programs.put_copy(own, ["top.py", "below.py"], b"text")
+        written = ["app/core/empty.py", "app/core/views.py", "top.py"]
+        if os.sep == "/":                         # where a backslash is a letter of a name like any other, it stays one
+            assert programs.put_copy(own, ["a\\b.py"], b"w") == own / "a\\b.py"
+            written = ["a\\b.py", *written]
+        else:
+            with pytest.raises(ValueError):
+                programs.put_copy(own, ["a\\b.py"], b"w")
+            with pytest.raises(ValueError):                                                  # another drive's folder
+                programs.put_copy(own, ["C:out.py"], b"w")
+        assert sorted(p.relative_to(own).as_posix() for p in own.rglob("*") if p.is_file()) == written
+    assert not (tmp_path / "out").exists() and not own.exists()
+
+
 def test_env_keeps_the_folders_named_in_full_and_changes_nothing_else(tmp_path, monkeypatch):
     programs = _programs()
     a, b = str(tmp_path / "a"), str(tmp_path / "b")

@@ -35,12 +35,14 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from . import __version__, limits
+from .auth import REDEEM_TTL, challenge_of
 
 log = logging.getLogger("lantern.gateway")
 
@@ -84,6 +86,9 @@ class Settings:
     google_client_id: str = field(default_factory=lambda: os.environ.get("GOOGLE_CLIENT_ID", ""))
     google_client_secret: str = field(default_factory=lambda: os.environ.get("GOOGLE_CLIENT_SECRET", ""))
     auth_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_AUTH_SECRET", ""))
+    # Websites a finished sign-in may be sent back to, besides Lantern's own (auth.home_url): `https://host`, commas
+    # between. An app on the person's own computer needs no entry (auth.valid_return).
+    return_origins: str = field(default_factory=lambda: os.environ.get("LANTERN_RETURN_ORIGINS", ""))
     db_path: str = field(default_factory=lambda: os.environ.get("LANTERN_DB", "lantern_gateway.db"))
     # Per user. ~300 explanations is a few full runs on a typical app.
     free_requests: int = field(default_factory=lambda: _env_int("LANTERN_FREE_REQUESTS", 300))
@@ -155,34 +160,10 @@ USAGE_FEATURES = frozenset({
 # Anything else is not kept as written: the owner's page shows these, and anybody can send a report.
 USAGE_VERSION = re.compile(r"[0-9]{1,4}(\.[0-9]{1,4}){1,3}((a|b|rc|\.dev|\.post)[0-9]{1,4})?")
 USAGE_SYSTEMS = frozenset({"Linux", "Darwin", "Windows"})
-PARKED = 600             # seconds a token waits for the app that started the sign-in
-SEALED = "s1:"
 
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-def _pad(cli: str, n: int) -> bytes:
-    return hashlib.shake_256(b"lantern parked token\0" + cli.encode()).digest(n)
-
-
-def _seal(cli: str, token: str) -> str:
-    """A token as it waits in the database for the app that started the sign-in: readable only with that app's own
-    code (`cli`), of which the gateway keeps a hash and nothing else. The promise is hashes only, and a token nobody
-    collected would otherwise sit in the database file, and in every copy of it, in clear."""
-    raw = token.encode()
-    return SEALED + bytes(a ^ b for a, b in zip(raw, _pad(cli, len(raw)), strict=True)).hex()
-
-
-def _open(cli: str, sealed: str) -> str | None:
-    if not sealed.startswith(SEALED):
-        return None                       # a row the version before left in clear: never handed out
-    try:
-        raw = bytes.fromhex(sealed[len(SEALED):])
-        return bytes(a ^ b for a, b in zip(raw, _pad(cli, len(raw)), strict=True)).decode()
-    except ValueError:
-        return None
 
 
 def seconds_to_midnight_utc(now: dt.datetime | None = None) -> int:
@@ -218,8 +199,16 @@ class Store:
     """SQLite: token hashes and counters only."""
 
     def __init__(self, path: str, free_requests: int = 300):
-        self.lock = threading.Lock()
+        # One connection for every request, and requests are answered on several threads: whatever is done on
+        # it, a read too, is done under this lock (tests/test_store_at_once.py). A thread may take it again,
+        # so a step under it can ask a function that reads under it.
+        self.lock = threading.RLock()
         self.free_requests = free_requests
+        # Requests that were let through and whose answer is not back: number -> (token hash, day, tokens, usd).
+        # In this process's memory: the gateway is one process (`gateway/Dockerfile`), and a request that is under
+        # way ends with it.
+        self.under_way: dict[int, tuple[str, str, int, float]] = {}
+        self._number = 0
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript("""
             create table if not exists users (
@@ -236,8 +225,9 @@ class Store:
               day text, install text, feature text, count integer default 0, primary key (day, install, feature));
             create table if not exists accounts (
               account text primary key, token_hash text, label text, created text, last_signin text, signins integer default 0);
-            create table if not exists pending (
-              cli_hash text primary key, token text, created real);
+            create table if not exists handover (
+              code_hash text primary key, challenge text not null, account text not null, label text not null,
+              created real not null);
             create table if not exists sessions (
               token_hash text primary key, anchor_hash text, created text, last_used text);
             create index if not exists sessions_anchor on sessions (anchor_hash);
@@ -249,8 +239,10 @@ class Store:
         # anchor = 1: a counter row made by `sign_in` that no token is (its sessions point at it).
         if "anchor" not in cols:
             self.db.execute("alter table users add column anchor integer default 0")
-        # A parked token the version before left in clear, and any that waited too long, do not stay.
-        self.db.execute("delete from pending where token not like ? or created < ?", (SEALED + "%", time.time() - PARKED))
+        # Until 0.2.6 a token waited here under a code its caller chose. Nothing of that is kept or handed out.
+        self.db.execute("pragma secure_delete = on")       # what is deleted is written over, not only let go
+        self.db.execute("drop table if exists pending")
+        self.db.execute("delete from handover where created < ?", (time.time() - REDEEM_TTL,))
         self.db.commit()
         self.pruned_day = ""
 
@@ -353,38 +345,59 @@ class Store:
             self.db.commit()
         return n
 
-    def park(self, cli: str, token: str) -> None:
-        """Keep a new sign-in's token for the app that started it, sealed with the app's own code (`_seal`)."""
+    def signups_full(self, account: str, max_new_per_day: int) -> bool:
+        """Would a sign-in of this account be a new account past today's cap (`sign_in` raises SignupsPaused)? Asked
+        before a sign-in is handed to its app, so the person reads it on the gateway's own page."""
+        if max_new_per_day <= 0:
+            return False
+        today = dt.datetime.now(dt.UTC).date().isoformat()
         with self.lock:
-            self.db.execute("delete from pending where created < ?", (time.time() - PARKED,))
-            self.db.execute("insert or replace into pending (cli_hash, token, created) values (?, ?, ?)",
-                            (_hash(cli), _seal(cli, token), time.time()))
-            self.db.commit()
+            if self.db.execute("select 1 from accounts where account = ?", (account,)).fetchone():
+                return False
+            n = (self.db.execute("select count(*) from accounts where substr(created, 1, 10) = ?", (today,)).fetchone() or [0])[0]
+        return n >= max_new_per_day
 
-    def claim(self, cli: str) -> str | None:
-        """The token parked for this code: once, within ten minutes. Every question, whoever asks, also clears
-        away the tokens nobody collected in time."""
+    def hand_over(self, account: str, label: str, challenge: str) -> str:
+        """A finished sign-in waits for the app that started it: under a one-time code made here (the gateway keeps
+        its hash), with the fingerprint of the secret that app holds. No token exists yet (`redeem`)."""
+        code = secrets.token_urlsafe(32)
+        now = time.time()
         with self.lock:
-            self.db.execute("delete from pending where created < ?", (time.time() - PARKED,))
-            row = self.db.execute("select token from pending where cli_hash = ?", (_hash(cli),)).fetchone()
-            self.db.execute("delete from pending where cli_hash = ?", (_hash(cli),))
+            self.db.execute("delete from handover where created < ?", (now - REDEEM_TTL,))
+            self.db.execute("insert into handover (code_hash, challenge, account, label, created) values (?, ?, ?, ?, ?)",
+                            (_hash(code), challenge, account, label[:100], now))
             self.db.commit()
-        return _open(cli, row[0]) if row else None
+        return code
+
+    def redeem(self, code: str, verifier: str) -> tuple[str, str] | None:
+        """(account, label) of the finished sign-in this code stands for, when the caller shows the secret whose
+        fingerprint started it. One try: the code is gone afterwards, whatever the answer. Knowing the code is not
+        enough, and neither is having chosen the secret: the code went only where the finishing browser went."""
+        h, now = _hash(code), time.time()
+        with self.lock:
+            row = self.db.execute("select challenge, account, label from handover where code_hash = ? and created >= ?",
+                                  (h, now - REDEEM_TTL)).fetchone()
+            if self.db.execute("delete from handover where code_hash = ?", (h,)).rowcount:
+                self.db.commit()
+        if row is None or not hmac.compare_digest(str(row[0]), challenge_of(verifier)):
+            return None
+        return row[1], row[2]
+
 
     def user(self, token: str) -> dict | None:
         """The counter row behind a token: a sign-in's session leads to its account's anchor; a token minted by
         hand is its own row. `hash` is the counter row's, which every count and lookup after this uses."""
         h = _hash(token)
-        sess = self.db.execute("select anchor_hash, last_used from sessions where token_hash = ?", (h,)).fetchone()
-        if sess:
-            h = sess[0]
-            now = dt.datetime.now(dt.UTC).isoformat()
-            if (sess[1] or "")[:13] != now[:13]:          # the session's last use, kept to the hour
-                with self.lock:
+        with self.lock:
+            sess = self.db.execute("select anchor_hash, last_used from sessions where token_hash = ?", (h,)).fetchone()
+            if sess:
+                h = sess[0]
+                now = dt.datetime.now(dt.UTC).isoformat()
+                if (sess[1] or "")[:13] != now[:13]:          # the session's last use, kept to the hour
                     self.db.execute("update sessions set last_used = ? where token_hash = ?", (now, _hash(token)))
                     self.db.commit()
-        row = self.db.execute("select token_hash, used_requests, used_tokens, disabled from users where token_hash = ?",
-                              (h,)).fetchone()
+            row = self.db.execute("select token_hash, used_requests, used_tokens, disabled from users "
+                                  "where token_hash = ?", (h,)).fetchone()
         if not row:
             return None
         return {"hash": row[0], "used_requests": row[1], "used_tokens": row[2], "disabled": bool(row[3])}
@@ -403,27 +416,73 @@ class Store:
         return {"account": row[0], "label": row[1] or ""}
 
     def today_requests(self, h: str, day: str) -> int:
-        row = self.db.execute("select requests from daily where day = ? and token_hash = ?", (day, h)).fetchone()
+        with self.lock:
+            row = self.db.execute("select requests from daily where day = ? and token_hash = ?", (day, h)).fetchone()
         return row[0] if row else 0
 
     def spend_today(self, day: str) -> float:
-        row = self.db.execute("select usd from spend where day = ?", (day,)).fetchone()
+        with self.lock:
+            row = self.db.execute("select usd from spend where day = ?", (day,)).fetchone()
         return row[0] if row else 0.0
 
     def record(self, h: str, day: str, tokens: int, usd: float, model: str = "") -> None:
         with self.lock:
-            if model:
-                self.db.execute("insert into models (day, model, requests, usd) values (?, ?, 1, ?) "
-                                "on conflict(day, model) do update set usd = usd + excluded.usd, requests = requests + 1",
-                                (day, model, usd))
-            self.db.execute("update users set used_requests = used_requests + 1, used_tokens = used_tokens + ?, last_used = ? "
-                            "where token_hash = ?", (tokens, dt.datetime.now(dt.UTC).isoformat(), h))
-            self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, 1) "
-                            "on conflict(day, token_hash) do update set requests = requests + 1", (day, h))
-            self.db.execute("insert into spend (day, usd, requests) values (?, ?, 1) "
-                            "on conflict(day) do update set usd = usd + excluded.usd, requests = requests + 1",
-                            (day, usd))
-            self.db.commit()
+            self._record(h, day, tokens, usd, model)
+
+    def _record(self, h: str, day: str, tokens: int, usd: float, model: str) -> None:
+        if model:
+            self.db.execute("insert into models (day, model, requests, usd) values (?, ?, 1, ?) "
+                            "on conflict(day, model) do update set usd = usd + excluded.usd, requests = requests + 1",
+                            (day, model, usd))
+        self.db.execute("update users set used_requests = used_requests + 1, used_tokens = used_tokens + ?, last_used = ? "
+                        "where token_hash = ?", (tokens, dt.datetime.now(dt.UTC).isoformat(), h))
+        self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, 1) "
+                        "on conflict(day, token_hash) do update set requests = requests + 1", (day, h))
+        self.db.execute("insert into spend (day, usd, requests) values (?, ?, 1) "
+                        "on conflict(day) do update set usd = usd + excluded.usd, requests = requests + 1",
+                        (day, usd))
+        self.db.commit()
+
+    def hold(self, h: str, day: str, tokens: int, usd: float,
+                    limits: dict) -> tuple[int | None, str, bool]:
+        """The look at the limits and the count of one more request under way, as one step. Until 2026-11-15 the
+        limits were looked at before the model was asked and the request was counted when the answer was back, so
+        requests sent at the same moment all saw the same room and all went to the model. `tokens` and `usd`: what
+        this request can take at most. `limits`: `requests`, `tokens`, `today` (this person's) and `budget`
+        (everyone's dollars today). Gives the request's number; or None, the limit under which there is no room,
+        and whether that is so only for what is under way. A request under way counts as one that is done and takes
+        what it can take at most; where the finished requests alone leave room, the last value is True: a request
+        under way may end uncounted or take less than was held for it, so "used up" is not known yet."""
+        with self.lock:
+            mine = [m for m in self.under_way.values() if m[0] == h]
+            row = self.db.execute("select used_requests, used_tokens from users where token_hash = ?", (h,)).fetchone()
+            used = {"requests": (row[0] or 0) if row else 0, "tokens": (row[1] or 0) if row else 0,
+                    "today": self.today_requests(h, day), "budget": self.spend_today(day)}
+            held = {"requests": len(mine), "tokens": sum(m[2] for m in mine),
+                    "today": sum(1 for m in mine if m[1] == day),
+                    "budget": sum(m[3] for m in self.under_way.values() if m[1] == day)}
+            for waits in (False, True):         # first what is known: the finished requests alone
+                for under in ("requests", "tokens", "today", "budget"):
+                    if used[under] + (held[under] if waits else 0) >= limits[under]:
+                        return None, under, waits
+            self._number += 1
+            self.under_way[self._number] = (h, day, tokens, usd)
+            return self._number, "", False
+
+    def settle(self, number: int, tokens: int | None = None, usd: float = 0.0, model: str = "",
+               cut_off: bool = False) -> None:
+        """A request that was let through is no longer under way. With `tokens`: the answer is back, and it is
+        counted at what it took. `cut_off`: it reached the model and nothing came back to count (the connection
+        went, the gateway failed), and it is counted at what was held for it. Neither: the model did not answer it,
+        and it is not counted. A number that was settled already changes nothing."""
+        with self.lock:
+            held = self.under_way.pop(number, None)
+            if held is None:
+                return
+            if cut_off:
+                self._record(held[0], held[1], held[2], held[3], "")
+            elif tokens is not None:
+                self._record(held[0], held[1], tokens, usd, model)
 
     def prune(self, today: str, days: int = 90) -> dict:
         """Retention: delete token hashes with no request, sign-in or rotation for `days` days (with the account
@@ -449,7 +508,7 @@ class Store:
             out["models"] = q("delete from models where day < ?", (cut,)).rowcount
             out["usage"] = q("delete from usage where day < ?", (cut,)).rowcount
             out["installs"] = q("delete from installs where last_seen < ?", (cut,)).rowcount
-            q("delete from pending where created < ?", (time.time() - PARKED,))
+            q("delete from handover where created < ?", (time.time() - REDEEM_TTL,))
             self.db.commit()
             self.pruned_day = today
         return out
@@ -485,6 +544,10 @@ class Store:
 
     def stats(self, today: str, days: int = 30) -> dict:
         """Everything the owner's dashboard shows. Aggregates only."""
+        with self.lock:                 # some thirty reads on the one connection: one lock around all of them
+            return self._stats(today, days)
+
+    def _stats(self, today: str, days: int) -> dict:
         since = (dt.date.fromisoformat(today) - dt.timedelta(days=days - 1)).isoformat()
         week = (dt.date.fromisoformat(today) - dt.timedelta(days=6)).isoformat()
         q = self.db.execute
@@ -612,6 +675,9 @@ def _retryable(err) -> bool:
     return err == "unreachable" or err in (401, 402, 403, 429) or (isinstance(err, int) and err >= 500)
 
 
+FRAME = 16      # tokens counted for what a provider puts round one message, when a request's most is worked out
+
+
 def _err(status: int, kind: str, message: str, headers: dict | None = None, **extra) -> JSONResponse:
     return JSONResponse({"error": {"type": kind, "message": message, **extra}}, status_code=status, headers=headers)
 
@@ -714,20 +780,41 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     def auth_providers():
         return {"providers": s.sign_in_providers(), "login_url": f"{s.public_url}/v1/login"}
 
+    HALF = "This sign-in link is not complete. Go back to Lantern and start again."
+
+    def hand_over(challenge: str | None, back: str | None, nonce: str | None) -> dict | None:
+        """What an app that collects its sign-in itself said at the start: {} when nothing, None when it is not all
+        three in the forms allowed (`auth.asked`)."""
+        return oauth.asked(challenge, back, nonce, oauth.return_origins(s.return_origins))
+
     @app.get("/v1/login")
-    def login(cli: str | None = None, provider: str | None = None):
-        return HTMLResponse(oauth.login_page(s.sign_in_providers(), oauth.valid_cli(cli), provider), headers=page_headers)
+    def login(cli: str | None = None, challenge: str | None = None,
+              back: str | None = Query(default=None, alias="return"), nonce: str | None = None):
+        hand = hand_over(challenge, back, nonce)
+        if hand is None:
+            return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
+        return HTMLResponse(oauth.login_page(s.sign_in_providers(), hand, oauth.valid_cli(cli)), headers=page_headers)
 
     @app.get("/v1/auth/{provider}/start")
-    def auth_start(provider: str, cli: str | None = None):
+    def auth_start(provider: str, cli: str | None = None, challenge: str | None = None,
+                   back: str | None = Query(default=None, alias="return"), nonce: str | None = None):
         if not s.oauth(provider) or not s.state_secret:
             raise HTTPException(404, "that sign-in is not configured")
+        hand = hand_over(challenge, back, nonce)
+        if hand is None:
+            return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
         cid, _ = s.oauth(provider)
-        state = oauth.sign_state(s.state_secret, provider, oauth.valid_cli(cli))
-        return RedirectResponse(oauth.authorize_url(provider, cid, f"{s.public_url}/v1/auth/{provider}/callback", state),
+        state, name, mine = oauth.begin(s.state_secret, provider, hand, old=bool(oauth.valid_cli(cli)))
+        resp = RedirectResponse(oauth.authorize_url(provider, cid, f"{s.public_url}/v1/auth/{provider}/callback", state),
                                 status_code=302, headers={"Cache-Control": "no-store"})
+        # Only the browser that starts a sign-in can finish it: it alone holds this (auth.same_browser).
+        resp.set_cookie(name, mine, max_age=oauth.STATE_TTL, path="/v1/auth", secure=s.public_url.startswith("https://"),
+                        httponly=True, samesite="lax")
+        return resp
+
 
     used: dict[str, float] = {}       # sign-in links already used: a hash of each, until the link would have run out
+    USED = "This sign-in link was already used. Go back and start again."
 
     def first_use(state: str) -> bool:
         """A sign-in link is good once. Without this, one link could be sent back any number of times for ten
@@ -754,6 +841,20 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                 status_code=400, headers=page_headers)
         if error or not code:
             return HTMLResponse(oauth.error_page("Sign-in was cancelled or refused by the provider."), status_code=400, headers=page_headers)
+        if used.get(_hash(state or ""), 0) > time.time():
+            return HTMLResponse(oauth.error_page(USED), status_code=400, headers=page_headers)
+        if not oauth.same_browser(st, request.cookies):
+            # A link that was passed on to somebody else ends here: the provider is not asked and nothing is made. It
+            # does not use the link up either, so the browser that did start it can still finish.
+            return HTMLResponse(oauth.error_page("This sign-in was not started in this browser. Go back to Lantern and start again."),
+                                status_code=400, headers=page_headers)
+        back = mark = ""
+        if st.get("h"):
+            # What the signed link says about the app that will collect, read again as strictly as at the start.
+            back = oauth.valid_return(st.get("r"), oauth.return_origins(s.return_origins))
+            mark = oauth.mark_of(st.get("s"))
+            if not (back and mark and oauth.CHALLENGE_RE.fullmatch(str(st["h"]))):
+                return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
         sender = who(request)
         if limiter.full("signin", sender, s.sender_signins_per_minute, 60) or \
                 limiter.full("signin-all", "", s.signins_per_minute_all, 60):
@@ -761,8 +862,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             return HTMLResponse(oauth.error_page("Too many sign-ins in the last minute. Wait a minute, then load this page again."),
                                 status_code=429, headers={**page_headers, **slow_down(limiter.wait(60))})
         if not first_use(state or ""):
-            return HTMLResponse(oauth.error_page("This sign-in link was already used. Go back and start again."),
-                                status_code=400, headers=page_headers)
+            return HTMLResponse(oauth.error_page(USED), status_code=400, headers=page_headers)
         limiter.take("signin", sender, s.sender_signins_per_minute, 60)
         limiter.take("signin-all", "", s.signins_per_minute_all, 60)
         cid, sec = s.oauth(provider)
@@ -770,28 +870,65 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if signed is None:
             return HTMLResponse(oauth.error_page("The provider did not confirm the sign-in. Try again."), status_code=502, headers=page_headers)
         account, label = signed
-        try:
-            token = store.sign_in(account, label, s.signups_per_day)
-        except SignupsPaused:
+
+        def paused():
             log.warning("sign-ups paused: %s new accounts today (cap %s)", store.signups_today(), s.signups_per_day)
             return HTMLResponse(oauth.error_page("Lantern's free allowance has had as many new sign-ups today as it can take. "
                                                  "Existing accounts keep working; please try again tomorrow."),
                                 status_code=429, headers={**page_headers, "Retry-After": "86400"})
-        cli = st.get("c") or ""
-        if cli:
-            store.park(cli, token)
-        return HTMLResponse(oauth.done_page(token, label, bool(cli)), headers=page_headers)
+
+        if st.get("h"):
+            # The app that started this collects it itself (`/v1/auth/redeem`). No token is made until it has shown the
+            # secret whose fingerprint it gave at the start; this browser carries a one-time code back to it.
+            if store.signups_full(account, s.signups_per_day):
+                return paused()
+            once = store.hand_over(account, label, str(st["h"]))
+            resp = RedirectResponse(back + "?" + urlencode({"code": once, "state": mark}), status_code=303,
+                                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        else:
+            try:
+                token = store.sign_in(account, label, s.signups_per_day)
+            except SignupsPaused:
+                return paused()
+            resp = HTMLResponse(oauth.done_page(token, label, old=bool(st.get("o"))), headers=page_headers)
+        resp.delete_cookie(oauth.COOKIE + str(st.get("n") or ""), path="/v1/auth")
+        return resp
+
+    @app.post("/v1/auth/redeem")
+    async def auth_redeem(request: Request):
+        """The app that started a sign-in collects it: the one-time code its own browser was sent back with, and the
+        secret whose fingerprint it gave at the start. One try per code, within two minutes of the sign-in. The token
+        is made here and nowhere before."""
+        body = _table(await request.body()) or {}     # limits.BodyCap has stopped anything over 4,000 bytes
+        code, verifier = body.get("code"), body.get("verifier")
+        if not (isinstance(code, str) and oauth.CODE_RE.fullmatch(code)
+                and isinstance(verifier, str) and oauth.VERIFIER_RE.fullmatch(verifier)):
+            raise HTTPException(400, "a code and a verifier are needed")
+        signed = store.redeem(code, verifier)
+        if signed is None:
+            raise HTTPException(400, "This sign-in was already collected, took too long, or was not started by this app. "
+                                     "Start again.")
+        try:
+            token = store.sign_in(signed[0], signed[1], s.signups_per_day)
+        except SignupsPaused:
+            raise HTTPException(429, "Lantern's free allowance has had as many new sign-ups today as it can take. "
+                                     "Existing accounts keep working; please try again tomorrow.",
+                                headers={"Retry-After": "86400"}) from None
+        return JSONResponse({"token": token, "limits": {"requests": s.free_requests, "tokens": s.free_tokens,
+                                                        "per_day": s.daily_requests}},
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/auth/claim")
-    def auth_claim(cli: str | None = None):
-        """The client collects the token parked for its cli code: once, within ten minutes of the sign-in."""
-        if not oauth.valid_cli(cli):
-            raise HTTPException(400, "bad cli code")
-        tok = store.claim(cli)
-        if tok is None:
-            return JSONResponse({"pending": True}, status_code=404, headers={"Cache-Control": "no-store"})
-        return JSONResponse({"token": tok, "limits": {"requests": s.free_requests, "tokens": s.free_tokens, "per_day": s.daily_requests}},
-                            headers={"Cache-Control": "no-store"})
+    def auth_claim():
+        """Until 0.2.6 an app collected its sign-in here with a code of its own choosing. Nothing is kept for such a
+        code any more (an app collects with `/v1/auth/redeem`). An app from before still asks; it is answered as it
+        always was while nothing was there (it goes on waiting, then tells the person how to paste the token), and the
+        answer says in words that nothing will come."""
+        return JSONResponse({"pending": True, "ended": True,
+                             "detail": "This way of picking a sign-in up has ended. Use the Copy button on the sign-in "
+                                       "page and paste the token into Lantern, or update Lantern."},
+                            status_code=404, headers={"Cache-Control": "no-store"})
+
 
     @app.get("/v1/admin/stats")
     def admin_stats(request: Request, authorization: str | None = Header(default=None), days: int = 30):
@@ -885,17 +1022,34 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if body is None:
             return _err(400, "bad_request", "Body must be a JSON object.")
         r = remaining(u, day)
-        if r["requests"] <= 0 or r["tokens"] <= 0:
-            return _err(402, "quota_exceeded",
-                        f"You've used your free Lantern allowance ({s.free_requests} explanations).",
-                        remaining=0)
-        if r["today"] <= 0:
-            return _err(402, "daily_limit",
-                        f"You've reached today's free limit ({s.daily_requests}). It resets {until_midnight_utc()}.",
-                        remaining=r["requests"])
-        if store.spend_today(day) >= s.global_daily_usd:
+
+        def no_room(under: str):
+            if under in ("requests", "tokens"):
+                return _err(402, "quota_exceeded",
+                            f"You've used your free Lantern allowance ({s.free_requests} explanations).",
+                            remaining=0)
+            if under == "today":
+                return _err(402, "daily_limit",
+                            f"You've reached today's free limit ({s.daily_requests}). It resets {until_midnight_utc()}.",
+                            remaining=r["requests"])
             return _err(503, "allowance_paused",
                         "The free allowance is paused for today because it reached its daily budget.")
+
+        def in_a_moment(under: str):
+            # Room is left by the requests that are done; what stands in the way is still being answered. "Used
+            # up" would not be known to be true, so the answer is the one a client asks again after.
+            if under == "budget":
+                words = ("Requests that are still being answered may use what is left of today's budget for the "
+                         "free allowance. Try again in a moment.")
+            else:
+                words = ("Your earlier requests are still being answered and may use what is left of your free "
+                         "Lantern allowance. Try again in a moment.")
+            return _err(429, "allowance_busy", words, headers=slow_down(2))
+        # a first look, so that somebody with no room left is told so before anything else about the request
+        full = ("requests" if r["requests"] <= 0 or r["tokens"] <= 0 else "today" if r["today"] <= 0
+                else "budget" if store.spend_today(day) >= s.global_daily_usd else "")
+        if full:
+            return no_room(full)
         if not s.order():
             return _err(503, "not_configured", "The gateway has no model key configured.")
         msgs = body.get("messages")
@@ -908,25 +1062,41 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                "max_tokens": _size(body.get("max_tokens"), s.max_tokens_cap)}
         if isinstance(body.get("response_format"), dict) and body["response_format"].get("type") == "json_object":
             out["response_format"] = {"type": "json_object"}
+        # The look that decides, and the count of this request as under way, in one step (`Store.hold`):
+        # what it can take at most is held for it until the answer is back. A token is one byte of text at least
+        # (`FRAME` more for what goes round each message); the price is the dearest among the models that may answer.
+        order = s.order()
+        most_in = sum(len(m["content"].encode("utf-8", "surrogatepass")) + FRAME for m in out["messages"])
+        number, full, waits = store.hold(
+            u["hash"], day, most_in + out["max_tokens"],
+            most_in / 1e6 * max(p["usd_in"] for p in order) + out["max_tokens"] / 1e6 * max(p["usd_out"] for p in order),
+            {"requests": s.free_requests, "tokens": s.free_tokens, "today": s.daily_requests, "budget": s.global_daily_usd})
+        if number is None:
+            return in_a_moment(full) if waits else no_room(full)
         data, err, used = None, None, None
-        for prov in s.order():
-            data, err = await _call(transport, prov, out)
-            if data is not None:
-                used = prov
-                break
-            if not _retryable(err):   # a bad request is bad for every provider
-                break
-        if data is None:
-            if err == "unreachable":
-                return _err(502, "upstream_unreachable", "Could not reach the model provider. Try again shortly.")
-            # Never echo upstream bodies: they can include account details.
-            return _err(502 if err >= 500 or err in (401, 402, 403) else err,
-                        "upstream_error", f"The model provider returned HTTP {err}.")
-        used_model = used["model"]
-        usage = data.get("usage") or {}
-        tin, tout = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
-        usd = tin / 1e6 * used["usd_in"] + tout / 1e6 * used["usd_out"]
-        store.record(u["hash"], day, tin + tout, usd, used_model)
+        try:
+            for prov in order:
+                data, err = await _call(transport, prov, out)
+                if data is not None:
+                    used = prov
+                    break
+                if not _retryable(err):   # a bad request is bad for every provider
+                    break
+            if data is None:
+                store.settle(number)        # the model answered nothing: not counted
+                if err == "unreachable":
+                    return _err(502, "upstream_unreachable", "Could not reach the model provider. Try again shortly.")
+                # Never echo upstream bodies: they can include account details.
+                return _err(502 if err >= 500 or err in (401, 402, 403) else err,
+                            "upstream_error", f"The model provider returned HTTP {err}.")
+            used_model = used["model"]
+            usage = data.get("usage") or {}
+            tin, tout = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+            usd = tin / 1e6 * used["usd_in"] + tout / 1e6 * used["usd_out"]
+            store.settle(number, tin + tout, usd, used_model)
+        except BaseException:
+            store.settle(number, cut_off=True)      # let through, and nothing came back to count
+            raise
         after = remaining(store.user(authorization[7:].strip()), day)
         clean = {"id": data.get("id"), "object": "chat.completion", "model": data.get("model", used_model),
                  "choices": [{"index": c.get("index", 0), "finish_reason": c.get("finish_reason"),

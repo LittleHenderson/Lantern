@@ -183,7 +183,7 @@ OWN_FILES = {
     ("archive.py", "unpack"): "a member of the upload, by the archive's own reader",
     ("depaudit.py", "precomputed"): "the file the cloud worker names in LANTERN_AUDITS_FROM",
     ("security.py", "_gitleaks_ask"): "gitleaks' report in Lantern's own temporary folder",
-    ("ask.py", "read_screenshot"): "a picture held in memory", ("cli.py", "cmd_login"): "a web page",
+    ("ask.py", "read_screenshot"): "a picture held in memory", ("cli.py", "cmd_login.show"): "a web page",
     ("server.py", "serve"): "a web address", ("usage.py", "_post"): "a web address",
     ("_behave_inside.py", "_Worker.blocked"): "what an app copy printed, in the sandbox's temp folder",
     ("_behave_inside.py", "Recorder.look"): "the app's own data files, in the sandbox's temp folder",

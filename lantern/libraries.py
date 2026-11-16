@@ -158,6 +158,8 @@ class Plan:
         self.added: list[str] = []          # what Lantern asks for itself (the test runner)
         self.lock: Path | None = None       # JavaScript: npm's lock file
         self.manifest: Path | None = None
+        self.package: dict = {}             # JavaScript: package.json as it was read, once
+        self.handed: dict | None = None     # JavaScript, no lock file: the package.json npm is handed (`_for_npm`)
         self.left: list[str] = []           # what the fetch started and Lantern could not end, in its own words
         self.locked: dict[str, dict[str, set[str]]] = {}   # Python: name -> version -> the fingerprints a lock names
         self.listed: dict[str, dict[str, list[str]]] = {}  # Python: name -> version -> the files a lock lists by name
@@ -704,10 +706,163 @@ def _node(repo: Path, plan: Plan, cwd_rel: str) -> None:
         for name, wanted in manifest.table(data.get(key)).items():
             plan.asked.append({"text": f"{_plain(name, 100)}@{_plain(wanted, 60)}", "file": "package.json"})
     plan.manifest = here / "package.json"
+    plan.package = data
     for name in ("npm-shrinkwrap.json", "package-lock.json"):
         if os.path.lexists(here / name):
             plan.lock = here / name
             break
+
+
+# With no lock file: the package.json npm is handed. npm does what a package.json says: a library may be a folder of
+# this computer (`file:`, a path, an archive), a link, a repository or an address anywhere, and `overrides` and
+# `workspaces` name more of the same. Until 2026-11-15 the project's own package.json was handed to `npm install`
+# as it was, and a folder it named that way, anybody's on this computer, was read by npm and put beside the copy
+# the project's tests run on. npm is handed one Lantern writes: names and versions for the store, nothing else.
+NPM_TABLES = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+MOST_NAMED = 2000           # libraries one table of a package.json may name
+OVERRIDES_DEEP = 8          # tables inside tables in `overrides`
+_NPM_NAME = re.compile(r"(?:@[A-Za-z0-9~\-][A-Za-z0-9._~\-]*/)?[A-Za-z0-9~\-][A-Za-z0-9._~\-]*")
+_FOR_THE_STORE = re.compile(r"[0-9A-Za-z.*+^~<>=| \-]{0,100}")
+_AN_ARCHIVE = re.compile(r"\.(?:tgz|tar\.gz|tar)$", re.I)
+
+
+def package_name(name) -> bool:
+    """Whether `name` is what the store calls a package: `name` or `@scope/name`, and no path."""
+    return isinstance(name, str) and len(name) <= 214 and bool(_NPM_NAME.fullmatch(name))
+
+
+def _versions(wanted) -> str | None:
+    """`wanted` as npm is handed it when it is a version, a range of versions or a tag; None for anything else. Read
+    the way npm reads it: text with a slash, a backslash, a colon, `@` or `#`, a dot in front or an archive's ending
+    is a place (a folder, a file, a repository, an address), and so is whatever this does not know."""
+    if not isinstance(wanted, str):
+        return None
+    wanted = wanted.strip()
+    if not _FOR_THE_STORE.fullmatch(wanted) or wanted.startswith(".") or _AN_ARCHIVE.search(wanted):
+        return None
+    return wanted
+
+
+def _for_the_store(wanted) -> str | None:
+    """`_versions`, and the store's library under another name (`npm:<name>` or `npm:<name>@<versions>`)."""
+    if isinstance(wanted, str) and wanted.strip().startswith("npm:"):
+        rest = wanted.strip()[len("npm:"):]
+        at = rest.find("@", 1)
+        name, versions = (rest, "") if at < 0 else (rest[:at], _versions(rest[at + 1:]))
+        if not package_name(name) or versions is None:
+            return None
+        return "npm:" + name + ("@" + versions if at >= 0 else "")
+    return _versions(wanted)
+
+
+def from_the_store(wanted) -> bool:
+    """Whether what a package.json writes beside a library's name asks the store for it."""
+    return _for_the_store(wanted) is not None
+
+
+def _overrides(said, deep: int = 0) -> dict | None:
+    """`overrides` as npm is handed them: tables of `<name>`, `<name>@<versions>` or `.`, each with versions for
+    the store, the version another library of the project has (`$<name>`) or such a table. None for anything else."""
+    if not isinstance(said, dict) or deep > OVERRIDES_DEEP or len(said) > MOST_NAMED:
+        return None
+    out = {}
+    for key, value in said.items():
+        if not isinstance(key, str):
+            return None
+        if key != ".":
+            at = key.find("@", 1)
+            name, versions = (key, "") if at < 0 else (key[:at], _versions(key[at + 1:]))
+            if not package_name(name) or versions is None:
+                return None
+            key = name + ("@" + versions if at >= 0 else "")
+        if isinstance(value, dict):
+            value = _overrides(value, deep + 1)
+        elif isinstance(value, str) and value.startswith("$"):
+            value = value if package_name(value[1:]) else None
+        else:
+            value = _for_the_store(value)
+        if value is None:
+            return None
+        out[key] = value
+    return out
+
+
+def _for_npm(said: dict) -> tuple[dict, list[str]]:
+    """The package.json npm is handed where the project has no lock file, and what is said about it. Its four
+    tables of libraries, each library by a name and by versions for the store; which of them the project can do
+    without (`peerDependenciesMeta`: only `optional`); its `overrides` of the same form. Nothing else of the
+    project's file: no script, no setting, no folder (`workspaces`, said in a note: with no lock file their
+    libraries were never fetched). Raises `sandbox.NoLibraries` where the project names a library from anywhere
+    else, with a count and a package name and never the place it wrote."""
+    from .sandbox import NoLibraries
+    out: dict = {"name": "lantern-run", "version": "0.0.0", "private": True}
+    notes, far, named = [], 0, ""
+    for key in NPM_TABLES:
+        table, kept = manifest.table(said.get(key)), {}
+        for name, wanted in list(table.items())[:MOST_NAMED]:
+            versions = _for_the_store(wanted)
+            if package_name(name) and versions is not None:
+                kept[name] = versions
+            else:
+                far += 1
+                named = named or (name if package_name(name) else "")
+        far += max(0, len(table) - MOST_NAMED)
+        if kept:
+            out[key] = kept
+    what = ""
+    if far:
+        what = (f"{far} of its libraries" + (f", {_plain(named, 60)} for one" if named else "")
+                + " by something that is no version, range or tag")
+    else:
+        overrides = said.get("overrides")
+        if isinstance(overrides, dict) and overrides:
+            kept = _overrides(overrides)
+            if kept is None:
+                what = "in its overrides, which may hold names and versions and nothing else"
+            else:
+                out["overrides"] = kept
+    if what:
+        raise NoLibraries(f"the project's libraries could not be fetched: package.json {ELSEWHERE} ({what}). It has "
+                          "no lock file, and Lantern then asks the store for names and versions only, so the tests "
+                          "were not run on other libraries than the project's")
+    can_do_without = {name: {"optional": True} for name, meta in manifest.table(said.get("peerDependenciesMeta")).items()
+                      if name in out.get("peerDependencies", {}) and manifest.table(meta).get("optional") is True}
+    if can_do_without:
+        out["peerDependenciesMeta"] = can_do_without
+    if said.get("workspaces"):
+        notes.append("package.json: the folders it names as workspaces were not handed to npm (there is no lock "
+                     "file), so the libraries only a workspace names were not fetched")
+    return out, notes
+
+
+def not_from_the_store(final: dict, url: str, allowed=()) -> int:
+    """How many packages npm's own record of a fetch (the lock file it wrote) says it took from anywhere but the
+    store: a link to a folder, a file, a repository, another address, or no place said at all. The store is `url`,
+    the registry npm writes down for the store it was told, and the hosts the doorkeeper lets through (`allowed`);
+    a package that came inside another's file (`inBundle`) is that one's."""
+    def at_the_store(where: str) -> bool:
+        if where.startswith(("https://registry.npmjs.org/", url)):
+            return True
+        try:
+            parts = urlsplit(where)
+            port = parts.port or {"https": 443, "http": 80}.get(parts.scheme)
+            return parts.scheme in ("https", "http") and not parts.username and not parts.password \
+                and [parts.hostname, port] in [list(a) for a in allowed]
+        except ValueError:
+            return False
+    count = 0
+    for key, entry in manifest.table(final.get("packages")).items():
+        entry = manifest.table(entry)
+        if not key:
+            continue                                    # the project itself
+        where = manifest.text(entry.get("resolved"))
+        if entry.get("link") or "node_modules/" not in key:
+            count += 1                                  # a folder of this computer
+        elif not where and entry.get("inBundle") is True:
+            continue
+        elif not at_the_store(where):
+            count += 1
+    return count
 
 
 def _elsewhere(lock: dict, store: Store) -> int:
@@ -753,6 +908,10 @@ def plan(repo: Path, language: str, words: list[str], cwd_rel: str = "", offline
             found.record.update(state="installed", exact=False,
                                 on="the node_modules folder the project brought, as it is")
             return found
+        if found.lock is None:
+            # no lock file: npm is handed a package.json Lantern wrote, or is not started (`_for_npm`)
+            found.handed, said = _for_npm(found.package)
+            found.notes.extend(said)
     elif offline:
         missing, here = [], []
         for name in _names(found):
@@ -1743,16 +1902,19 @@ def _fetch_node(job: _Fetch, repo: Path, app: Path, cwd_rel: str):
     else:
         where = stage / "project"
         where.mkdir()
-        data = manifest.parse_json(_text(found.manifest, repo) or "")
-        if not isinstance(data, dict):
+        if found.handed is None:
             job.stop("package.json cannot be read")
-        (where / "package.json").write_text(json.dumps(data), encoding="utf-8")
+        # not the project's own file: the one `plan` made of it (`_for_npm`), names and versions for the store
+        (where / "package.json").write_text(json.dumps(found.handed), encoding="utf-8")
         verb = "install"
         found.notes.append("package.json: no lock file, so the newest versions that fit were taken")
-    nothing = job.dir / "no-settings"       # two names that are no files: npm reads no settings of anyone's
+    # three names that are no files: npm reads no settings of anyone's, and the program it would start for a
+    # library kept in a repository is none (what a library of the store asks for in turn is not the project's word)
+    nothing = job.dir / "no-settings"
     cmd = [npm, verb, "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", "--fetch-retries=1",
            f"--registry={store.url}", f"--proxy={job.proxy}", f"--https-proxy={job.proxy}", "--noproxy=",
-           f"--userconfig={nothing / 'user'}", f"--globalconfig={nothing / 'global'}", f"--cache={job.tmp / 'npm'}"]
+           f"--userconfig={nothing / 'user'}", f"--globalconfig={nothing / 'global'}", f"--cache={job.tmp / 'npm'}",
+           f"--git={nothing / 'git'}"]
     if job.cert:
         cmd.append(f"--cafile={job.cert}")
     job.hand_over()
@@ -1765,6 +1927,14 @@ def _fetch_node(job: _Fetch, repo: Path, app: Path, cwd_rel: str):
         job.stop(_npm_failure(output, store, job.refused()))
     text, why = results.plain(where / "package-lock.json")
     final = manifest.table(manifest.parse_json(text or ""))
+    if found.lock is None:
+        # npm's own record of what it took, read before anything of it is put beside the tests
+        if os.path.lexists(where / "node_modules") and not manifest.table(final.get("packages")):
+            job.stop("npm left no record of what it took, so where the packages came from cannot be said")
+        far = not_from_the_store(final, store.url, store.allowed)
+        if far:
+            job.stop(f"{far} of the packages npm took are not from the store ({store.host}): a library of the store "
+                     "asks for one from a folder, a repository or another address")
     packages, seen, theirs = [], set(), manifest.table(lock.get("packages"))
     wanted = dict(a["text"].rsplit("@", 1) for a in found.asked if "@" in a["text"][1:])
     for key, entry in manifest.table(final.get("packages")).items():

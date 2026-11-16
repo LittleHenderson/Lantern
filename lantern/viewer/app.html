@@ -288,7 +288,7 @@ pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--co
 /* Re-check to apply (packs changed) */
 .stale{font-size:12px;color:var(--warn, #9a6200)}
 /* Watch my tests run: sheet + toast */
-.sbx{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0;background:var(--surface)} .sbx .sbxh{display:flex;align-items:center;gap:8px} .sbx .sbxh svg{width:16px;height:16px;color:var(--good, #1f8a5a)} .sbx ul{margin:6px 0 4px 22px;padding:0;font-size:13.5px;color:var(--ink-2, inherit)} .sbx .sbxl{font-size:13px;color:var(--muted)}
+.sbx{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0;background:var(--surface)} .sbx .sbxh{display:flex;align-items:center;gap:8px} .sbx .sbxh svg{width:16px;height:16px;color:var(--good, #1f8a5a)} .sbx ul{margin:6px 0 4px 22px;padding:0;font-size:13.5px;color:var(--ink-2, inherit)} .sbx .sbxl{font-size:13px;color:var(--muted)} .sbx.open .sbxh svg{color:var(--warn-ink)} .sbx.open .sbxl{color:var(--ink)} .sbx .check[hidden]{display:none} .sbx .check.ask{outline:2px solid var(--warn-ink);outline-offset:4px;border-radius:6px}
 .sheetwrap{position:fixed;inset:0;z-index:30;background:rgba(14,14,16,.45);display:grid;place-items:center;padding:20px}
 /* a sheet is never taller than the window (less the wrap's 20px above and below) and scrolls by itself. One with a row
    of buttons (.split) scrolls only what is above the row (.shbody), so "Confirm and run" is in view whatever it holds */
@@ -595,7 +595,19 @@ body[data-mode=simple] .sub.two .tabs{border-radius:0;background:none;padding:4p
 <div id="term" hidden role="region" aria-label="Terminal"><div class="tgrip" id="tgrip" role="separator" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="2000" aria-valuenow="340" aria-label="Terminal height: drag, or use the up and down arrow keys" tabindex="0"><i></i></div><div class="tbar"><b>Terminal</b><span class="muted" id="tsub">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop" aria-label="Terminal background opacity"></label><button class="x" id="termclose" aria-label="Close the terminal">×</button></div><div class="tout" id="tout" role="log" aria-live="polite"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" aria-label="Type a Lantern command" placeholder="help · projects · open NAME · analyze · trace python -m pytest -q · accept ID --reason …" autocomplete="off" spellcheck="false" autocapitalize="off"></div></div>
 <div id="ask"></div>
 <script>
-const TOKEN = '__LANTERN_TOKEN__';
+// The key of this run comes in the part of the link after "#", which a browser sends to no server. The page keeps it
+// in its own storage (kept apart by the browser for each port, so no other program on this computer is sent it), takes
+// it out of the address bar and sends it with each request. It is never in a cookie.
+const KEY_AT = 'lantern.k';
+const TOKEN = (() => {
+  const m = /[#&]token=([^&]+)/.exec(location.hash);
+  let k = '';
+  try { k = m ? decodeURIComponent(m[1]) : ''; } catch (e) {}
+  try { if (k) localStorage.setItem(KEY_AT, k); else k = localStorage.getItem(KEY_AT) || ''; } catch (e) { /* storage off: the key lasts as long as this page */ }
+  if (m) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+  return k;
+})();
+const LOCKED = '<div class="empty"><h2>Lantern is running</h2><p>For safety, open the link that <code>lantern serve</code> printed in your terminal (it carries the key of this run). Run <code>lantern serve</code> again to get a new link.</p><p><a href="/guide">How to use Lantern</a> (short animated demos; no link needed).</p></div>';
 const VERSION = '__LANTERN_VERSION__';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const arr = a => Array.isArray(a) ? a : [];
@@ -603,9 +615,18 @@ const api = async (path, opts = {}) => {
   const r = await fetch(path, {method: opts.method || 'GET', headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN},
     body: opts.body ? JSON.stringify(opts.body) : undefined, credentials: 'same-origin'});
   const data = await r.json().catch(() => ({error: 'bad response'}));
-  if (!r.ok) throw new Error(data.error || r.statusText);
+  if (!r.ok) {
+    const err = new Error(data.error || r.statusText);
+    err.locked = r.status === 403; err.data = data;
+    if (err.locked && path === '/api/state') { try { localStorage.removeItem(KEY_AT); } catch (e) {} }   // a key of an earlier run
+    throw err;
+  }
   return data;
 };
+// A file the browser opens by its address (a frame, a new tab) cannot carry the key: the app hands the page a pass
+// for that one file, good once and for a minute.
+const passFor = async path => (await api('/api/view', {method: 'POST', body: {path}})).url;
+const openIn = (frame, path) => passFor(path).then(u => { frame.src = u; }).catch(() => {});
 const S = {view: 'home', add: null, state: null, project: null, tab: 'atlas', reportTab: null, browse: null, jobs: {}, starters: null, open: {}};
 // Step text comes from Lantern's own starter files; escape it anyway, then allow **bold** and `code`.
 const fmt = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -905,8 +926,13 @@ document.addEventListener('keydown', e => {
 
 // ---------------------------------------------------------------- Watch my tests run (design 6a/6b/8f)
 async function watchTestsSheet(p) {
-  let d = {command: 'python -m pytest -q', how: '', supported: true, note: '', sandbox: null, leaves: '', confirmed: false};
+  let d = {command: 'python -m pytest -q', how: '', supported: true, note: '', sandbox: null, leaves: '', reach: null, confirmed: false};
   try { d = await api(`/api/projects/${p.id}/testcmd`); } catch (e) {}
+  // d.leaves and d.reach are the server's (sandbox.reach): what this run keeps the tests from on this computer. Where
+  // it does not hold every program of theirs (d.reach.ask), they start only after the person ticked the box under it:
+  // once for each command, so a command typed over the one the sheet opened with is asked about as a new one.
+  const open = !!(d.reach && d.reach.ask);
+  const need = cmd => !!(d.reach && d.reach.ask && !(d.reach.accepted && (cmd === undefined || cmd === d.command)));
   const el = document.createElement('div'); el.className = 'sheetwrap top'; el.id = 'sheet';
   el.innerHTML = `<div class="sheet split" role="dialog" aria-label="Watch my tests run"><div class="shbody"><div class="sh"><h2>Lantern will run your tests, not your app.</h2><button class="x" id="shx" aria-label="Close">×</button></div>
     <label for="testcmd">The exact command${d.how ? ` <span class="muted">(from ${esc(d.how)}; change it if yours is different)</span>` : ''}</label>
@@ -916,7 +942,7 @@ async function watchTestsSheet(p) {
     <input type="text" id="testmin" inputmode="numeric" autocomplete="off" value="${esc(String(d.minutes || 10))}" style="max-width:120px">
     <label for="testmem" style="margin-top:12px">How much memory they may use, in megabytes <span class="muted">(from ${esc(String((d.memory_range || [128])[0]))}; 2048 is 2 GB; tests stopped for their memory count as neither passed nor failed)</span></label>
     <input type="text" id="testmem" inputmode="numeric" autocomplete="off" value="${esc(String(d.memory_mb || 2048))}" style="max-width:120px">
-    ${d.sandbox ? `<div class="sbx"><div class="sbxh">${icon('check')}<b>Where it runs: ${esc(d.sandbox.label)}</b>${d.sandbox.image ? ` <span class="muted">${esc(String(d.sandbox.image).split('@')[0])}</span>` : ''}</div><ul>${(d.sandbox.details || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul><div class="sbxl">${esc(d.leaves || 'Nothing leaves this computer.')}</div></div>` : ''}
+    ${d.sandbox ? `<div class="sbx${open ? ' open' : ''}"><div class="sbxh">${icon(open ? 'warn' : 'check')}<b>Where it runs: ${esc(d.sandbox.label)}</b>${d.sandbox.image ? ` <span class="muted">${esc(String(d.sandbox.image).split('@')[0])}</span>` : ''}</div><ul>${(d.sandbox.details || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul><div class="sbxl" id="shleaves">${esc(d.leaves)}</div><label class="check" id="shreachrow"${need() ? '' : ' hidden'}><input type="checkbox" id="shreach"><span>I have read this. Run the tests anyway.</span></label></div>` : ''}
     ${note('info', `Only a test command is accepted (pytest, unittest, npm/pnpm/yarn test, Jest, Vitest, Mocha, go test, cargo test, Maven, Gradle); nothing else is run. Your app itself never runs outside its tests.`)}
     <div class="rewards"><div>${icon('check')}<span>Dashed “likely” lines that your tests go through turn solid: <b>seen running</b>.</span></div><div>${icon('check')}<span>Functions and routes your tests reach get the <b>seen running</b> mark.</span></div><div>${icon('check')}<span>Readiness can only go up: the tests check earns its points.</span></div></div></div>
     <div class="row acts"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported ? '' : 'disabled'}>${icon('play')}${d.confirmed ? 'Run the tests' : 'Confirm and run'}</button></div></div>`;
@@ -936,19 +962,33 @@ async function watchTestsSheet(p) {
   };
   el.querySelector('#testmin').addEventListener('input', follow);
   el.querySelector('#testmem').addEventListener('input', follow);
+  const box = el.querySelector('#shreach');
+  // The button is never greyed out for the missing word (a dead button says nothing, and the box is at the end of a
+  // long list): pressed without it, nothing is sent and the row that asks is brought into view. The server asks too.
+  const asks = () => { const row = el.querySelector('#shreachrow'); row.hidden = false; row.classList.add('ask'); row.scrollIntoView({block: 'center'}); box.focus({preventScroll: true}); };
+  if (box) box.onchange = () => el.querySelector('#shreachrow').classList.remove('ask');
+  if (box) el.querySelector('#testcmd').addEventListener('input', () => { el.querySelector('#shreachrow').hidden = !need(el.querySelector('#testcmd').value.trim()); });
   el.querySelector('#shrun').onclick = async () => {
     const command = el.querySelector('#testcmd').value.trim();
+    if (box && need(command) && !box.checked) return asks();
     const typed = el.querySelector('#testmin').value.trim();
     const minutes = /^\d{1,3}$/.test(typed) ? Number(typed) : typed;   // anything else goes as written: the server says what it takes
     const room = el.querySelector('#testmem').value.trim();
     const memory_mb = /^\d{1,7}$/.test(room) ? Number(room) : room;
     try {
-      const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command, confirm: true, minutes, memory_mb}});
+      const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command, confirm: true, minutes, memory_mb, reach: box && box.checked ? d.reach.ask : undefined}});
       close();
       S.toast = {pid: p.id, html: `<div class="toastin"><span class="pulse"></span><div>Running <code>${esc(command)}</code>… you can keep browsing; the Atlas updates when it finishes.</div><span class="spacer"></span>${j.can_stop ? `<button class="btn sm" data-stop="${esc(j.id)}">Stop the tests</button>` : ''}</div>`};
       renderProject(document.getElementById('view'));
       watchTrace(j.id, p, command);
     } catch (e) {   // what the server refuses is written at the end of what scrolls, above the buttons, and brought into view
+      if (e.data && e.data.reach && box) {   // the command is of another kind of tests than the sheet was made for
+        d.reach = {ask: String(e.data.reach.ask || ''), accepted: false};
+        el.querySelector('#shleaves').textContent = String(e.data.reach.words || d.reach.ask);
+        el.querySelector('#shreachrow').hidden = false; box.checked = false;
+        el.querySelector('.sbx').classList.add('open');
+        return asks();   // the sentence and its box say what the server said; no second note under them
+      }
       const body = el.querySelector('.shbody');
       body.insertAdjacentHTML('beforeend', note('err', esc(e.message)));
       body.lastElementChild.scrollIntoView({block: 'nearest'});
@@ -1321,9 +1361,16 @@ function drawProject(el) {
   el.innerHTML = `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to ${simple ? 'my apps' : 'projects'}">${icon('back')}<span>${simple ? 'My apps' : 'Projects'}</span></button>${simple ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(p.name)}</span>
     ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100${releaseWord(p.release) ? ', release decision ' + releaseWord(p.release) : ''}">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}${releaseWord(p.release) ? ' · ' + releaseWord(p.release) : ''}</span>` : ''}
     <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>
-    <span class="spacer"></span>${simple ? '' : `<button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>`}${p.has_report ? `<button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
+    <span class="spacer"></span>${simple ? '' : `<button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>`}${p.has_report ? `<button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="#" data-path="/p/${esc(p.id)}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
     <div id="toast"></div>
     <div id="pbody"></div>`;
+  const newtab = el.querySelector('.newtab');
+  if (newtab) newtab.onclick = async e => {
+    e.preventDefault();
+    const path = newtab.dataset.path, w = window.open('about:blank', '_blank');   // opened in the click itself, so the browser allows it
+    try { const u = await passFor(path); if (w) { w.opener = null; w.location.replace(u); } }
+    catch (err) { if (w) w.close(); }
+  };
   el.querySelector('#back').onclick = () => go('home');
   const wt = el.querySelector('#watchtests'); if (wt) wt.onclick = () => watchTestsSheet(p);
   { const tb = el.querySelector('#termbtn'); if (tb) tb.onclick = () => termToggle(); }   // Advanced only (the ` key still opens it)
@@ -1340,8 +1387,9 @@ function drawProject(el) {
       // Same project: keep the loaded report and switch its tab, so the Atlas state (selection, zoom) survives.
       body.innerHTML = bar; body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     } else {
-      body.innerHTML = `${bar}<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}" allow="fullscreen"></iframe>`;
+      body.innerHTML = `${bar}<iframe title="${esc(W[S.tab])}" allow="fullscreen"></iframe>`;
       const fr = body.querySelector('iframe'); S.frame = {pid: p.id, el: fr};
+      openIn(fr, `/p/${p.id}/report.html`);
       // The report is served from this app's origin, so the app can open it on a tab and keep the theme in step.
       fr.onload = e => { try { themeOn(e.target.contentDocument); e.target.contentDocument.body.classList.add('embed'); e.target.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {} };
     }
@@ -1349,7 +1397,8 @@ function drawProject(el) {
   if (S.tab === 'explain') renderExplain(body.querySelector('#xbar'), p);
   if (REPORT_TABS[S.tab]) return;
   if (S.tab === 'evidence') {
-    body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
+    body.innerHTML = `<iframe title="Evidence Report"></iframe>`;
+    openIn(body.querySelector('iframe'), `/p/${p.id}/evidence.html`);
     body.querySelector('iframe').onload = e => { try { themeOn(e.target.contentDocument); } catch (err) {} };
   }
   else renderExplain(body, p);
@@ -1523,12 +1572,13 @@ function renderSettings(el) {
       const st = await api('/api/login/start', { method: 'POST', body: { provider: b.dataset.signin } });
       window.open(st.url, '_blank', 'noopener');
       msg.innerHTML = `Finish signing in in the new tab. If it did not open: <a href="${esc(st.url)}" target="_blank" rel="noopener">open the sign-in page</a>.`;
+      if (!st.id) { msg.innerHTML += ' Then press its Copy button and paste the token into Lantern with <code>lantern login --token</code>: this Lantern does not listen on this computer\'s own address, so the sign-in cannot come back by itself.'; return; }
       const until = Date.now() + 5 * 60 * 1000;
       while (Date.now() < until) {
         await new Promise(r => setTimeout(r, 2000));
-        const r = await api('/api/login/poll?cli=' + encodeURIComponent(st.cli));
-        if (r.error) { msg.textContent = 'Could not reach the gateway: ' + r.error; return; }
+        const r = await api('/api/login/poll?id=' + encodeURIComponent(st.id));
         if (r.done) { msg.textContent = 'Signed in. The free allowance is ready.'; await refresh(); return; }
+        if (r.error) { msg.textContent = 'Sign-in did not finish: ' + r.error; return; }
       }
       msg.textContent = 'That took too long. Click the button again to retry.';
     } catch (err) { msg.textContent = 'Sign-in failed: ' + (err.message || err); }
@@ -1637,7 +1687,7 @@ async function drawPacks(box) {
 
 const FAQ = [
   ['Safety', 'Does my code leave my computer?', 'No, unless you turn on explanations or Ask Lantern with a cloud model. Analysis (the map, findings, readiness, the Evidence Report) runs here. A GitHub link is cloned onto this computer, not a server. With a local model (Ollama, LM Studio) nothing leaves either. Lantern tells you once, before the first time code would be sent.'],
-  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run”), with the command shown first, inside a sandbox: a Docker container or a read-only temp copy, with no way out to the internet or your network and your environment variables left out. They get ten minutes unless you set another limit.'],
+  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run”), with the command shown first, inside a sandbox: a Docker container, or a restricted process on a copy of your project that is thrown away afterwards, with your environment variables left out. How far the tests are kept from the internet, your network and your files depends on your computer: every program of theirs in Docker and on most Linux systems, Python code only on Windows and Mac, and the sheet says which it is before anything runs; where something is not held, it asks you first. They get ten minutes unless you set another limit.'],
   ['Safety', 'What does the free allowance store?', 'A hash of your sign-in token and request counts. No code, no prompts, no email address. Each account gets one token; signing in again rotates it.'],
   ['Findings', 'What makes a finding critical?', 'Two yes answers: a page or route leads to that line (reachable), and the line uses something the visitor sent (input). Reachable but no input is high; not reachable stays low even when the scanner says high.'],
   ['Findings', 'What does “reachable” mean?', 'Lantern found a path from a place a visitor can start (a page, a route, a command) to the function that holds the finding. The path is drawn on the finding so you can follow it.'],
@@ -1705,7 +1755,8 @@ function render() {
   if (S.view === 'learn') return renderLearn(el);
   renderHome(el);
 }
-refresh().catch(e => { document.getElementById('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+if (!TOKEN) document.getElementById('view').innerHTML = LOCKED;
+else refresh().catch(e => { document.getElementById('view').innerHTML = e.locked ? LOCKED : `<div class="empty">${esc(e.message)}</div>`; });
 </script>
 </body>
 </html>

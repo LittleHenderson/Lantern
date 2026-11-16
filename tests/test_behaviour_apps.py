@@ -35,7 +35,7 @@ def _generator():
 corkboard = _generator()
 KINDS = {"no-login", "other-user", "other-tenant", "privilege", "refused-but-changed", "credential", "invalid-input",
          "oversize", "upload", "archive", "redirect", "internal-address", "login-limit", "concurrency", "db-error",
-         "interrupted", "retry", "recovery"}
+         "interrupted", "retry", "recovery", "ended"}
 
 
 def test_the_safe_app_and_every_planted_version_are_python():

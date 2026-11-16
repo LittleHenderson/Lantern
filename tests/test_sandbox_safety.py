@@ -1364,7 +1364,8 @@ def test_the_app_stops_a_test_run_when_asked_and_nothing_it_started_is_left(app_
     assert wait(base, call(base, f"/api/projects/{pid}/analyze", "POST", {"offline": True})[1]["id"], timeout=120)["status"] == "done"
     was = _files(repo)                                             # the project with the results of a finished check
     assert ".lantern/readiness.json" in was
-    code, job = call(base, f"/api/projects/{pid}/trace", "POST", {"command": " ".join(PYTEST), "confirm": True})
+    code, job = call(base, f"/api/projects/{pid}/trace", "POST",
+                     {"command": " ".join(PYTEST), "confirm": True, "reach": sandbox.reach("python")["ask"]})
     assert code == 202 and job["can_stop"] is True and job["status"] == "running", job
     end, pids = time.time() + 120, []
     while not pids and time.time() < end:
@@ -1399,7 +1400,8 @@ def test_the_app_is_told_when_the_tests_were_not_run_and_why(app_with, tmp_path,
     base, add = app_with
     monkeypatch.setattr(sandbox, "SITECUSTOMIZE", "# a guard that did not load\n")
     pid = add(_project(tmp_path, QUIET))
-    code, job = call(base, f"/api/projects/{pid}/trace", "POST", {"command": " ".join(PYTEST), "confirm": True})
+    code, job = call(base, f"/api/projects/{pid}/trace", "POST",
+                     {"command": " ".join(PYTEST), "confirm": True, "reach": sandbox.reach("python")["ask"]})
     assert code == 202, job
     done = wait(base, job["id"], timeout=120)
     r = done["result"]
@@ -1417,7 +1419,10 @@ def test_a_test_run_started_from_the_apps_terminal_stops_the_same_way(app_with, 
     from test_server import call, wait
     base, add = app_with
     pid = add(_project(tmp_path, STARTS + "\ndef test_never_ends():\n    start()\n    time.sleep(300)\n"))
-    code, started = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["trace", "--", *PYTEST]})
+    # where this system's sandbox does not hold every program of the tests (macOS, Windows, a run inside another
+    # sandbox), the terminal starts them only on the person's word, as the sheet does on its tick box
+    word = ["--anyway"] if sandbox.reach("python")["ask"] else []
+    code, started = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["trace", *word, "--", *PYTEST]})
     assert code == 202 and started["job"]["can_stop"] is True, started
     jid, end, pids = started["job"]["id"], time.time() + 120, []
     while not pids and time.time() < end:
@@ -1441,7 +1446,8 @@ def test_the_app_is_told_what_could_not_be_ended(app_with, tmp_path, monkeypatch
     monkeypatch.setattr(_jail, "in_session", lambda sid: [4242])
     monkeypatch.setattr(_jail, "end_session", lambda sid: None)
     pid = add(_project(tmp_path, QUIET))
-    code, job = call(base, f"/api/projects/{pid}/trace", "POST", {"command": " ".join(PYTEST), "confirm": True})
+    code, job = call(base, f"/api/projects/{pid}/trace", "POST",
+                     {"command": " ".join(PYTEST), "confirm": True, "reach": sandbox.reach("python")["ask"]})
     assert code == 202, job
     done = wait(base, job["id"], timeout=120)
     r = done["result"]

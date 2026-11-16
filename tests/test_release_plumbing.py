@@ -42,7 +42,7 @@ def test_serve_check(tmp_path):
     r = subprocess.run([sys.executable, "-m", "lantern.cli", "serve", str(ROOT / "tests/fixtures/shop"), "--check",
                         "--port", "8901"], capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "?token=" in r.stdout and "the app answered" in r.stdout
+    assert "/#token=" in r.stdout and "the app answered" in r.stdout
     assert not (tmp_path / "home" / "projects.json").exists() or "shop" not in (tmp_path / "home" / "projects.json").read_text(encoding="utf-8")
     bad = subprocess.run([sys.executable, "-m", "lantern.cli", "serve", str(tmp_path / "nope"), "--check"],
                          capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)

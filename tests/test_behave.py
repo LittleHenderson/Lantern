@@ -701,6 +701,193 @@ def test_no_app_is_started_where_the_sandbox_starts_none_and_the_record_and_the_
     assert _bench().main([str(tmp_path / "work")]) == 3 and not (tmp_path / "work").exists()
 
 
+# ----------------------------------------------------------------------- what was ended is refused from then on
+# A sign-in that was signed out, an account that was switched off, an invitation that was taken back: the request
+# that worked before must be refused afterwards, straight after, after a restart, and by a second copy of the app
+# that had answered it before (review stage, 2026-11-15). DOORS is the same for every version; each version has
+# its own `signed_in(conn, token)` and `sign_out(conn, token)`.
+DOORS = '''
+import json, os, sqlite3
+
+DB = os.environ["DOORS_DB"]
+
+def db():
+    conn = sqlite3.connect(DB)
+    conn.execute("CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY)")
+    return conn
+
+async def app(scope, receive, send):
+    if scope["type"] != "http":
+        return
+    while True:
+        event = await receive()
+        if not event.get("more_body"):
+            break
+    token = dict(scope["headers"]).get(b"authorization", b"").decode().removeprefix("Bearer ")
+    status, answer = 404, {}
+    conn = db()
+    try:
+        if scope["method"] == "POST" and scope["path"] == "/signin" and token:
+            conn.execute("INSERT OR REPLACE INTO sessions (token) VALUES (?)", (token,))
+            conn.commit()
+            status = 201
+        elif not signed_in(conn, token):
+            status = 401
+        elif scope["method"] == "GET" and scope["path"] == "/me":
+            status, answer = 200, {"signed_in": True}
+        elif scope["method"] == "POST" and scope["path"] == "/signout":
+            sign_out(conn, token)
+            status = 200
+    finally:
+        conn.close()
+    await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json")]})
+    await send({"type": "http.response.body", "body": json.dumps(answer).encode()})
+
+def in_the_database(conn, token):
+    return conn.execute("SELECT 1 FROM sessions WHERE token = ?", (token,)).fetchone() is not None
+
+def taken_out(conn, token):
+    conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    conn.commit()
+'''
+ASKS_THE_DATABASE = DOORS + '''
+signed_in, sign_out = in_the_database, taken_out
+'''
+ONLY_SAYS_SO = DOORS + '''
+signed_in = in_the_database
+
+def sign_out(conn, token):
+    pass                                    # the page forgets its cookie; the sign-in itself is ended nowhere
+'''
+REMEMBERS_A_YES = DOORS + '''
+SEEN = set()                                # this copy of the app remembers every sign-in it has said yes to
+
+def signed_in(conn, token):
+    if token not in SEEN and in_the_database(conn, token):
+        SEEN.add(token)
+    return token in SEEN
+
+def sign_out(conn, token):
+    taken_out(conn, token)
+    SEEN.discard(token)
+'''
+ENDED_IN_MEMORY = DOORS + '''
+ENDED = set()                               # what was signed out is written down in this copy's memory only
+
+def signed_in(conn, token):
+    return token not in ENDED and in_the_database(conn, token)
+
+def sign_out(conn, token):
+    ENDED.add(token)
+'''
+SIGNED_OUT = {"id": "signed-out", "kind": "ended", "about": "A sign-in that was signed out gets in no more",
+              "who": "alice", "request": {"method": "GET", "path": "/me"}, "end": {"method": "POST", "path": "/signout"}}
+DOORS_PLAN = {
+    "app": {"asgi": "app:app", "env": {"DOORS_DB": "{data}/doors.db"}},
+    "state": {"sqlite": ["{data}/doors.db"]},
+    "people": {"alice": {"token": "alice-signed-in"}, "amir": {"token": "amir-signed-in"}},
+    "seed": [{"request": {"method": "POST", "path": "/signin"}, "as": "alice"},
+             {"request": {"method": "POST", "path": "/signin"}, "as": "amir"}],
+    "checks": [SIGNED_OUT,
+               {"id": "others-stay", "kind": "keeps", "about": "amir signing out leaves alice signed in",
+                "who": "amir", "request": {"method": "POST", "path": "/signout"},
+                "after": {"request": {"method": "GET", "path": "/me"}, "as": "alice"}, "expect": {"status": 200}}],
+}
+HELD, LIVED_ON = ("held", []), ("broken", ["lived-on"])
+# The second check is the twin inside the plan: somebody else signing out ends nobody else's sign-in, so the first
+# check's `held` is not an app that refuses everybody after any sign-out.
+ANOTHERS = {"others-stay/the request": HELD}
+
+
+def _doors(tmp_path, name: str, app: str) -> dict:
+    return _by_case(_run(_repo(tmp_path / name, app, DOORS_PLAN)))
+
+
+@starts_an_app
+def test_a_sign_in_that_was_signed_out_is_refused_straight_after_after_a_restart_and_by_another_copy(tmp_path):
+    assert _doors(tmp_path, "safe", ASKS_THE_DATABASE) == {
+        "signed-out/straight after": HELD, "signed-out/after a restart": HELD, "signed-out/on another worker": HELD,
+        **ANOTHERS}
+
+
+@starts_an_app
+def test_a_sign_out_that_ends_nothing_is_reported_in_every_case(tmp_path):
+    record = _run(_repo(tmp_path / "says", ONLY_SAYS_SO, DOORS_PLAN))
+    assert _by_case(record) == {
+        "signed-out/straight after": LIVED_ON, "signed-out/after a restart": LIVED_ON,
+        "signed-out/on another worker": LIVED_ON, **ANOTHERS}
+    first = record["outcomes"][0]
+    assert first["said"] == behave.CODES["lived-on"] and first["saw"]["status"] == 200
+
+
+@starts_an_app
+def test_a_copy_of_the_app_that_remembers_its_own_yes_is_reported_on_the_other_copy_only(tmp_path):
+    assert _doors(tmp_path, "remembers", REMEMBERS_A_YES) == {
+        "signed-out/straight after": HELD, "signed-out/after a restart": HELD,
+        "signed-out/on another worker": LIVED_ON, **ANOTHERS}
+
+
+@starts_an_app
+def test_a_sign_out_kept_in_memory_is_reported_after_a_restart_and_on_another_copy(tmp_path):
+    assert _doors(tmp_path, "memory", ENDED_IN_MEMORY) == {
+        "signed-out/straight after": HELD, "signed-out/after a restart": LIVED_ON,
+        "signed-out/on another worker": LIVED_ON, **ANOTHERS}
+
+
+def test_what_was_ended_counts_as_refused_only_beside_a_request_that_worked_and_an_end_that_worked():
+    yes, out, no = {"status": 200}, {"status": 204}, {"status": 401}
+    again = {"restarted": True}
+
+    def judged(steps, case="straight after", **more):
+        return _judged(dict(SIGNED_OUT, id="e", **more), {case: steps})[case]
+    assert judged([yes, out, no]) == HELD
+    assert judged([yes, out, {"status": 403}]) == HELD
+    assert judged([yes, out, yes]) == LIVED_ON
+    assert judged([yes, out, again, no], "after a restart") == HELD
+    assert judged([yes, out, again, yes], "after a restart") == LIVED_ON
+    assert judged([yes, yes, out, no], "on another worker") == HELD
+    assert judged([yes, yes, out, yes], "on another worker") == LIVED_ON
+    assert judged([yes, out, {"status": 500}]) == ("broken", ["crashed"])
+    # Nothing is proven where the request did not work before, where the end itself did not work, or where the
+    # answer afterwards is neither the one from before nor a refusal the check names.
+    assert judged([no, out, no]) == ("inconclusive", [])
+    assert judged([yes, no, out, no], "on another worker") == ("inconclusive", [])     # the other copy refused it before
+    assert judged([yes, {"status": 404}, no]) == ("inconclusive", [])
+    assert judged([yes, {"status": 500}, yes]) == ("inconclusive", [])
+    assert judged([yes, out, {"status": 302}]) == ("inconclusive", [])
+    assert judged([yes, out, {"status": 302}], refused=[302]) == HELD            # this app sends them to its sign-in page
+    assert judged([yes, out, no], refused=[404]) == ("inconclusive", [])
+    plan = behave.check({"app": {"asgi": "app:app"}, "people": PEOPLE, "checks": [dict(SIGNED_OUT, id="e")]})
+    observed = {"probes": [{"id": "e/straight after", "steps": [yes, {"status": 404}, no]}]}
+    why = behave.judge(plan, behave.scene(plan)[1], observed)[0]["why"]
+    assert "404" in why and "nothing was ended" in why
+
+
+def test_the_steps_of_such_a_check_and_what_its_plan_may_hold():
+    plan = behave.check({"app": {"asgi": "app:app"}, "people": PEOPLE, "checks": [
+        dict(SIGNED_OUT, id="e", end={"request": {"method": "POST", "path": "/signout"}, "as": "amir"})]})
+    inside_, cases = behave.scene(plan)
+    assert [c["case"] for c in cases] == ["straight after", "after a restart", "on another worker"]
+    me, out = {"request": SIGNED_OUT["request"], "as": "alice"}, {"request": {"method": "POST", "path": "/signout"}, "as": "amir"}
+    assert [p["steps"] for p in inside_["probes"]] == [
+        [me, out, me], [me, out, {"restart": True}, me], [me, dict(me, worker=1), out, dict(me, worker=1)]]
+    assert all(p["fresh"] for p in inside_["probes"])                 # the seed's state is put back after each case
+
+    def refused(**more):
+        with pytest.raises(behave.PlanError):
+            behave.check({"app": {"asgi": "app:app"}, "people": PEOPLE, "checks": [dict(SIGNED_OUT, id="e", **more)]})
+    refused(end=None)                                                  # nothing that ends it
+    refused(end={"method": "POST", "path": "https://elsewhere.example/signout"})
+    refused(end={"request": {"method": "POST", "path": "/signout"}, "as": "somebody-else"})
+    refused(across=["same", "next-week"])
+    refused(across=[])
+    refused(refused=["no"])
+    refused(refused=[])
+    refused(refused=[200])                                             # an answer that says it worked is no refusal
+    assert behave.check({"app": {"asgi": "app:app"}, "people": PEOPLE,
+                         "checks": [dict(SIGNED_OUT, id="e", across=["restart"], refused=[401, 302])]})
+
+
 # --------------------------------------------------------------------------- apps that were not written for it
 def _asks(method: str, path: str, **more) -> dict:
     return {"method": method, "path": path, **more}
@@ -726,6 +913,8 @@ GATEWAY_PLAN = {
          "request": _asks("GET", "/v1/whoami"), "who": "tester", "variants": ["none", "empty", "garbage", "truncated"]},
         {"id": "sign-out", "kind": "refuse", "about": "Nobody signs somebody else out",
          "request": _asks("POST", "/v1/auth/signout", json={}), "who": ["nobody"], "allowed": ["tester"]},
+        {"id": "signed-out", "kind": "ended", "about": "A sign-in that was signed out is refused from then on",
+         "request": _asks("GET", "/v1/whoami"), "who": "tester", "end": _asks("POST", "/v1/auth/signout", json={})},
         {"id": "big-report", "kind": "input", "about": "A usage report of 5,000 bytes is refused",
          "request": _asks("POST", "/v1/usage", bytes=5000),
          "good": _asks("POST", "/v1/usage", json={"install": "0123456789abcdef" * 2, "features": {"analyze": 1}})},
@@ -750,7 +939,8 @@ def test_lanterns_own_gateway_is_started_as_it_is_and_asked(tmp_path):
     got = _by_case(record)
     assert {case: came for case, came in got.items() if came[0] != "held"} == {
         "chat-unlisted/the request": ("broken", ["outside-address"])}, got
-    assert record["summary"] == {"held": 12, "broken": 1, "inconclusive": 0, "not-run": 0}
+    assert record["summary"] == {"held": 15, "broken": 1, "inconclusive": 0, "not-run": 0}
+    assert all(got[f"signed-out/{case}"] == ("held", []) for case in behave.ACROSS.values())   # sessions: in its database
     saw = {f"{o['check']}/{o['case']}": o.get("saw") or {} for o in record["outcomes"]}
     # the provider's name was answered inside the sandbox, the connection was refused there, and the gateway said so
     for case in ("chat-provider/the request", "chat-unlisted/the request"):
@@ -758,6 +948,70 @@ def test_lanterns_own_gateway_is_started_as_it_is_and_asked(tmp_path):
         assert "changed" not in saw[case]                           # and the person was charged nothing for it
     assert saw["big-report/the bad request"]["status"] == 413
     assert {saw[f"sign-in/{v}"]["status"] for v in ("none", "empty", "garbage", "truncated")} == {401}
+
+
+# Lantern's website asks its gateway whose sign-in a request carries. BOTH makes one app of the two: the website asks
+# the gateway inside the process (no address is reached), and a path under /gw is the gateway's own.
+BOTH = '''
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.join(HERE, "gateway"), os.path.join(HERE, "cloud")]
+
+import httpx
+from lantern_cloud.app import create_app as website
+from lantern_gateway.app import create_app as gateway
+
+
+def make():
+    gw = gateway()
+    site = website(transport=httpx.ASGITransport(app=gw))
+
+    async def both(scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/gw/"):
+            path = scope["path"][3:]
+            return await gw(dict(scope, path=path, raw_path=path.encode()), receive, send)
+        return await site(scope, receive, send)
+    return both
+'''
+WEBSITE_PLAN = {
+    "app": {"asgi": "both:make", "factory": True,
+            "env": {"LANTERN_DB": "{data}/gateway.db", "LANTERN_ADMIN_SECRET": "{secret}",
+                    "ANTHROPIC_API_KEY": "not-a-key-of-anybody", "LANTERN_GATEWAY_URL": "http://gateway.test/v1",
+                    "LANTERN_CLOUD_DB": "{data}/cloud.db", "LANTERN_CLOUD_RESULTS": "{data}/results",
+                    "LANTERN_CLOUD_WORK": "{data}/work", "LANTERN_CLOUD_UPLOADS": "{data}/uploads",
+                    "LANTERN_CLOUD_AUDITS": "0"}},
+    "state": {"sqlite": ["{data}/gateway.db", "{data}/cloud.db"],
+              "folders": ["{data}/results", "{data}/work", "{data}/uploads"]},
+    "people": {"owner": {"token": "{secret}"}, "tester": {"token": "{tester_token}"}},
+    "seed": [{"request": _asks("POST", "/gw/v1/tokens", json={"label": "tester"}), "as": "owner",
+              "save": {"tester_token": "json:token"}}],
+    "checks": [
+        {"id": "ended-at-the-gateway", "kind": "ended", "who": "tester",
+         "about": "A sign-in that was ended at the gateway is refused by the website from then on",
+         "request": _asks("GET", "/v1/me"), "end": _asks("POST", "/gw/v1/auth/signout", json={})},
+        {"id": "me", "kind": "refuse", "about": "Who is signed in is told only to them",
+         "request": _asks("GET", "/v1/me"), "who": ["nobody"], "allowed": ["tester"]},
+    ],
+}
+
+
+@starts_an_app
+def test_lanterns_own_website_refuses_a_sign_in_that_was_ended_at_its_gateway(tmp_path):
+    """The website and the gateway as they are, as one app. Asked of the website as it was before 2026-11-15, the
+    first and the third case came out broken, `lived-on`: each copy of the website kept the gateway's "yes" for
+    five minutes; after a restart it held, because the restart had emptied that memory."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    repo = tmp_path / "repo"
+    for part in ("gateway", "cloud"):
+        shutil.copytree(ROOT / part, repo / part, ignore=shutil.ignore_patterns("__pycache__", "*.db"))
+    (repo / "both.py").write_text(BOTH, encoding="utf-8")
+    (repo / behave.PLAN_NAME).write_text(json.dumps(WEBSITE_PLAN), encoding="utf-8")
+    assert _by_case(_run(repo)) == {
+        "ended-at-the-gateway/straight after": ("held", []), "ended-at-the-gateway/after a restart": ("held", []),
+        "ended-at-the-gateway/on another worker": ("held", []), "me/nobody": ("held", [])}
 
 
 SHOP_PLAN = {
@@ -800,7 +1054,7 @@ def _bench():
 
 @pytest.fixture(scope="module")
 def corkboard():
-    """Corkboard (bench/behaviour): a FastAPI app with sign-in tokens, the safe version and 31 with one planted
+    """Corkboard (bench/behaviour): a FastAPI app with sign-in tokens, the safe version and 32 with one planted
     problem each. tests/test_behaviour_apps.py tests the apps themselves."""
     pytest.importorskip("fastapi")
     pytest.importorskip("jwt")
@@ -811,7 +1065,7 @@ def corkboard():
 def test_the_safe_app_holds_in_every_case_of_the_whole_plan(corkboard, tmp_path):
     row = corkboard.run_one(tmp_path, corkboard.SAFE)
     assert row["differences"] == [], row["log"]
-    assert row["summary"] == {"held": 80, "broken": 0, "inconclusive": 0, "not-run": 0}
+    assert row["summary"] == {"held": 83, "broken": 0, "inconclusive": 0, "not-run": 0}
 
 
 @starts_an_app
@@ -820,13 +1074,14 @@ def test_every_planted_problem_is_caught_by_the_cases_written_down_for_it_before
     codes, the cases the problem leaves undecided come out so, and the other cases of the same checks hold.
     `bench/behaviour/run_behaviour.py` runs the whole plan against every version (no other case may break)."""
     names = list(corkboard.apps.PLANTED)
-    assert len(names) == 31 and set(names) == set(corkboard.plans.EXPECTED)
+    assert len(names) == 32 and set(names) == set(corkboard.plans.EXPECTED)
     with ThreadPoolExecutor(min(4, os.cpu_count() or 1)) as pool:
         rows = list(pool.map(lambda name: corkboard.run_one(tmp_path, name, own_checks=True), names))
     assert {r["name"]: r["differences"] for r in rows if r["differences"]} == {}
     assert all(r["summary"]["broken"] >= 1 for r in rows)
     codes = {code for r in rows for found in r["broken"].values() for code in found}
-    assert codes == set(behave.CODES) - {"stuck", "crashed"}      # those two are judged by hand above
+    # `stuck` and `crashed` are judged by hand above
+    assert codes == set(behave.CODES) - {"stuck", "crashed"}
 
 
 def test_the_table_of_what_must_come_out_names_only_cases_the_plan_has(corkboard):

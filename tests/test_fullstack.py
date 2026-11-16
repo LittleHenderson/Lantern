@@ -357,6 +357,207 @@ def test_what_counts_as_a_login_check_in_a_handler():
     assert sign("def f(payload):\n    token = payload.get('token')\n    user = get_user(token)\n    return user\n") is None
 
 
+def test_a_handlers_own_name_is_not_a_login_check():
+    """What a route's function is called says what it is for, not that it asks who is calling. The line that defines
+    a handler was read like any other line of it, so `def revoke_token(...)` "called" `revoke_token` and the route
+    counted as asking for a login. The dangerous handlers first, each with the twin that does ask."""
+    from lantern.websec import body_auth_sign, own_name
+
+    def sign(src, signature, js=False):
+        got = body_auth_sign(src, 1, src.count("\n"), js, signature=signature)
+        return got[0] if got else None
+
+    # Python: one line, async, a signature over several lines
+    assert sign("def revoke_token(key_id: int):\n    db.delete(key_id)\n", "def revoke_token(key_id: int)") is None
+    assert sign("async def auth_pickup(code: str):\n    return {'t': store.take(code)}\n",
+                "async def auth_pickup(code: str)") is None
+    assert sign("def reset_permissions(\n    team: int,\n    kind: str,\n):\n    db.wipe(team)\n",
+                "def reset_permissions(team: int, kind: str)") is None
+    # JavaScript and TypeScript: a declared function, a method of a class or an object
+    assert sign("export async function logoutUser(req, res) {\n  db.sessions.clear(req.body.id)\n}\n",
+                "logoutUser(req, res)", js=True) is None
+    assert sign("  async refreshToken(req, res) {\n    res.json(await this.store.next(req.body.id))\n  }\n",
+                "refreshToken(req, res)", js=True) is None
+    # the other languages come the same way (the name before the parameters, after whatever stands before it)
+    assert sign("public ResponseEntity<Void> deleteToken(@PathVariable long id) {\n    repo.deleteById(id);\n}\n",
+                "public ResponseEntity<Void> deleteToken(@PathVariable long id)", js=True) is None
+    assert sign("func (h *Handler) DeleteToken(w http.ResponseWriter, r *http.Request) {\n\th.db.Delete(id)\n}\n",
+                "func (h *Handler) DeleteToken(w http.ResponseWriter, r *http.Request)", js=True) is None
+    assert sign("pub async fn delete_token(Path(id): Path<i64>) -> StatusCode {\n    db::delete(id).await\n}\n",
+                "pub async fn delete_token(Path(id): Path<i64>) -> StatusCode", js=True) is None
+    # the twins: the same handlers with a check in them keep their sign
+    assert sign("def revoke_token(key_id: int):\n    authorize(request_user(), 'keys')\n    db.delete(key_id)\n",
+                "def revoke_token(key_id: int)") == "strong"
+    assert sign("export async function logoutUser(req, res) {\n  if (!req.user) return res.sendStatus(401)\n"
+                "  db.sessions.clear(req.user.id)\n}\n", "logoutUser(req, res)", js=True) == "strong"
+    assert sign("func (h *Handler) DeleteToken(w http.ResponseWriter, r *http.Request) {\n\tif !h.isAdmin(r) {\n"
+                "\t\treturn\n\t}\n}\n", "func (h *Handler) DeleteToken(w http.ResponseWriter, r *http.Request)",
+                js=True) == "strong"
+    # only the defining line: a handler that calls a function of that name further down is read as before
+    assert sign("def check_auth(x):\n    return 1\n\n\ndef f(payload):\n    check_auth(payload)\n", "def f(payload)") == "strong"
+    assert sign("def require_login(depth: int):\n    return require_login(depth - 1)\n",
+                "def require_login(depth: int)") == "strong"
+    # the name a first line gives
+    assert [own_name(x) for x in ("def revoke_token(key_id: int)", "async def a(b)", "POST(req: Request)",
+                                  "func (h *Handler) DeleteToken(w, r)", "pub async fn delete_token(x: i64) -> S",
+                                  "public ResponseEntity<Void> deleteToken(long id)", "fun deleteToken(id: Long)")] == \
+        ["revoke_token", "a", "POST", "DeleteToken", "delete_token", "deleteToken", "deleteToken"]
+    assert [own_name(x) for x in ("(req, res) =>", "async (req, res) =>", "function (req, res)", "", "x = 1")] == [""] * 5
+
+
+PICKUP_PY = """import hmac
+from fastapi import Depends, FastAPI, HTTPException
+
+from .store import current_user, fingerprint, issue_token, store
+
+app = FastAPI()
+
+
+@app.get("/pickup")
+def pickup(code: str):
+    tok = store.take(code)
+    if tok is None:
+        raise HTTPException(404)
+    return {"token": tok}
+
+
+@app.get("/pickup-inline")
+def pickup_inline(code: str):
+    return {"access_token": store.take(code)}
+
+
+@app.post("/redeem")
+def redeem(code: str, verifier: str):
+    row = store.take(code)
+    if row is None or not hmac.compare_digest(row.challenge, fingerprint(verifier)):
+        raise HTTPException(400)
+    return {"token": issue_token(row.account)}
+
+
+@app.post("/login")
+def login(username: str, password: str):
+    user = store.user(username)
+    if not user or not user.check(password):
+        raise HTTPException(401)
+    return {"token": issue_token(user)}
+
+
+@app.get("/my-key")
+def my_key(name: str, user=Depends(current_user)):
+    key = store.key(name)
+    return {"api_key": key}
+
+
+@app.post("/refresh")
+def refresh(refresh_token: str):
+    tok = store.next(refresh_token)
+    return {"token": tok}
+
+
+@app.post("/guest")
+def guest(name: str):
+    tok = issue_token(name)
+    return {"token": tok}
+
+
+@app.get("/note")
+def note(note_id: str):
+    title = store.title(note_id)
+    return {"title": title}
+
+
+@app.get("/pair")
+def pair(code: str, device: str):
+    tok = store.take(code)
+    return {"token": tok, "device": device}
+"""
+PICKUP_FLASK = """from flask import Flask, jsonify, request, session
+
+app = Flask(__name__)
+PENDING = {}
+
+
+@app.route("/claim")
+def claim():
+    code = request.args.get("code")
+    return jsonify(token=PENDING.pop(code, None))
+
+
+@app.route("/mine")
+def mine():
+    code = request.args.get("code")
+    if session.get("user") is None:
+        return "", 401
+    return jsonify(token=PENDING.pop(code, None))
+
+
+@app.route("/handed-on", methods=["POST"])
+def handed_on():
+    return jsonify(token=finish(request.get_json()))
+"""
+PICKUP_JS = """const express = require('express')
+const app = express()
+const pending = new Map()
+
+app.get('/pickup', async (req, res) => {
+  const token = await pending.get(req.query.code)
+  if (!token) return res.status(404).end()
+  res.json({ token })
+})
+
+app.get('/pickup2', (req, res) => {
+  const { code } = req.query
+  const found = pending.get(code)
+  res.json({ access_token: found })
+})
+
+app.post('/redeem', (req, res) => {
+  const { code, verifier } = req.body
+  const row = pending.get(code)
+  if (!row || !crypto.timingSafeEqual(row.challenge, hash(verifier))) return res.status(400).end()
+  res.json({ token: issue(row.account) })
+})
+
+app.get('/me/key', (req, res) => {
+  const key = keys.get(req.query.name)
+  if (!req.session.userId) return res.status(401).end()
+  res.json({ apiKey: key })
+})
+
+app.post('/login', (req, res) => {
+  const user = users.get(req.body.email)
+  res.json({ token: jwt.sign({ id: user.id }, SECRET) })
+})
+
+app.listen(3000)
+"""
+
+
+def test_a_login_handed_to_whoever_sends_one_value_is_named_and_its_safe_twins_are_not(tmp_path):
+    """`LW-TOKEN-PICKUP`: a route that fetches a stored credential with one plain value of the request and sends it
+    back, asking for nothing else. The safe twins: a second proof (a verifier compared, a password), a caller the
+    route identifies (a dependency, a session), a value that is itself a credential (a refresh token), a credential
+    made on the spot, something that is no credential, two values asked for, and a body handed on unread."""
+    _write(tmp_path, {"server/__init__.py": "", "server/api.py": PICKUP_PY, "server/web.py": PICKUP_FLASK,
+                      "api/package.json": '{"dependencies": {"express": "^4.19.0"}}', "api/server.js": PICKUP_JS})
+    g = build_graph(tmp_path)
+    found = sorted((f["file"], f["line"], f["title"].partition(" hands back")[0], f["snippet"])
+                   for f in scan(g)["findings"] if f["rule"] == "LW-TOKEN-PICKUP")
+    assert found == [
+        ("api/server.js", 6, "GET /pickup", "const token = await pending.get(req.query.code)"),
+        ("api/server.js", 13, "GET /pickup2", "const found = pending.get(code)"),
+        ("server/api.py", 11, "GET /pickup", "tok = store.take(code)"),
+        ("server/api.py", 19, "GET /pickup-inline", 'return {"access_token": store.take(code)}'),
+        ("server/web.py", 10, "GET /claim", "return jsonify(token=PENDING.pop(code, None))"),
+    ], found
+    one = next(f for f in scan(g)["findings"] if f["rule"] == "LW-TOKEN-PICKUP" and f["file"] == "server/api.py")
+    assert one["tool_confidence"] == "LOW" and one["rank"] == "medium" and one["cwe"] == 639
+    assert "one value the caller sends (`code`)" in one["title"] and "Heuristic" in one["more_info"]
+    assert "`store.take`" in one["more_info"] and "second thing only they hold" in one["more_info"]
+    story = one["scenario"]
+    assert "whoever sends" in story["harm"] and "POST" not in story["harm"], story
+
+
 def test_login_check_reads_hostile_code_in_bounded_time():
     """The handler-reading regexes (strings, request-data chains, name blanking, lookups) must stay linear on code
     built to make them backtrack: unbalanced brackets, long attribute chains, escaped quotes, thousands of names."""

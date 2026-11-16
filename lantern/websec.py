@@ -997,17 +997,34 @@ def _use_shape(code: str, s: int, e: int) -> tuple[str, str] | None:
     return None
 
 
+NOT_A_NAME = frozenset({"function", "def", "func", "fn", "fun", "async", "await", "if", "for", "while", "switch", "catch",
+                        "return", "new", "static", "public", "private", "protected", "get", "set"})
+
+
+def own_name(signature: str) -> str:
+    """The name a handler's first line gives it: `def revoke_token(key_id)` → `revoke_token`, Go's
+    `func (h *Handler) DeleteToken(w, r)` → `DeleteToken`. "" for a function without one (`(req, res) =>`)."""
+    s = re.sub(r"^\s*func\s*\([^()]*\)\s*", "func ", signature or "")      # Go: the receiver stands before the name
+    m = re.match(r"[^(=]*?([A-Za-z_$][\w$]*)\s*\(", s)
+    return m.group(1) if m and m.group(1) not in NOT_A_NAME else ""
+
+
 def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signature: str = "") -> tuple[str, str] | None:
     """What a handler's own lines say about checking the caller, read with strings, comments and request data
     blanked out. ("strong", evidence) for the framework's view of the caller (`request.user`), an auth word used
     as a call or attribute (`authorize(...)`, `user.is_admin`), or a user lookup given the caller's token/request/
     session (or nothing); ("weak", evidence) for a user lookup by some other value whose result is then tested,
     which finds a record, not the caller; None otherwise. A bare local name or parameter is never a sign, however
-    it is called: `permissions = payload.get("permissions")` is what the caller claims. Weak never counts as in place."""
+    it is called: `permissions = payload.get("permissions")` is what the caller claims. Weak never counts as in place.
+    The handler's own name on the line that defines it is no sign either (`own_name`): `def revoke_token(...)` says what
+    the route is for."""
     lines = text.splitlines()
     if not start_line or start_line > len(lines):
         return None
     raw = "\n".join(lines[start_line - 1:(end_line or start_line)])
+    name = own_name(signature)
+    if name:      # the line that defines the handler: what it is called is not something it asks or calls
+        raw = re.sub(rf"(?<![\w$.]){re.escape(name)}(?=\s*\()", lambda m: "_" * len(m.group(0)), raw, count=1)
     chains = DATA_CHAIN.sub(_blank_data, code_only(raw, js))   # strings, comments (~), request data and what hangs off it (^)
     code = _blank_names(chains, signature)                 # ...and the names that hold it (all the same length)
     m = BODY_AUTH_SHAPED.search(code)
@@ -2027,9 +2044,197 @@ def template_rules(repo: Path) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------ a login handed to whoever names it (LW-TOKEN-PICKUP)
+# A route that takes one plain value from the request, fetches something the server keeps with it, and sends that back
+# under a credential's name (`token`, `secret`, `session`). Whoever knows or chose the value gets the credential. That
+# is as intended when the server made the value at random and gave it only to the one the credential is for. It is a
+# way in when the one who finishes a sign-in is not the one who started it, or when the value travels in a link.
+# Lantern cannot read who else may know a value, so this is a heuristic that says "check" (`tool_confidence: LOW`).
+# It stays quiet where the handler shows a second proof (a secret compared, a signature, a verifier, a password),
+# where the value is itself named as a credential (a refresh token), where the caller is identified (a session, a
+# header, a cookie, a dependency), where more than one value is asked for, and where the credential is made on the
+# spot (a sign-in) and not fetched. Python and JavaScript/TypeScript routes; read from the handler's own lines.
+PICKUP_WORD = (r"(?:access|refresh|id|api|auth|session|bearer|login)?[_-]?"
+               r"(?:token|secret|api[_-]?key|apikey|jwt|session(?:[_-]?id)?|credentials?)")
+PICKUP_OUT = re.compile(r"""(?:["'](?P<key>""" + PICKUP_WORD + r""")["']|(?<![\w$.'"])(?P<bare>""" + PICKUP_WORD
+                        + r"""))\s*:\s*(?P<v>[A-Za-z_$][\w$.]*)\s*(?P<call>\()?""", re.I)
+PICKUP_SHORT = re.compile(r"[{,]\s*(?P<v>" + PICKUP_WORD + r")\s*(?=[,}])", re.I)        # JS: `res.json({ token })`
+PICKUP_KWARG = re.compile(r"(?:jsonify|JsonResponse|JSONResponse|dict)\s*\((?:[^()\n]|\([^()\n]*\))*?(?<![\w$.])(?P<key>"
+                          + PICKUP_WORD + r")\s*=\s*(?P<v>[A-Za-z_$][\w$.]*)\s*(?P<call>\()?", re.I)
+PICKUP_MADE = re.compile(r"(?:^|[._])(?:create|issue|sign|encode|generate|gen|mint|make|new|build|token_urlsafe|token_hex|"
+                         r"uuid\d?|random\w*|refresh|rotate|renew|login|log_in|sign_?in|signin|authenticate|exchange|"
+                         r"register|sign_?up|signup)\w*$", re.I)
+PICKUP_PROOF = re.compile(r"compare_digest|timingSafeEqual|constant_time|verif|check_password|checkpw|bcrypt|argon2|"
+                          r"scrypt|pbkdf2|hmac|signature|challenge|password|passwd|\botp\b|totp", re.I)
+PICKUP_CALLER = re.compile(r"(?<![\w$])(?:request|req|ctx|context|c|event)\s*\.\s*(?:cookies?|headers?|session|user|auth|"
+                           r"state|locals|signedCookies|get\s*\(\s*[\"']authorization)|(?<![\w$])(?:session|g)\s*[.\[]|"
+                           r"current_user|currentUser|getServerSession|getSession|getToken\s*\(", re.I)
+PICKUP_BAGS = r"(?:args|form|values|json|GET|POST|query|params|body|query_params|path_params|data|view_args|match_info)"
+PICKUP_READ = re.compile(r"(?<![\w$])(?:request|req|ctx|c)\s*\.\s*" + PICKUP_BAGS + r"\b(?:\(\))?\s*(?:"
+                         r"""\.\s*get(?:list)?\s*\(\s*["'](?P<a>[\w-]+)["']|\[\s*["'](?P<b>[\w-]+)["']\s*\]|"""
+                         r"\.\s*(?P<c>[A-Za-z_$][\w$]*)(?!\s*\())")
+PICKUP_SPREAD = re.compile(r"(?:const|let|var)\s*\{(?P<names>[^{}=\n]*)\}\s*=\s*(?:await\s+)?(?:request|req|ctx|c)\s*\.\s*"
+                           + PICKUP_BAGS + r"\b")
+PICKUP_WHOLE = re.compile(r"(?<![\w$.])(?P<name>[A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*(?:await\s+)?(?:request|req|ctx|c)\s*\.\s*"
+                          + PICKUP_BAGS + r"\b(?:\(\))?\s*(?:(?:or|\|\||\?\?)\s*\{\s*\})?\s*;?\s*$", re.M)
+PICKUP_UNREAD = re.compile(r"(?<![\w$])(?:request|req|ctx|c)\s*\.\s*(?:" + PICKUP_BAGS + r"|get_json|body|text|stream|"
+                           r"read|formData|arrayBuffer|blob)\b")
+PICKUP_LITERAL = frozenset({"None", "True", "False", "null", "undefined", "true", "false", "await", "str", "int"})
+
+
+def _pickup_values(body: str, signature: str) -> dict[str, set[str]] | None:
+    """The plain values a handler takes from the request: each one's name -> the names that hold it. None when the
+    handler reads the request in a way this does not follow (a whole body handed on): then nothing is said."""
+    out: dict[str, set[str]] = {}
+    for name in _data_params(signature):
+        out.setdefault(name, set()).add(name)
+    wholes = {m.group("name") for m in PICKUP_WHOLE.finditer(body)}
+    spans = []
+    for m in PICKUP_SPREAD.finditer(body):
+        spans.append(m.span())
+        for part in m.group("names").split(","):
+            key, _, held = part.partition(":")
+            key, held = key.strip().split("=")[0].strip(), (held or key).strip().split("=")[0].strip()
+            if re.fullmatch(r"[A-Za-z_$][\w$]*", key or "") and re.fullmatch(r"[A-Za-z_$][\w$]*", held or ""):
+                out.setdefault(key, set()).add(held)
+    for m in PICKUP_READ.finditer(body):
+        spans.append(m.span())
+        key = m.group("a") or m.group("b") or m.group("c")
+        chain = re.sub(r"\s+", "", m.group(0))
+        out.setdefault(key, set()).add(chain)
+        line = body[body.rfind("\n", 0, m.start()) + 1:m.start()]
+        held = re.match(r"\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*(?:await\s+)?$", line)
+        if held:
+            out[key].add(held.group(1))
+    for name in wholes:
+        for m in re.finditer(rf"""(?<![\w$.]){re.escape(name)}\s*(?:\.\s*get\s*\(\s*["']([\w-]+)["']|"""
+                             rf"""\[\s*["']([\w-]+)["']\s*\]|\.\s*([A-Za-z_$][\w$]*)(?!\s*\())""", body):
+            key = m.group(1) or m.group(2) or m.group(3)
+            out.setdefault(key, set()).add(re.sub(r"\s+", "", m.group(0)))
+            line = body[body.rfind("\n", 0, m.start()) + 1:m.start()]
+            held = re.match(r"\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*(?:await\s+)?$", line)
+            if held:
+                out[key].add(held.group(1))
+    for m in PICKUP_WHOLE.finditer(body):
+        spans.append(m.span())
+    for m in PICKUP_UNREAD.finditer(body):         # the request read some other way: not followed, so nothing is said
+        if not any(a <= m.start() < b for a, b in spans):
+            return None
+    return out
+
+
+def _pickup_fetch(body: str, name: str, held: set[str]) -> tuple[int, str] | None:
+    """(offset, callee) of the line that fetches `name` with the one request value and nothing else."""
+    for m in re.finditer(rf"^[ \t]*(?:(?:const|let|var)\s+)?{re.escape(name)}\s*(?::[^=\n]+)?=\s*(?:await\s+)?"
+                         r"(?P<callee>[A-Za-z_$][\w$.]*)\s*(?P<open>[(\[])", body, re.M):
+        got = _pickup_call(body, m.group("callee"), m.end() - 1, held)
+        if got:
+            return m.start() + len(m.group(0)) - len(m.group(0).lstrip()), got
+    return None
+
+
+def _pickup_call(body: str, callee: str, open_at: int, held: set[str]) -> str | None:
+    """The callee, when what it is given is the one request value (wrapped or not) and nothing else of the handler's."""
+    close = {"(": ")", "[": "]"}[body[open_at]]
+    depth, end = 0, open_at
+    for end in range(open_at, min(len(body), open_at + 400)):
+        ch = body[end]
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+            if depth == 0:
+                break
+    else:
+        return None
+    if body[end] != close:
+        return None
+    args = body[open_at + 1:end]
+    if body[open_at] == "(" and PICKUP_MADE.search(callee):
+        return None
+    flat = re.sub(r"\s+", "", args)
+    for h in sorted(held, key=len, reverse=True):
+        flat = flat.replace(re.sub(r"\s+", "", h), "\x00")
+    if "\x00" not in flat:
+        return None
+    rest = strings.sub("'\"", "", flat)                                  # without the written text among the arguments
+    names = [x for x in re.findall(r"(?<![\w$.])[A-Za-z_$][\w$]*(?!\s*\()", rest) if x not in PICKUP_LITERAL]
+    return callee if not names else None
+
+
+def token_pickup(g: Graph) -> list[dict]:
+    """Routes that hand back a stored credential looked up by one plain value of the request, with no second proof
+    and no sign of who is asking (see the note above). Heuristic."""
+    out, texts = [], {}
+    for _nid, n in sorted(g.nodes.items()):
+        if not n.entry or n.entry.get("kind") != "route" or not n.file or not n.start_line:
+            continue
+        js = n.file.endswith(tuple(JS_EXTS) + (".mts", ".cts"))
+        if not (js or n.file.endswith(".py")):
+            continue
+        if n.file not in texts:
+            try:
+                texts[n.file] = project_text(Path(g.repo_root) / n.file, g.repo_root)
+            except OSError:
+                texts[n.file] = ""
+        lines = texts[n.file].splitlines()
+        body = "\n".join(lines[n.start_line - 1:(n.end_line or n.start_line)])
+        if not body or len(body) > 40_000:
+            continue
+        code = code_only(body, js)
+        if PICKUP_PROOF.search(code) or PICKUP_CALLER.search(code) or signature_sign(n.signature or ""):
+            continue
+        values = _pickup_values(body, n.signature or "")
+        if not values or len(values) != 1:
+            continue
+        (key, held), = values.items()
+        if CALLER_ARG.search(key) or PICKUP_PROOF.search(key):
+            continue
+        found = None
+        for m in list(PICKUP_OUT.finditer(body)) + list(PICKUP_KWARG.finditer(body)):
+            word = m.group("key") or (m.groupdict().get("bare") or "")
+            if m.group("call"):                       # `{"token": store.take(code)}`
+                callee = _pickup_call(body, m.group("v"), m.end() - 1, held)
+                found = (m.start(), callee, word) if callee else None
+            else:
+                got = _pickup_fetch(body, m.group("v"), held)
+                found = (got[0], got[1], word) if got else None
+            if found:
+                break
+        if not found and js:
+            for m in PICKUP_SHORT.finditer(body):
+                got = _pickup_fetch(body, m.group("v"), held)
+                if got:
+                    found = (got[0], got[1], m.group("v"))
+                    break
+        if not found:
+            continue
+        at, callee, word = found
+        line = n.start_line + body.count("\n", 0, at)
+        route = n.entry.get("detail") or "A route"
+        out.append(_finding(
+            "LW-TOKEN-PICKUP",
+            f"{route} hands back a `{word}` it looks up with one value the caller sends (`{key}`), and asks for nothing else",
+            "MEDIUM", n.file, line, category="code", conf="LOW", cwe=639, fixed_rank="medium",
+            more=("Heuristic: read from the handler's own lines. Whoever knows or chose that value gets what "
+                  f"`{callee}` returns. That is as intended when the server made the value at random and gave it only "
+                  "to the one it is for. It is a way in when somebody else can choose it or learn it: a sign-in one "
+                  "person starts and another finishes, a code that travels in a link or is typed from a screen. Check "
+                  "who can know the value. If it is not only the right one, ask for a second thing only they hold (a "
+                  "secret whose fingerprint was given at the start, their own session). Lantern found no such second "
+                  "proof, no sign of who is calling, and no other value asked for in this handler."),
+            snippet=lines[line - 1].strip() if 0 < line <= len(lines) else ""))
+    return out
+
+
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
     findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + template_rules(repo) + inline_secrets(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo, g) + missing_auth(g)
+    findings += token_pickup(g)
+    from . import localweb          # what a browser keeps for the site: a login cookie, a service worker's copies
+    findings += localweb.loopback_cookies(repo) + localweb.keeps_pages(repo)
+    from . import countlater        # a limit that is looked at before the work and counted after it
+    findings += countlater.counted_later(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

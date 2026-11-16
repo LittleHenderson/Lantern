@@ -10,8 +10,12 @@ holds the rest, so nothing about a hidden layer can be read out of the page.
   so the person sees that their code depends on something there, and nothing about what it is.
 - Findings, explanations and source snippets are kept only for what they may see. A finding whose path to a
   visitor runs through a hidden layer keeps its sealed path, without the story that names the hidden steps.
-- Anything else that names a hidden file or function (readiness evidence, hotspots, the AI and phone cards, the
-  frontend-to-backend bridge) is dropped or replaced with a plain sentence.
+- Anything else that names a hidden file or function (the AI and phone cards, the frontend-to-backend bridge) is
+  dropped or replaced with a plain sentence.
+- What describes the whole app is left out: the readiness score with its checks, the release decision and the
+  protections are worked out from every layer, so a number or a status there says something about the hidden
+  ones (review stage, 2026-11-15; until then they were kept with the hidden names taken out). Of each scanner
+  the view says which one ran and how it ended (`TOOL_KEEPS`), not what it said.
 
 The engine's facts are never changed, only left out. The cut is deterministic: the same bundle and layers give
 the same copy.
@@ -63,6 +67,21 @@ def _sealed_node(lane: str) -> dict:
             "qualname": f"Something in the {WORD[lane]}", "file": None, "start_line": None, "end_line": None,
             "parent": None, "fingerprint": None, "signature": None, "docstring": None, "decorators": [],
             "entry": None, "lane": lane, "sealed": True}
+
+
+TOOL_KEEPS = ("tool", "version", "state")
+
+
+def _tools(tools) -> list[dict]:
+    """Which scanner ran and how it ended, for a view of some layers. A scanner's own sentence, its errors and its
+    counts are about every layer (a count of files, the name of a file it could not read), so they are not in
+    the view; `status`, which the page prints, is the state's one word."""
+    out = []
+    for t in tools if isinstance(tools, list) else []:
+        if isinstance(t, dict):
+            cut = {k: t[k] for k in TOOL_KEEPS if isinstance(t.get(k), str)}
+            out.append({**cut, "status": cut.get("state") or ""})
+    return out
 
 
 def scope_bundle(data: dict, lanes) -> dict:
@@ -173,7 +192,7 @@ def scope_bundle(data: dict, lanes) -> dict:
     for f in findings:
         if f.get("status") == "open" and not f.get("in_tests") and f.get("rank") in counts:
             counts[f["rank"]] += 1
-    d["security"] = {"findings": findings, "tools": sec.get("tools"), "id_version": sec.get("id_version"),
+    d["security"] = {"findings": findings, "tools": scrub(_tools(sec.get("tools"))), "id_version": sec.get("id_version"),
                      "counts": {**counts, "in_tests": sum(1 for f in findings if f.get("in_tests")),
                                 "accepted": sum(1 for f in findings if f.get("status") == "accepted")},
                      "ai": scrub(sec.get("ai")) if "frontend" in keep_lanes or "server" in keep_lanes else None,
@@ -191,9 +210,8 @@ def scope_bundle(data: dict, lanes) -> dict:
     d["stats"] = {"nodes": kinds, "call_edges": len(calls), "internal_call_edges": sum(1 for e in calls if not e["dst"].startswith("ext:")),
                   "confidence": conf, "entry_points": sum(1 for n in g["nodes"] if n.get("entry")),
                   "unresolved_call_sites": 0, "guessed_by_method_name": 0} if st else st
-    if isinstance(d.get("readiness"), dict):
-        # the starter deploy files Lantern writes describe how to run the whole app (a Dockerfile names its server
-        # module), so someone who sees only part of it doesn't get them
-        d["readiness"] = scrub({k: v for k, v in d["readiness"].items() if k != "starter"})
+    # the score, its checks, the release decision, the protections and the starter deploy files are worked out from
+    # every layer: a status or a number there says something about the hidden ones, with or without their names
+    d["readiness"] = None
     d["scope"] = {"lanes": list(lanes), "hidden": [x for x in LANES if x not in keep_lanes]}
     return d

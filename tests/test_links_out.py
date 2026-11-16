@@ -270,8 +270,8 @@ def test_bandit_is_not_sent_through_a_link_out_of_the_project(tmp_path):
 def test_only_the_link_is_left_out_of_bandit(tmp_path):
     """Bandit leaves a file out when an exclusion is found anywhere in its path, so the path of `tool.py` alone
     would take the project's own `tool.pyw` and `tool.py.old.py` with it, and a comma in a name would cut the
-    exclusion in two (that one is not handed to Bandit; nothing is taken from the file all the same). Each file
-    here starts a shell; only the three links must go unreported."""
+    exclusion in two (with such a link in the project Bandit runs on copies of the project's own files, see
+    below). Each file here starts a shell; only the three links must go unreported."""
     repo = _write(tmp_path / "project", {"tool.pyw": SHELL, "tool.py.old.py": SHELL, "a,b/keep.py": SHELL,
                                          "a[1]/keep.py": SHELL, "a/keep.py": SHELL, "a_b/tool.py": SHELL})
     outside = tmp_path / "outside.py"
@@ -299,10 +299,67 @@ def test_a_pipe_under_a_python_name_does_not_hold_bandit_up(tmp_path, monkeypatc
     assert "wait.py" in record["exclusions"]
 
 
+def _what_bandit_said(monkeypatch) -> list:
+    """Every start of Bandit in this test as (the command, what Bandit itself wrote): what it wrote is more than
+    what Lantern takes from it, and it is kept between runs."""
+    said, real = [], scanresult.run_tool
+
+    def run_tool(cmd, **kw):
+        run = real(cmd, **kw)
+        said.append((list(cmd), str(run.stdout or "")))
+        return run
+    monkeypatch.setattr(scanresult, "run_tool", run_tool)
+    return said
+
+
 @needs_links
-def test_more_links_than_fit_a_command_line_are_still_not_reported(tmp_path, monkeypatch):
-    """The exclusions that do not fit the command line are not handed to Bandit; nothing is taken from those files
-    all the same."""
+def test_bandit_opens_no_file_it_could_not_be_told_to_leave_out(tmp_path, monkeypatch):
+    """A link out of the project whose path has a comma in it cannot be written as an exclusion (`-x a,b` is two
+    exclusions to Bandit). Until 2026-11-15 Bandit was started on the folder all the same and opened the file the
+    link leads to: nothing of it was reported, but Bandit's own output quoted its lines, and that output is kept
+    between runs. Now Bandit is started on copies of the project's own Python files, in a folder of Lantern's own,
+    where the link is not; the findings are the ones the project itself gives."""
+    said = _what_bandit_said(monkeypatch)
+    files = APP | {"a,b/keep.py": SHELL, "pkg/engine.py.txt": SHELL}
+    repo = _write(tmp_path / "project", files)
+    outside = tmp_path / "outside.py"
+    outside.write_text(SHELL.rstrip("\n") + "  # " + PRIVATE + "\n", encoding="utf-8")
+    os.symlink(outside, repo / "a,b" / "tool.py")
+    os.symlink(outside, repo / "x,y.py")
+    os.symlink("app.py", repo / "same.py")                      # a link that stays inside is still checked
+    findings, record = security.run_bandit(repo)
+    assert said and all(PRIVATE not in out for _, out in said)  # before: the outside file's line, in Bandit's output
+    assert record["state"] == "ok" and record["way"] == "copies"
+    assert all(str(repo) not in " ".join(cmd) for cmd, _ in said)   # Bandit was not started on the project's folder
+    assert sorted({f["file"] for f in findings}) == ["a,b/keep.py", "app.py", "pkg/engine.py.txt"]
+    assert record["scope"] == {"files": 4, "under_another_name": 1}   # app.py, same.py, a,b/keep.py, the text file
+    assert [x for x in record["exclusions"] if x.endswith(".py")] == ["a,b/tool.py", "x,y.py"]
+    # the twin: the same project without the two links, read where it lies, gives the very same findings
+    twin = _write(tmp_path / "twin" / "project", files)
+    os.symlink("app.py", twin / "same.py")
+    said.clear()
+    same, plain = security.run_bandit(twin)
+    assert plain["state"] == "ok" and "way" not in plain and str(twin) in " ".join(said[0][0])
+    assert sorted((f["id"], f["file"], f["line"], f["snippet"]) for f in same) == \
+        sorted((f["id"], f["file"], f["line"], f["snippet"]) for f in findings)
+    assert plain["scope"] == record["scope"]
+
+
+@needs_links
+def test_a_pipe_bandit_could_not_be_told_to_leave_out_does_not_hold_it_up(tmp_path, monkeypatch):
+    """Before, Bandit waited on such a pipe until Lantern's time limit ended it, and the project had no Python
+    check: a comma in the pipe's name was enough (the limit is 15 s here so the older code fails soon)."""
+    monkeypatch.setattr(security, "BANDIT_TIMEOUT", 15)
+    repo = _write(tmp_path / "project", APP)
+    os.mkfifo(repo / "wait,1.py")
+    findings, record = security.run_bandit(repo)
+    assert record["state"] == "ok" and [f["file"] for f in findings] == ["app.py"]
+    assert record["way"] == "copies" and "wait,1.py" in record["exclusions"]
+
+
+@needs_links
+def test_more_links_than_fit_a_command_line_are_not_opened_either(tmp_path, monkeypatch):
+    said = _what_bandit_said(monkeypatch)
     monkeypatch.setattr(security, "EXCLUSIONS_FIT", 3 * len(str(tmp_path)), raising=False)
     repo = _write(tmp_path / "project", APP)
     outside = tmp_path / "outside.py"
@@ -310,10 +367,48 @@ def test_more_links_than_fit_a_command_line_are_still_not_reported(tmp_path, mon
     for n in range(12):
         os.symlink(outside, repo / f"tool{n:02}.py")
     findings, record = security.run_bandit(repo)
-    assert record["state"] == "ok"
-    assert sorted({f["file"] for f in findings}) == ["app.py"] and PRIVATE not in json.dumps(findings)
-    assert record["scope"] == {"files": 1}
+    assert record["state"] == "ok" and record["way"] == "copies"
+    assert said and all(PRIVATE not in out for _, out in said)
+    assert sorted({f["file"] for f in findings}) == ["app.py"] and record["scope"] == {"files": 1}
     assert [x for x in record["exclusions"] if x.endswith(".py")] == [f"tool{n:02}.py" for n in range(12)]
+
+
+@needs_links
+def test_a_file_of_the_project_that_could_not_be_copied_is_said(tmp_path, monkeypatch):
+    """On copies, a file of the project that could not be copied was not checked: the run is partial and names it,
+    as it does for a file Bandit could not read where it lies."""
+    repo = _write(tmp_path / "project", APP | {"pkg/mod.py": SHELL})
+    os.mkfifo(repo / "wait,1.py")
+    monkeypatch.setattr(security, "BANDIT_TIMEOUT", 15)         # before: the pipe held Bandit up for that long
+    real = security.project_bytes
+
+    def project_bytes(p, root, limit=None):
+        if os.fspath(p).endswith("mod.py"):
+            raise PermissionError(13, "Permission denied", os.fspath(p))
+        return real(p, root, limit)
+    monkeypatch.setattr(security, "project_bytes", project_bytes)
+    findings, record = security.run_bandit(repo)
+    assert record["state"] == "partial" and record["errors"] == ["pkg/mod.py: could not be copied for the check"]
+    assert [f["file"] for f in findings] == ["app.py"]
+
+
+@needs_links
+def test_without_a_folder_for_the_copies_bandit_is_not_started(tmp_path, monkeypatch):
+    """Where the copies cannot be made, Bandit is not started on the project's folder instead: the record says
+    that the Python check did not run, and why."""
+    said = _what_bandit_said(monkeypatch)
+    repo = _write(tmp_path / "project", APP)
+    os.mkfifo(repo / "wait,1.py")
+    monkeypatch.setattr(security, "BANDIT_TIMEOUT", 15)
+
+    def no_folder():
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(security.programs, "folder", no_folder)
+    findings, record = security.run_bandit(repo)
+    assert findings == [] and record["state"] == "failed" and not said
+    assert "could not be copied" in record["why"]
+    monkeypatch.undo()
+    assert security.run_bandit(repo)[1]["state"] == "ok"        # the twin: with a folder for the copies it runs
 
 
 @needs_links
@@ -336,7 +431,8 @@ def test_a_folder_named_like_one_bandit_skips_is_still_looked_into(tmp_path):
 @needs_links
 def test_a_file_bandit_cannot_read_counts_only_when_it_is_the_projects(tmp_path):
     """A project file Bandit cannot read makes the check partial, and is named: that stays. A file that is not the
-    project's makes no such gap (here one Bandit does open: its path has a comma, so it cannot be excluded)."""
+    project's makes no such gap (here one that cannot be written as an exclusion, for its comma: Bandit runs
+    on copies, and the project's own file is named as the project names it)."""
     cut_short = "def f(:\n"
     repo = _write(tmp_path / "project", APP | {"bad.py": cut_short, "a,b/keep.py": SHELL})
     outside = tmp_path / "outside.py"

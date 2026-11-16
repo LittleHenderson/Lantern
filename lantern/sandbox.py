@@ -665,6 +665,49 @@ def tests_off_the_network(language: str) -> bool:
     return _was_off_network(backend_for(language), language, not own_network())
 
 
+# ---------------------------------------------------------------------------- what a run is kept from, in one line
+NOTHING_LEAVES = "Nothing leaves this computer: the tests have no way out to the internet or to your network."
+NAMES_LEAVE = ("Your code does not leave this computer: the libraries are fetched by name before the tests start, "
+               "and the tests have no way out to the internet or to your network.")
+NO_WAY_OUT = {"all": "The tests have no way out to the internet or to your network. ",
+              "python": "Python code in the tests has no way out to the internet or to your network. ", "none": ""}
+REACH_NETWORK = "reach the internet and your network"
+REACH_FILES = "read and change the files {whose} can"
+
+
+def reach(language: str, fetched: bool = False) -> dict:
+    """What a run of a project's tests in `language` would be kept from on this system, for the sheet's last line
+    and for the person's word before the run (review stage, 2026-11-15; until then that line was the first
+    sentence below on every system and for every kind of test, under a list whose own lines said what is held).
+    `network` and `files` are each "all" (every program of the run is held: a container, or the kernel's rules),
+    "python" (Python code only, by Lantern's guard: a program the tests start that is not Python is not held)
+    or "none". `words` is the line. `ask` is the sentence the person has to agree to before such tests are
+    started (`server.reach_asked`), "" where every program is held. It reads the answers `describe` reads
+    (`backend_for`, `held_below_python`, `landlock_abi`), so the line cannot promise what the list does not.
+    `fetched`: the project's libraries would be fetched first, so their names do leave this computer."""
+    python = language == "python"
+    if backend_for(language) == "docker":
+        network = files = "all"
+    else:
+        network = "all" if held_below_python() else "python" if python else "none"
+        files = "all" if _LINUX and landlock_abi() >= 1 else "python" if python else "none"
+    if network == files == "all":
+        return {"network": network, "files": files, "words": NAMES_LEAVE if fetched else NOTHING_LEAVES, "ask": ""}
+    # as root the tests run as the user nobody: what they can read and change is what every user can
+    whose = "every user of this computer" if _LINUX and hasattr(os, "geteuid") and os.geteuid() == 0 else "you"
+    can = " and ".join(x for x in (REACH_NETWORK if network != "all" else "",
+                                   REACH_FILES.format(whose=whose) if files != "all" else "") if x)
+    if python:
+        # on Windows a Python the tests start by the bare name can be the computer's own, without the guard
+        # (`_own_python_words`)
+        more = ", or a Python they start by its bare name," if not _LINUX and sys.platform == "win32" else ""
+        ask = (f"On this system a program the tests start that is not Python{more} can {can}: this run does not "
+               "keep it from that.")
+    else:
+        ask = f"On this system these tests, which are not Python, can {can}: this run does not keep them from that."
+    return {"network": network, "files": files, "words": NO_WAY_OUT[network] + ask, "ask": ask}
+
+
 # ---------------------------------------------------------------------------- a memory folder of the run's own
 NO_OWN_MEMORY = ("{why}, so tests that start a pool of processes, or use a lock or a queue between processes, fail "
                  "here (such a run is not counted as tests that failed)")

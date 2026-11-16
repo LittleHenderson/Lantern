@@ -124,7 +124,8 @@ def test_verify_matches_and_refuses_traces(shop):
     ev["payload"]["run"] = {"scan": True, "trace": ["python", "-m", "pytest"]}
     (shop / "traced.json").write_text(json.dumps(ev), encoding="utf-8")
     err, text, v = call(s, "lantern_verify", project="shop", report="traced.json")
-    assert not err and v.get("refused") and "lantern verify" in text and "python -m pytest" in text
+    assert not err and v.get("refused") and "lantern verify" in text
+    assert '["python", "-m", "pytest"]' in text and "python -m pytest" not in text   # as the report's words, not a line
 
 
 def test_stdio_framing(shop):

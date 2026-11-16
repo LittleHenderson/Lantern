@@ -45,7 +45,9 @@ Every answer carries both readable text and structured JSON (`structuredContent`
   `lantern accept` or the Accept button in the app, and appears in the Evidence Report with that reason.
   So "a model never closes a finding" holds by construction.
 * **Run the project's code.** `lantern_verify` refuses a report made with a runtime trace, because
-  replaying the trace would run whatever command the report named. The builder runs that from a terminal.
+  replaying the trace would run whatever command the report named. The command such a report names is shown as
+  what the report says, each word in quotes, never as a line ready to run; a person who knows it as the
+  project's own test command types it in a terminal.
 * **Your code.** The connector returns function source only for `lantern_explain`, to the assistant you chose,
   on your machine. Nothing is sent anywhere by Lantern.
 

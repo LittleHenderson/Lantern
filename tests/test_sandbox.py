@@ -547,7 +547,8 @@ def test_server_needs_confirmation_once_per_command(tmp_path, monkeypatch):
         assert code == 400
         code, e = call(base, f"/api/projects/{pid}/trace", "POST", {"command": "python -m pytest -q"}, token=None)
         assert code == 403
-        code, j = call(base, f"/api/projects/{pid}/trace", "POST", {"command": "python -m pytest -q", "confirm": True})
+        code, j = call(base, f"/api/projects/{pid}/trace", "POST",
+                       {"command": "python -m pytest -q", "confirm": True, "reach": sandbox.reach("python")["ask"]})
         assert code == 202
         from test_server import wait
         done = wait(base, j["id"], timeout=180)

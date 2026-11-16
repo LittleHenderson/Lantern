@@ -25,11 +25,12 @@ never by git. The person's own git settings (in their home folder, or the comput
 Known limits. Not read (no commit, with a note): a `.git` that is a link; a `.git` file whose target does not point
 back, which is what `git init --separate-git-dir` makes; a repository that keeps its refs in the newer "reftable"
 form; a bare repository (it has no files to analyze). Counted as changed, with a note, when git cannot compare:
-an index or an objects folder that is a link, a submodule whose own git folder is not read or whose name in the
+an index or an objects folder that is a link, an objects folder that leads elsewhere (`_borrows`: a list of other
+folders of objects, which `git clone --shared` and `--reference` write too, or a link among its parts), a submodule whose own git folder is not read or whose name in the
 index points out of the folder, submodules nested more than five deep. A filter that only the repository's own
 settings define (`git lfs install --local`) is not run, so a file it would have cleaned can count as changed once
 its time stamp differs from the index. A submodule the repository's settings tell git to ignore is looked into all
-the same. The index (a split or sparse one too), the objects (and the other object folders the repository names)
+the same. The index (a split or sparse one too), the folder's own objects
 and `.gitattributes` are still read by git, as they are for any repository a person clones.
 
 Whose git folder it is (`_yours`). The folder a person asks about is read whoever owns it: they named it, and
@@ -90,6 +91,8 @@ NOT_YOURS = ("its git folder lies outside this folder, and it or the folder it i
              "not name the repository), so it was not read")
 REFTABLE = "its git folder keeps the branches in the newer reftable form, which Lantern does not read"
 UNKNOWN = "git could not compare the files with the commit, so they are counted as changed"
+BORROWED = ("its git folder takes part of its history from another place (a list of other folders of objects, or a "
+            "link among its own), which Lantern does not have git read, so the files are counted as changed")
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,61 @@ def _real_dir(p: Path) -> bool:
         return stat.S_ISDIR(os.lstat(p).st_mode) and _is(p, p)
     except (OSError, ValueError):
         return False
+
+
+LOOKS = 3    # how often a name from a folder's listing is looked at before it is given up on
+
+
+def _part(p: Path) -> bool | None:
+    """One name from the listing of a folder of git's. True: it is there under its own name, a plain file or a
+    folder, with no link and no Windows junction on the way to it. None: nothing is there under that name any more.
+    False: anything else, and whatever cannot be told. git's own programs make and remove files in a repository
+    for a moment after a command has come back (since git 2.47 the upkeep after a commit goes on in the background
+    and holds `objects/maintenance.lock`; a pack is written as `pack/tmp_pack_...` and then renamed), so a name can
+    go between the listing and the look, and between the two looks made here: it is then looked at again. Only
+    "nothing is there" counts as gone: a link to nothing is there, and so is a name the system refuses to show."""
+    for _ in range(LOOKS):
+        try:
+            mode = os.lstat(p).st_mode
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return False
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            return False
+        try:
+            return os.path.normcase(os.path.realpath(p, strict=True)) == os.path.normcase(str(p))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return False
+    return False
+
+
+def _borrows(objects: Path) -> bool:
+    """Whether a repository's objects folder leads git anywhere else: a list of other folders of objects
+    (`info/alternates`, in whatever form: git reads it and every list those folders have in turn), or something
+    among the folder's own parts that is not there under its own name (`info`, `pack`, a folder of single objects,
+    a pack file: a link or a Windows junction). git is then not started on it. Until 2026-11-15 only the objects
+    folder itself was looked at, and a folder that came with such a list had git read another repository of this
+    computer: that repository's commit time, and "nothing changed" by its files, were told as facts about the
+    folder. Not looked at: every single object's own file (a link there reaches one object whose name is known).
+    A name that was in the listing and under which nothing is there any more is no part of the folder (`_part`).
+    True where the folder cannot be looked through."""
+    try:
+        info = objects / "info"
+        if os.path.lexists(info / "alternates") or os.path.lexists(info / "http-alternates"):
+            return True
+        for folder in (objects, objects / "pack"):
+            if not os.path.lexists(folder):
+                continue
+            with os.scandir(folder) as inside:
+                names = [entry.name for entry in inside]
+            if any(_part(folder / name) is False for name in names):
+                return True
+    except OSError:
+        return True
+    return False
 
 
 def _text(base: Path, name: str, cap: int) -> str | None:
@@ -480,7 +538,8 @@ def _shadow(repo: Repo, commit: str | None):
     git = programs.find("git")
     index, objects = repo.gitdir / "index", repo.common / "objects"
     made = None
-    if git and _real_dir(repo.top) and _real_dir(objects) and (_own_file(index) or not os.path.lexists(index)):
+    if git and _real_dir(repo.top) and _real_dir(objects) and not _borrows(objects) \
+            and (_own_file(index) or not os.path.lexists(index)):
         sha256 = bool(commit and len(commit) == 64) or cfg.get("extensions.objectformat", "").lower() == "sha256"
         lines = ["[core]", f"\trepositoryformatversion = {1 if sha256 else 0}", "\tbare = false"]
         for key, allowed in INERT.items():
@@ -589,7 +648,8 @@ def info(folder: Path | str) -> dict:
            "remote": re.sub(r"//[^@/]+@", "//", url) or None,       # never a name or password kept in the address
            "committed_at": when}
     if changed is None:
-        out["note"] = UNKNOWN
+        objects = repo.common / "objects"
+        out["note"] = BORROWED if _real_dir(objects) and _borrows(objects) else UNKNOWN
     return out
 
 

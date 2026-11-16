@@ -170,8 +170,9 @@ def _only(paths) -> list[str]:
     pipe is what Bandit would wait on). Bandit leaves a file out when an exclusion fits its path as a pattern or is
     found anywhere in it, so the plain path of `a.py` would take `a.pyw` and `a.py.old.py` with it: with its last
     letter in brackets it is a pattern for that one file and is found in no other path. A path with a comma in it
-    cannot be written (`-x a,b` is two exclusions to Bandit) and is passed over here; `run_bandit` takes nothing
-    from a file that is not the project's whether Bandit opened it or not."""
+    cannot be written (`-x a,b` is two exclusions to Bandit) and is passed over here, and so is what does not fit:
+    where the list is shorter than what was asked for, `run_bandit` does not start Bandit on the project's folder
+    (it would open each file left over) but on copies of the project's own files (`_copies`)."""
     out, room = [], EXCLUSIONS_FIT
     for path in sorted(paths, key=os.path.isfile):
         if "," in path:
@@ -183,6 +184,59 @@ def _only(paths) -> list[str]:
             break
         out.append(one)
     return out
+
+
+COPIES = "project"        # the folder of the copies, in a folder of Lantern's own
+NOT_COPIED = "could not be copied for the check"
+NO_COPIES = ("the project holds files under Python names that are not its own and that the scanner cannot be told "
+             "to leave out, and the project's own Python files could not be copied for the check")
+
+
+def _copies(repo: Path, own: Path, named: list[tuple[str, str, bool]]) -> tuple[str, dict[str, str], list[str]]:
+    """The project's own files that Bandit is to read, copied into a folder of Lantern's own under the names they
+    have in the project: (that folder, {a copy's path: the file's path in the project}, the names that could not be
+    copied). Each file is opened the one way Lantern opens a project's file (`project_bytes`), so what is no file
+    of the project is not there for Bandit to open: a link that leads out, a pipe, a file behind such a link.
+    Until 2026-11-15 Bandit was started on the project's folder whatever it held, with a list of files to leave
+    out, and a file that could not be written into that list (a comma in its path, more of them than fit a command
+    line) was opened: Bandit's own output quoted the lines of a file outside the project, and a pipe held the
+    check up until its time limit. OSError when a copy cannot be written: Bandit is then not started."""
+    top = os.path.join(os.fspath(own), COPIES)
+    os.mkdir(top)
+    back: dict[str, str] = {}
+    missed: list[str] = []
+    for rel, path, mine in named:
+        parts = rel.split("/")
+        if not mine or any(part in ("", ".", "..") for part in parts):
+            continue
+        to = os.path.join(top, *parts)
+        if to in back:
+            continue
+        try:
+            data = project_bytes(path, repo)
+        except OSError:
+            missed.append(rel)
+            continue
+        try:
+            programs.put_copy(Path(top), parts, data)          # the one way this file writes a file (`lantern/programs.py`)
+        except ValueError:                                   # a name this system does not take as one name
+            missed.append(rel)
+            continue
+        back[to] = path
+    return top, back, missed
+
+
+def _as_the_project_names_them(data: dict, back: dict[str, str]) -> None:
+    """What Bandit said about the copies, with each file under its path in the project. Nothing is taken from a
+    name that is no copy of Lantern's."""
+    if isinstance(data.get("results"), list):
+        data["results"] = [r | {"filename": back[r["filename"]]} for r in data["results"]
+                           if isinstance(r, dict) and isinstance(r.get("filename"), str) and r["filename"] in back]
+    if isinstance(data.get("errors"), list):
+        data["errors"] = [e | {"filename": back.get(e["filename"]) if isinstance(e.get("filename"), str) else None}
+                          for e in data["errors"] if isinstance(e, dict)]
+    if isinstance(data.get("metrics"), dict):
+        data["metrics"] = {back[k]: v for k, v in data["metrics"].items() if k in back}
 
 
 def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
@@ -210,8 +264,14 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     # off that way the record below still said `ok`. Handed a settings file of Lantern's own, with nothing in it,
     # Bandit looks for no other.
     began = time.perf_counter()
-    question = _bandit_question(repo, excl, named)
-    asked = _bandit_kept(question)
+    # Every file that is not the project's has to be written into the list Bandit leaves out. Where one cannot be
+    # (`_only`), Bandit is not started on the project's folder: it runs on copies of the project's own files.
+    leave = _only(path for _, path in left)
+    whole = len(leave) == len(left)
+    back: dict[str, str] | None = None
+    missed: list[str] = []
+    question = _bandit_question(repo, excl, named) if whole else None
+    asked = _bandit_kept(question) if whole else None
     if asked is not None:       # the same files, the same Bandit, the same question: what it said then
         run, version = asked
         run.duration_ms = int((time.perf_counter() - began) * 1000)
@@ -221,11 +281,22 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
                 # --ignore-nosec: a `# nosec` comment in the project switches a check off for its line, and comes with
                 # the project like the code. Bandit lists the line all the same, and Lantern reads the comment itself
                 # (`nosec_says`): until 2026-11-11 such a line was listed nowhere.
-                cmd = programs.python("bandit", "-r", str(repo), *[path for _, path in also],
-                                      "--ini", str(ini), "-f", "json", "-q", "--ignore-nosec")
-                if excl or left:
-                    cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
-                run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
+                tail = ["--ini", str(ini), "-f", "json", "-q", "--ignore-nosec"]
+                if whole:
+                    cmd = programs.python("bandit", "-r", str(repo), *[path for _, path in also], *tail)
+                    if excl or left:
+                        cmd += ["-x", ",".join([str(repo / d) for d in excl] + leave)]
+                    run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
+                else:
+                    try:
+                        with programs.folder() as own:
+                            top, back, missed = _copies(repo, own, named)
+                            handed = [os.path.join(top, *rel.split("/")) for rel, _ in also]
+                            cmd = programs.python("bandit", "-r", top, *[h for h in handed if h in back], *tail)
+                            run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
+                    except OSError as exc:      # no copies: Bandit is not started on the project's folder instead
+                        return [], scanresult.record("bandit", "failed", NO_COPIES + f" ({exc.strerror or type(exc).__name__})",
+                                                     version=None, **base)
         except OSError as exc:  # without its own settings file Bandit would look for the project's: it is not started
             return [], scanresult.record("bandit", "failed", "Lantern's settings file for the scanner could not be "
                                          f"written ({exc.strerror or type(exc).__name__})", version=None, **base)
@@ -243,7 +314,10 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
         return [], scanresult.record("bandit", "failed", why + (f"; stderr: {err}" if err else ""), **base)
     if not isinstance(data.get("results"), list):
         return [], scanresult.record("bandit", "failed", "no results list in the output", **base)
-    if asked is None:           # a scan that ended as a scan does: kept for the next time the question is the same
+    if back is not None:
+        _as_the_project_names_them(data, back)
+        base["way"] = "copies"
+    if asked is None and whole:  # a scan that ended as a scan does: kept for the next time the question is the same
         _KEPT_BANDIT.put(question, {"returncode": run.returncode, "stdout": run.stdout, "stderr": run.stderr,
                                     "version": version})
     out = []
@@ -273,6 +347,7 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     files = sum(1 for k in metrics if k != "_totals" and ours(k))
     errors = [f"{_rel(repo, e.get('filename') or '?')}: {str(e.get('reason') or 'could not be read')[:160]}"
               for e in (data.get("errors") or []) if isinstance(e, dict) and (not e.get("filename") or ours(e["filename"]))]
+    errors += [f"{rel}: {NOT_COPIED}" for rel in missed]
     base |= {"scope": {"files": files} | ({"under_another_name": len(also)} if also else {}), "findings": len(out)}
     if also:
         base["read_as_text"] = [rel for rel, _ in also]
