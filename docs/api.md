@@ -316,7 +316,8 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   this computer where the calls go that Lantern's own reading left unresolved: the TypeScript compiler for JavaScript
   and TypeScript, pyright for Python. Nothing in a project switches it on, and without it every result file is what it
   was. A checker is found outside the analyzed folder only: `LANTERN_NODE` (the `node` program), `LANTERN_TYPESCRIPT`
-  (the `typescript` package folder), `LANTERN_PYRIGHT` (pyright's `langserver.index.js`), else PATH;
+  (the `typescript` package folder), `LANTERN_PYRIGHT` (pyright's `langserver.index.js`), else the folders PATH
+  names in full (never the current folder);
   `LANTERN_TYPECHECK_SECONDS` is each checker's time (120; at most 1800). The project's own `tsconfig.json`, pyright
   settings, plug-ins and Python are never used, and nothing of the project is run. What an answer adds: an edge into
   the project with `via` `typecheck`, `resolved` where the name written at the call names the function itself and

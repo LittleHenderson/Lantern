@@ -124,7 +124,8 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
 
     timings = {}
     t = time.perf_counter()
-    g = build_graph(repo, typecheck=typecheck)
+    # nobody asked on the command line: the map is built by the same call as before the type-aware pass was there
+    g = build_graph(repo) if typecheck is None else build_graph(repo, typecheck=typecheck)
     timings["graph"] = round(time.perf_counter() - t, 2)
     s = g.stats()
     log(f"graph   {g.meta['files']} files, {s['nodes'].get('callable', 0)} functions, "

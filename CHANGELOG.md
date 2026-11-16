@@ -270,7 +270,8 @@ file. New entries go under `## Unreleased`, on top.
     `@overload`, a body of `...` or `raise NotImplementedError`) is never linked; the methods that replace it in the
     classes beneath are each `possible` (`via="override"`, at most `MOST_REPLACING` = 24), and a method with code of
     its own that a class beneath replaces is linked beside them and the call counts as `possible`. What a checker may
-    not do: it is found outside the project (`LANTERN_NODE`, `LANTERN_TYPESCRIPT`, `LANTERN_PYRIGHT`, else PATH); the
+    not do: it is found outside the project (`LANTERN_NODE`, `LANTERN_TYPESCRIPT`, `LANTERN_PYRIGHT`, else the
+    folders PATH names in full, never the current folder); the
     project's own `tsconfig.json`, pyright settings, plug-ins and Python are never used (pyright is shown a copy of
     the Python files beside settings Lantern wrote, with an empty PATH); it runs in a folder of Lantern's own with a
     bare environment, behind the sandbox's launcher on POSIX, under limits of time (`LANTERN_TYPECHECK_SECONDS`, 120

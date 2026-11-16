@@ -827,6 +827,40 @@ def test_a_link_outside_the_project_that_leads_into_it_is_a_checker_inside_it(tm
     assert found["typescript"] == str(real.resolve()) and found["passed"] == []
 
 
+def test_a_program_of_the_current_folder_is_never_one_of_this_computers(tmp_path, monkeypatch):
+    """A PATH entry that is not a full path (`.`, a relative folder, an empty one) means the current folder, and
+    Windows looks there first for any bare name. The current folder is often a folder somebody else wrote."""
+    repo = _write(tmp_path / "p", TS_APP | PY_APP)
+    here = tmp_path / "downloads"
+    names = {"node": "node.exe", "tsc": "tsc.cmd", "pyright-langserver": "pyright-langserver.cmd"} if os.name == "nt" \
+        else {n: n for n in ("node", "tsc", "pyright-langserver")}
+    for name in names.values():
+        for folder in (here, here / "bin"):
+            program = _write(folder, {name: "a program\n"}) / name
+            program.chmod(0o755)
+    ts, py = _a_compiler(here / "node_modules/typescript"), _a_pyright(here / "node_modules/pyright")
+    honest = _write(tmp_path / "tools", {"bin/node": "a program\n"}) / "bin" / "node"
+    monkeypatch.chdir(here)
+    nowhere = str(tmp_path / "no-programs")
+    for path in (".", "bin", os.pathsep.join([".", nowhere]), os.pathsep.join([nowhere, "", "bin"])):
+        _only(monkeypatch, tmp_path)
+        monkeypatch.setenv("PATH", path)
+        found = typecheck.find(repo)
+        assert (found["node"], found["typescript"], found["pyright"], found["passed"]) == (None, None, None, []), path
+        # node of the person's own, named in full: the compiler and pyright beside the current folder's `tsc` and
+        # `pyright-langserver` are still not this computer's
+        _only(monkeypatch, tmp_path, node=honest)
+        monkeypatch.setenv("PATH", path)
+        found = typecheck.find(repo)
+        assert (found["node"], found["typescript"], found["pyright"]) == (str(honest.resolve()), None, None), path
+    # the twin: the same folder named in full on PATH is the person's own setting, and is used as written
+    _only(monkeypatch, tmp_path)
+    monkeypatch.setenv("PATH", os.pathsep.join([nowhere, str(here)]))
+    found = typecheck.find(repo)
+    assert found["node"] == str((here / names["node"]).resolve())
+    assert (found["typescript"], found["pyright"], found["passed"]) == (str(ts.resolve()), str(py.resolve()), [])
+
+
 def test_a_compiler_older_than_lantern_asks_is_not_used_and_the_run_says_which(tmp_path, monkeypatch):
     repo = _write(tmp_path / "p", TS_APP)
     node = _write(tmp_path / "tools", {"bin/node": "a program\n"}) / "bin" / "node"
@@ -1010,7 +1044,10 @@ echo "cwd=$PWD"
 echo "path=$PATH"
 echo "home=$HOME"
 echo "ctype=$LC_CTYPE"
-echo "names=$(set | while IFS='=' read name rest; do case "$name" in [A-Z]*) printf '%s ' "$name" ;; esac; done)"
+# the names it was handed: `export -p` is the shell's own word, so nothing on PATH is needed. The pattern has both of
+# its brackets: an older bash, which is the /bin/sh of macOS, ends `$(` at the first lone `)` of a `case`
+names=$(export -p | while read first rest; do rest=${rest#-x }; name=${rest%%=*}; case $name in ([A-Z]*) printf '%s ' "$name" ;; esac; done)
+echo "names=$names"
 echo inside > "$PWD/inside.txt" && echo "inside=written"
 (echo outside > "$1") 2>/dev/null && echo "outside=written"
 exit 0
@@ -1039,13 +1076,10 @@ def test_a_checker_starts_in_a_folder_of_lanterns_own_with_none_of_the_shells_va
         assert not typecheck._within(work, repo.resolve()) and said["inside"] == "written"
         assert said["path"] == str(work / "empty") and os.listdir(work / "empty") == []
         mine = {"HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "PATH", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "NO_COLOR"}
-        shells = {"PWD", "OLDPWD", "SHLVL", "IFS", "OPTIND", "PS1", "PS2", "PS4", "PPID", "LINENO", "BASH", "BASHOPTS",
-                  "BASHPID", "BASH_ALIASES", "BASH_ARGC", "BASH_ARGV", "BASH_CMDS", "BASH_LINENO", "BASH_SOURCE",
-                  "BASH_VERSINFO", "BASH_VERSION", "DIRSTACK", "EUID", "GROUPS", "HOSTNAME", "HOSTTYPE", "MACHTYPE",
-                  "OSTYPE", "PIPESTATUS", "POSIXLY_CORRECT", "SHELL", "SHELLOPTS", "TERM", "UID", "BASH_EXECUTION_STRING",
-                  "BASH_ARGV0", "BASH_LOADABLES_PATH", "BASH_SUBSHELL", "COLUMNS", "LINES", "OPTERR", "RANDOM", "SECONDS",
-                  "EPOCHREALTIME", "EPOCHSECONDS", "SRANDOM", "HISTCMD", "FUNCNAME", "COMP_WORDBREAKS", "MAILCHECK"}
-        left = {n for n in said["names"].split() if n not in mine | shells and not n.startswith("LANTERN_SANDBOX_")}
+        shells = {"PWD", "OLDPWD", "SHLVL"}                 # what a shell hands on by itself
+        names = set(said["names"].split())
+        assert {"HOME", "PATH"} <= names, said              # the script's list is a list of names on this system too
+        left = {n for n in names if n not in mine | shells and not n.startswith("LANTERN_SANDBOX_")}
         # the launcher is a Python program started with no locale, and Python then names UTF-8 for what it starts
         # (PEP 538): that one name is Python's own word, never the shell's
         assert left - {"LC_CTYPE"} == set() and said["ctype"] in ("", "C.UTF-8", "C.utf8", "UTF-8"), (left, said["ctype"])

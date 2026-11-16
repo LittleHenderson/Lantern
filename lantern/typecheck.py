@@ -53,7 +53,7 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from . import calls
+from . import calls, programs
 from .graph import CALLABLE, CALLS, CLASS, IMPLEMENTS, INFERRED, MODULE, POSSIBLE, RESOLVED
 from .python_frontend import project_bytes, project_text
 
@@ -125,7 +125,7 @@ def _version(package: Path) -> str | None:
 
 def _typescript_places(node: Path | None):
     yield os.environ.get("LANTERN_TYPESCRIPT")
-    named = shutil.which("tsc")
+    named = programs.find("tsc")
     tsc = _real(named) if named else None      # no such command: nothing is looked for beside the current folder
     if tsc is not None:
         yield tsc.parent.parent                                  # <package>/bin/tsc
@@ -146,7 +146,7 @@ def _pyright_places(node: Path | None):
     npm installed it; installed as a Python package it is a wrapper, and the program lies in the package's folder
     or in the folder the wrapper fetched it to."""
     yield os.environ.get("LANTERN_PYRIGHT")
-    named = shutil.which("pyright-langserver")
+    named = programs.find("pyright-langserver")
     cmd = _real(named) if named else None
     if cmd is not None:
         yield Path(named).parent / "node_modules" / "pyright" / "langserver.index.js"    # npm's shim on Windows
@@ -181,7 +181,7 @@ def find(root: Path) -> dict:
             return None
         return at
 
-    node = outside(os.environ.get("LANTERN_NODE") or shutil.which("node"), "node")
+    node = outside(os.environ.get("LANTERN_NODE") or programs.find("node"), "node")
     node = node if node is not None and node.is_file() else None
     ts = ts_version = py = py_version = old = None
     for place in _typescript_places(node):
