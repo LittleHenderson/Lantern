@@ -201,6 +201,11 @@ class Store:
     def __init__(self, path: str, free_requests: int = 300):
         self.lock = threading.Lock()
         self.free_requests = free_requests
+        # Requests that were let through and whose answer is not back: number -> (token hash, day, tokens, usd).
+        # In this process's memory: the gateway is one process (`gateway/Dockerfile`), and a request that is under
+        # way ends with it.
+        self.under_way: dict[int, tuple[str, str, int, float]] = {}
+        self._number = 0
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript("""
             create table if not exists users (
@@ -417,18 +422,62 @@ class Store:
 
     def record(self, h: str, day: str, tokens: int, usd: float, model: str = "") -> None:
         with self.lock:
-            if model:
-                self.db.execute("insert into models (day, model, requests, usd) values (?, ?, 1, ?) "
-                                "on conflict(day, model) do update set usd = usd + excluded.usd, requests = requests + 1",
-                                (day, model, usd))
-            self.db.execute("update users set used_requests = used_requests + 1, used_tokens = used_tokens + ?, last_used = ? "
-                            "where token_hash = ?", (tokens, dt.datetime.now(dt.UTC).isoformat(), h))
-            self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, 1) "
-                            "on conflict(day, token_hash) do update set requests = requests + 1", (day, h))
-            self.db.execute("insert into spend (day, usd, requests) values (?, ?, 1) "
-                            "on conflict(day) do update set usd = usd + excluded.usd, requests = requests + 1",
-                            (day, usd))
-            self.db.commit()
+            self._record(h, day, tokens, usd, model)
+
+    def _record(self, h: str, day: str, tokens: int, usd: float, model: str) -> None:
+        if model:
+            self.db.execute("insert into models (day, model, requests, usd) values (?, ?, 1, ?) "
+                            "on conflict(day, model) do update set usd = usd + excluded.usd, requests = requests + 1",
+                            (day, model, usd))
+        self.db.execute("update users set used_requests = used_requests + 1, used_tokens = used_tokens + ?, last_used = ? "
+                        "where token_hash = ?", (tokens, dt.datetime.now(dt.UTC).isoformat(), h))
+        self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, 1) "
+                        "on conflict(day, token_hash) do update set requests = requests + 1", (day, h))
+        self.db.execute("insert into spend (day, usd, requests) values (?, ?, 1) "
+                        "on conflict(day) do update set usd = usd + excluded.usd, requests = requests + 1",
+                        (day, usd))
+        self.db.commit()
+
+    def hold(self, h: str, day: str, tokens: int, usd: float,
+                    limits: dict) -> tuple[int | None, str, bool]:
+        """The look at the limits and the count of one more request under way, as one step. Until 2026-11-15 the
+        limits were looked at before the model was asked and the request was counted when the answer was back, so
+        requests sent at the same moment all saw the same room and all went to the model. `tokens` and `usd`: what
+        this request can take at most. `limits`: `requests`, `tokens`, `today` (this person's) and `budget`
+        (everyone's dollars today). Gives the request's number; or None, the limit under which there is no room,
+        and whether that is so only for what is under way. A request under way counts as one that is done and takes
+        what it can take at most; where the finished requests alone leave room, the last value is True: a request
+        under way may end uncounted or take less than was held for it, so "used up" is not known yet."""
+        with self.lock:
+            mine = [m for m in self.under_way.values() if m[0] == h]
+            row = self.db.execute("select used_requests, used_tokens from users where token_hash = ?", (h,)).fetchone()
+            used = {"requests": (row[0] or 0) if row else 0, "tokens": (row[1] or 0) if row else 0,
+                    "today": self.today_requests(h, day), "budget": self.spend_today(day)}
+            held = {"requests": len(mine), "tokens": sum(m[2] for m in mine),
+                    "today": sum(1 for m in mine if m[1] == day),
+                    "budget": sum(m[3] for m in self.under_way.values() if m[1] == day)}
+            for waits in (False, True):         # first what is known: the finished requests alone
+                for under in ("requests", "tokens", "today", "budget"):
+                    if used[under] + (held[under] if waits else 0) >= limits[under]:
+                        return None, under, waits
+            self._number += 1
+            self.under_way[self._number] = (h, day, tokens, usd)
+            return self._number, "", False
+
+    def settle(self, number: int, tokens: int | None = None, usd: float = 0.0, model: str = "",
+               cut_off: bool = False) -> None:
+        """A request that was let through is no longer under way. With `tokens`: the answer is back, and it is
+        counted at what it took. `cut_off`: it reached the model and nothing came back to count (the connection
+        went, the gateway failed), and it is counted at what was held for it. Neither: the model did not answer it,
+        and it is not counted. A number that was settled already changes nothing."""
+        with self.lock:
+            held = self.under_way.pop(number, None)
+            if held is None:
+                return
+            if cut_off:
+                self._record(held[0], held[1], held[2], held[3], "")
+            elif tokens is not None:
+                self._record(held[0], held[1], tokens, usd, model)
 
     def prune(self, today: str, days: int = 90) -> dict:
         """Retention: delete token hashes with no request, sign-in or rotation for `days` days (with the account
@@ -615,6 +664,9 @@ def _unwrap(obj: dict) -> dict:
 
 def _retryable(err) -> bool:
     return err == "unreachable" or err in (401, 402, 403, 429) or (isinstance(err, int) and err >= 500)
+
+
+FRAME = 16      # tokens counted for what a provider puts round one message, when a request's most is worked out
 
 
 def _err(status: int, kind: str, message: str, headers: dict | None = None, **extra) -> JSONResponse:
@@ -961,17 +1013,34 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if body is None:
             return _err(400, "bad_request", "Body must be a JSON object.")
         r = remaining(u, day)
-        if r["requests"] <= 0 or r["tokens"] <= 0:
-            return _err(402, "quota_exceeded",
-                        f"You've used your free Lantern allowance ({s.free_requests} explanations).",
-                        remaining=0)
-        if r["today"] <= 0:
-            return _err(402, "daily_limit",
-                        f"You've reached today's free limit ({s.daily_requests}). It resets {until_midnight_utc()}.",
-                        remaining=r["requests"])
-        if store.spend_today(day) >= s.global_daily_usd:
+
+        def no_room(under: str):
+            if under in ("requests", "tokens"):
+                return _err(402, "quota_exceeded",
+                            f"You've used your free Lantern allowance ({s.free_requests} explanations).",
+                            remaining=0)
+            if under == "today":
+                return _err(402, "daily_limit",
+                            f"You've reached today's free limit ({s.daily_requests}). It resets {until_midnight_utc()}.",
+                            remaining=r["requests"])
             return _err(503, "allowance_paused",
                         "The free allowance is paused for today because it reached its daily budget.")
+
+        def in_a_moment(under: str):
+            # Room is left by the requests that are done; what stands in the way is still being answered. "Used
+            # up" would not be known to be true, so the answer is the one a client asks again after.
+            if under == "budget":
+                words = ("Requests that are still being answered may use what is left of today's budget for the "
+                         "free allowance. Try again in a moment.")
+            else:
+                words = ("Your earlier requests are still being answered and may use what is left of your free "
+                         "Lantern allowance. Try again in a moment.")
+            return _err(429, "allowance_busy", words, headers=slow_down(2))
+        # a first look, so that somebody with no room left is told so before anything else about the request
+        full = ("requests" if r["requests"] <= 0 or r["tokens"] <= 0 else "today" if r["today"] <= 0
+                else "budget" if store.spend_today(day) >= s.global_daily_usd else "")
+        if full:
+            return no_room(full)
         if not s.order():
             return _err(503, "not_configured", "The gateway has no model key configured.")
         msgs = body.get("messages")
@@ -984,25 +1053,41 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                "max_tokens": _size(body.get("max_tokens"), s.max_tokens_cap)}
         if isinstance(body.get("response_format"), dict) and body["response_format"].get("type") == "json_object":
             out["response_format"] = {"type": "json_object"}
+        # The look that decides, and the count of this request as under way, in one step (`Store.hold`):
+        # what it can take at most is held for it until the answer is back. A token is one byte of text at least
+        # (`FRAME` more for what goes round each message); the price is the dearest among the models that may answer.
+        order = s.order()
+        most_in = sum(len(m["content"].encode("utf-8", "surrogatepass")) + FRAME for m in out["messages"])
+        number, full, waits = store.hold(
+            u["hash"], day, most_in + out["max_tokens"],
+            most_in / 1e6 * max(p["usd_in"] for p in order) + out["max_tokens"] / 1e6 * max(p["usd_out"] for p in order),
+            {"requests": s.free_requests, "tokens": s.free_tokens, "today": s.daily_requests, "budget": s.global_daily_usd})
+        if number is None:
+            return in_a_moment(full) if waits else no_room(full)
         data, err, used = None, None, None
-        for prov in s.order():
-            data, err = await _call(transport, prov, out)
-            if data is not None:
-                used = prov
-                break
-            if not _retryable(err):   # a bad request is bad for every provider
-                break
-        if data is None:
-            if err == "unreachable":
-                return _err(502, "upstream_unreachable", "Could not reach the model provider. Try again shortly.")
-            # Never echo upstream bodies: they can include account details.
-            return _err(502 if err >= 500 or err in (401, 402, 403) else err,
-                        "upstream_error", f"The model provider returned HTTP {err}.")
-        used_model = used["model"]
-        usage = data.get("usage") or {}
-        tin, tout = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
-        usd = tin / 1e6 * used["usd_in"] + tout / 1e6 * used["usd_out"]
-        store.record(u["hash"], day, tin + tout, usd, used_model)
+        try:
+            for prov in order:
+                data, err = await _call(transport, prov, out)
+                if data is not None:
+                    used = prov
+                    break
+                if not _retryable(err):   # a bad request is bad for every provider
+                    break
+            if data is None:
+                store.settle(number)        # the model answered nothing: not counted
+                if err == "unreachable":
+                    return _err(502, "upstream_unreachable", "Could not reach the model provider. Try again shortly.")
+                # Never echo upstream bodies: they can include account details.
+                return _err(502 if err >= 500 or err in (401, 402, 403) else err,
+                            "upstream_error", f"The model provider returned HTTP {err}.")
+            used_model = used["model"]
+            usage = data.get("usage") or {}
+            tin, tout = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+            usd = tin / 1e6 * used["usd_in"] + tout / 1e6 * used["usd_out"]
+            store.settle(number, tin + tout, usd, used_model)
+        except BaseException:
+            store.settle(number, cut_off=True)      # let through, and nothing came back to count
+            raise
         after = remaining(store.user(authorization[7:].strip()), day)
         clean = {"id": data.get("id"), "object": "chat.completion", "model": data.get("model", used_model),
                  "choices": [{"index": c.get("index", 0), "finish_reason": c.get("finish_reason"),

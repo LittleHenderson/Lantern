@@ -2233,6 +2233,8 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += token_pickup(g)
     from . import localweb          # what a browser keeps for the site: a login cookie, a service worker's copies
     findings += localweb.loopback_cookies(repo) + localweb.keeps_pages(repo)
+    from . import countlater        # a limit that is looked at before the work and counted after it
+    findings += countlater.counted_later(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

@@ -101,6 +101,12 @@ for the secret) and the app's usage reports. What such a caller can make the gat
   say is cut off at the piece that crosses the limit. The answer is 413 `too_large`.
 * **Shape.** A body for `/v1/usage` or `/v1/chat/completions` that is not a JSON object is answered 400 in the
   gateway's own words. A `max_tokens` that is not a number counts as not given.
+* **Requests at the same moment.** A request counts against a person's allowance, the day's limit and the day's
+  budget from the moment it is let through, at the most it can take (its text, its `max_tokens`, the dearest
+  model's price), and at what it took once the answer is back. A request the model did not answer is not counted;
+  one that was cut off after it reached the model is counted at what was held for it. A request that does not fit
+  only because others are still being answered gets 429 `allowance_busy` with `Retry-After: 2`: ask again when
+  they are done. What is under way is kept in memory: the gateway runs as one process.
 * **Usage reports.** One sender may send `LANTERN_SENDER_PINGS_PER_HOUR` reports an hour and add
   `LANTERN_SENDER_INSTALLS_PER_DAY` new installs a day; everyone together may add `LANTERN_INSTALLS_PER_DAY` new
   installs per UTC day. Past a limit the answer is 429 with `Retry-After`, nothing of the report is kept (past the

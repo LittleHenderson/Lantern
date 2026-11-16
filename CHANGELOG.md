@@ -77,6 +77,21 @@ file. New entries go under `## Unreleased`, on top.
   store and nothing else. **Changed:** a library named there by a folder, a file, a link, a repository or an
   address means the tests are not run and the reason says so (with npm's lock file it is fetched as before).
   Tests: `tests/test_links_out.py`, `tests/test_evidence.py`, `tests/test_gitfacts.py`, `tests/test_npm_no_lock.py`.
+- The gateway completes its count of the free allowance: a request is counted against the limits in the same step
+  that looks at them (`Store.hold`), and the count is put right when the answer is back (`Store.settle`). A
+  request that does not fit beside requests that are still being answered is told to ask again in a moment (429
+  `allowance_busy`, `Retry-After: 2`; Lantern's own client asks again by itself), because "used up" is not known
+  until they are counted. What the limits say to one request at a time is unchanged. A request that reached the
+  model and was cut off is counted at what was held for it. Tests: `tests/test_gateway_under_way.py` (9).
+- New heuristic `LW-LIMIT-COUNTED-LATER` (medium, labelled heuristic; `lantern/countlater.py`): a Python or JS/TS
+  function that turns a request away with 402 or 429 where a limit is reached, then waits for its work (an awaited
+  call, a call to a model or another service), and writes the use down only after that, so requests sent at the
+  same moment all pass the look. Quiet where the use is counted or held before the work, where a limiter takes
+  one in the look itself, under a lock or a transaction, and where the count shares no name with the look. It
+  says "check". Measured on 30 folders (benchmark projects, sample apps, Lantern's own code): 29 functions turn a
+  request away that way, 5 of them wait for work and count, and there is no finding, after one false alarm of the
+  first measurement was fixed (a limiter that takes one in the look). No precision is claimed.
+  Tests: `tests/test_countlater.py` (3).
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside

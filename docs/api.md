@@ -653,6 +653,15 @@ the request to) with nothing that narrows what is kept (the kind of file, its en
 list), in a project where some other code file shows that people sign in. Rank `medium`, `tool_confidence` `LOW`.
 The finding stands on the line that stores; `more_info` names the file that shows the login and says that the
 copies stay in the browser after the person has signed out. Its `scenario` is the story kind `kept-pages`.
+`LW-LIMIT-COUNTED-LATER` (367; `lantern/countlater.py`): a Python or JS/TS function that turns a request away with
+402 or 429 where a condition says a limit is reached, then waits for its work (an awaited call, a call to a model
+or another service), and writes the use down only after that (a call named for counting, a number stepped in
+place, `increment:` / `decrement:`, SQL that sets a column to itself plus or minus). Requests sent at the same
+moment all read the number before any is counted. Rank `medium`, `tool_confidence` `LOW`. Quiet where the use is
+counted or held between the look and the work (the look's own condition included), where a limiter takes one in
+the look, where the function names a lock or a transaction, and where the count shares no name with the look or
+with the line that gave the look its value. The finding stands on the look's line; `more_info` names the lines of
+the work and of the count and the name the two share. Its `scenario` is the story kind `counted-later`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
