@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  security-events: write     # practice only: lets this run hand its findings to code scanning
 jobs:
   report:
     runs-on: ubuntu-latest
@@ -19,3 +20,4 @@ jobs:
         with:
           save-report: "off"
           require: none
+          code-scanning: "true"
