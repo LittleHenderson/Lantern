@@ -85,7 +85,7 @@ databases are not started yet (see Limits).
 | `address` | the app sets out for no address but `may_reach` | one | outside address |
 | `limit` | after `times` tries the next is refused (`limited`, default 429 or 423), straight after, after a restart, and on another copy of the app | three | unlimited; forgotten |
 | `ended` | `request` works for `who`; after the `end` request (a sign-out, an account switched off, an invitation taken back; `{"request": …, "as": …}` when somebody else makes it) the same request is refused (`refused`, default 401 or 403; name 302 where the app sends people to its sign-in page): straight after, after a restart, and on another copy of the app that had answered the request before (`across` picks some of `same`, `restart`, `other-worker`) | three | lived on (the request was accepted again). Inconclusive when the request did not work before, when `end` did not work, or when the answer afterwards is neither a refusal the check names nor accepted |
-| `once` | two of the same request at the same moment end as one after the other does | one | raced |
+| `once` | two of the same request at the same moment end as one after the other does (undecided when the request does not work even when it is sent alone) | one | raced |
 | `retry` | the same request sent again, or sent again after the answer was lost, is not done twice | two | repeated |
 | `faults` | the request is made to fail at each of its database writes and commits, and is cut off before each and before the answer leaves; afterwards all of its work is there or none, and `then` (somebody else's ordinary request) works and saves only its own | one per place | partial; carried over; stuck |
 
@@ -153,9 +153,10 @@ the runner does not read:
 * `read_first`: what to know before the first run: a database place written in the code, a setting with no value,
   the tables that may change when a request is refused.
 * `review`: the cases to look at first, each with the reason: a value Lantern made up (a text under a name that
-  told it nothing, the number of another row), a route whose code shows no login (the case will read "let in"; take
-  it out if the route is for everyone), rows that may be shared between people by design, a route whose own request
-  cannot finish in the sandbox because it sets out for a paid service.
+  told it nothing, the number of another row, a web address), a body sent empty because nothing in it has to be
+  sent and Lantern is sure of none of its fields, a route whose code shows no login (the case will read "let in";
+  take it out if the route is for everyone), rows that may be shared between people by design, a route whose own
+  request cannot finish in the sandbox because it sets out for a paid service.
 * `left_out`: every route with no case, and why: an address made to be open (a sign-in, a webhook, a health page);
   a page that changes nothing, shows no login and reads nothing the app keeps; a body the code reads itself; an
   uploaded file; a header Lantern cannot fill in; a row Lantern found no request to make.
@@ -170,6 +171,16 @@ It is a first plan: read it once, correct it, and commit it. What `--init` does 
   `contain`, `redirect`, `address`, `ended`, `faults`) are written by hand.
 * What it reads from names (which request makes an account, which route is a payment, which table keeps a record
   of what was tried) can be wrong, which is why each such case is on the review list.
+* The two people it makes are strangers to each other: each makes an account of their own. What two people of one
+  team, or a member and an admin, may do to each other is a case for a person to write.
+
+How far a first plan gets was measured on the benchmark's throw-away app, the safe version and 32 versions with
+one planted problem each, with the plan written from each version's own code and run as written
+(`python bench/behaviour/run_behaviour.py WORKDIR --first-plan`, `bench/behaviour/first_plan_results.md`): on the
+safe app no case is broken; it catches the 8 planted problems of the kinds it asks about (a visitor let in,
+somebody else's row, wrong passwords not counted or the count forgotten); the other 24 (tokens, uploads, archives,
+redirects, addresses the app fetches, a request that fails half-way, two people of one team) it does not, and
+the plan a person wrote for that app catches all 32.
 
 ## Limits
 

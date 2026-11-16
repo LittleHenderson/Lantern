@@ -515,6 +515,11 @@ def judge(plan: dict, cases: list, observed: dict) -> list:
                 why = "the request does not end the same way twice, so two at the same moment cannot be compared"
             elif last["state"]["loud"] != ends[0]:
                 codes.append("raced")
+            else:
+                alone = next((_status(cs[0]) for cs in ctl_steps if cs), None)
+                if alone is None or alone >= 400:     # never done once: that it was not done twice proves nothing
+                    why = (f"the request did not work when it was sent alone (status {alone}), so two at the same "
+                           "moment prove nothing")
         elif kind == "retry":
             once = next((cs for cs in ctl_steps if cs), [])
             first = _status(steps[0])

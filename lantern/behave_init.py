@@ -86,6 +86,7 @@ PER = re.compile(r"\s*(\d{1,6})\s*(?:/|per\b)")
 PAID_HOSTS = {"OpenAI": "api.openai.com", "Anthropic": "api.anthropic.com", "Mistral": "api.mistral.ai",
               "Cohere": "api.cohere.com", "Groq": "api.groq.com", "Replicate": "api.replicate.com",
               "Stripe": "api.stripe.com"}
+MADE_UP_ADDRESS = "https://example.test/"     # for a field that takes an address; the app may want another
 WRONG_PASSWORD = "not-the-pass-phrase-0"      # nosec B105: a made-up wrong password for a throw-away account of a test run
 
 
@@ -361,7 +362,7 @@ def _value(field: _Field, who: str | None, code: _Code, unsure: list, depth: int
     if t in ("EmailStr", "NameEmail"):
         text = f"{person}@example.test"
     elif t in ("HttpUrl", "AnyUrl", "AnyHttpUrl", "Url"):
-        text = "https://example.test/"
+        text = MADE_UP_ADDRESS
     elif t == "UUID" or t.startswith("UUID"):
         return "00000000-0000-4000-8000-000000000001"
     elif t == "datetime":
@@ -378,7 +379,7 @@ def _value(field: _Field, who: str | None, code: _Code, unsure: list, depth: int
         elif words & WHO_NAMES:
             text = person
         elif words & {"url", "link", "website", "href", "uri"}:
-            text = "https://example.test/"
+            text = MADE_UP_ADDRESS
         elif words & {"phone", "mobile", "tel"}:
             text = "+15550100"
         elif words & FREE_TEXT:
@@ -518,7 +519,10 @@ class _Route:
         elif self.body or self.loose:
             parts = {}
             for name, model in self.body:
-                parts[name] = {f.name: made(f) for f in self.code.fields(model) if f.required}
+                fields = self.code.fields(model)
+                parts[name] = {f.name: made(f) for f in fields if f.required}
+                if not parts[name] and self.verb in MUTATING:
+                    parts[name] = self._one_sure(fields, who, given)
             if len(self.body) == 1 and not self.loose:
                 req["json"] = parts[self.body[0][0]]
             else:
@@ -527,6 +531,22 @@ class _Route:
         elif self.plain_body:
             req["json"] = {}
         return req
+
+    def _one_sure(self, fields: list[_Field], who: str | None, given: dict) -> dict:
+        """One field for a body in which nothing has to be sent (a PATCH's): sent empty, such a request changes
+        nothing, and a refusal beside a request that changed nothing proves nothing. The first field whose value
+        Lantern is sure of, a free text before any other; none when it is sure of none."""
+        sure = []
+        for f in fields:
+            doubts: list = []
+            try:
+                value = given[f.name] if f.name in given else _value(f, who, self.code, doubts)
+            except _Cannot:
+                continue
+            if not doubts and isinstance(value, (str, int, float)) and not isinstance(value, bool) \
+                    and value != MADE_UP_ADDRESS:
+                sure.append((0 if set(_words(f.name)) & FREE_TEXT else 1, len(sure), f.name, value))
+        return {min(sure)[2]: min(sure)[3]} if sure else {}
 
     def answer_keys(self) -> list[str]:
         """The names in the table this route answers with, where the code writes it out: a `return {...}`, a
@@ -1032,6 +1052,17 @@ def draft(repo, g: Graph | None = None) -> dict:
             out["review"].append({"check": c["id"], "why": "Lantern made up a value for "
                                   + ", ".join(f"`{u}`" for u in dict.fromkeys(unsure)) + ". If the app refuses it from "
                                   f"{OWNER} too, the case reads undecided: put a value the app accepts."})
+        if changes and req.get("json") == {}:
+            out["review"].append({"check": c["id"], "why": f"Lantern sends {route.detail} an empty body: nothing in "
+                                  "it has to be sent, and Lantern is sure of a value for none of its fields. If "
+                                  f"nothing changes for {OWNER}, the case reads undecided: put a field that changes "
+                                  "something."})
+        addresses = [k for k, v in _flat(req).items() if v == MADE_UP_ADDRESS and k not in unsure]
+        if addresses:
+            out["review"].append({"check": c["id"], "why": "Lantern made up an address for "
+                                  + ", ".join(f"`{u}`" for u in addresses) + f" ({MADE_UP_ADDRESS}). If the app "
+                                  f"fetches it, or takes only addresses on a list of its own, {OWNER} is refused too "
+                                  "and the case reads undecided: put an address the app accepts."})
         checks.append(c)
         case_of[route.node.id] = c["id"]
 

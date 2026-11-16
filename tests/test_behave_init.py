@@ -313,11 +313,52 @@ def test_a_body_is_filled_in_by_the_type_and_the_name_of_each_field_it_cannot_do
         "when": "2026-01-01T12:00:00", "count": 2}}
     # a text under a name Lantern does not know is made up and said; a value it cannot make leaves the route out
     assert "Lantern made up a value for `code`" in _review(made, "post-things")
+    # an address is made up too, and an app that fetches it or keeps a list of its own will refuse it: said
+    assert "Lantern made up an address for `website` (https://example.test/)" in _review(made, "post-things")
     assert _left(made) == {
         "POST /odd": "`shape` is of a kind Lantern cannot make a value for (`complex`)",
         "POST /photos": "it takes an uploaded file",
         "POST /hooks": "it needs the header x-signature, which Lantern cannot fill in"}
     assert made["left_out"][0]["where"] == "main.py:70"
+
+
+NOTHING_HAS_TO_BE_SENT = '''
+
+class Profile(BaseModel):
+    website: Optional[HttpUrl] = None
+    colour: Optional[str] = None
+    nickname: Optional[str] = None
+    description: str | None = Field(default=None, max_length=200)
+    public: bool = False
+
+
+class Look(BaseModel):
+    colour: Optional[str] = None
+    website: Optional[HttpUrl] = None
+    public: bool = False
+
+
+@app.patch("/me")
+def change_me(profile: Profile, user: int = Depends(current_user)):
+    return {}
+
+
+@app.patch("/look")
+def change_look(look: Look, user: int = Depends(current_user)):
+    return {}
+'''
+
+
+def test_a_body_in_which_nothing_has_to_be_sent_is_not_sent_empty_where_lantern_is_sure_of_one_field(tmp_path):
+    made = _drafted(tmp_path, HEAD + NOTHING_HAS_TO_BE_SENT)
+    # sent empty the request changes nothing, and a refusal beside a request that changed nothing proves nothing:
+    # one field Lantern is sure of, a free text before a name; never a made-up value, an address or a switch
+    assert _check(made, "patch-me")["request"] == {"method": "PATCH", "path": "/me",
+                                                   "json": {"description": "written by a check of Lantern"}}
+    assert "empty body" not in _review(made, "patch-me")
+    # sure of none: the body stays empty, and the plan says what that means for the case
+    assert _check(made, "patch-look")["request"] == {"method": "PATCH", "path": "/look", "json": {}}
+    assert "Lantern sends PATCH /look an empty body" in _review(made, "patch-look")
 
 
 # ------------------------------------------------------------------------------------------- which routes get a case
@@ -1006,8 +1047,64 @@ def test_the_starter_notes_app_gets_a_plan_that_runs_as_it_is(tmp_path, solved):
                    **{f"limit-post-login/{when}": ("broken", ["unlimited"]) for when in ACROSS}}
 
 
+# ------------------------------------------------------------------------------------------- the benchmark app
 def _bench():
     spec = importlib.util.spec_from_file_location("behaviour_run", ROOT / "bench" / "behaviour" / "run_behaviour.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_what_is_written_down_for_the_benchmark_app_names_its_planted_problems_and_cases_the_plan_holds(tmp_path):
+    bench = _bench()
+    assert set(bench.first.CAUGHT) <= set(bench.apps.PLANTED)
+    made = bench.write_first(tmp_path, bench.SAFE)
+    assert made["written"] and len(made["plan"]["checks"]) == 16 and made["cases"] == 40
+    cases = {f"{c['check']}/{c['case']}" for c in behave.scene(behave.load(tmp_path / bench.SAFE))[1] if c["role"] != "control"}
+    for planted, breaks in bench.first.CAUGHT.items():
+        assert set(breaks) <= cases, planted
+    # the plan is written from each version's own code, and a planted problem does not take its case away
+    for planted in bench.first.CAUGHT:
+        assert [c["id"] for c in bench.write_first(tmp_path, planted)["plan"]["checks"]] == \
+            [c["id"] for c in made["plan"]["checks"]], planted
+    # what a first plan leaves out of this app, each with the reason, and what it says to look at first
+    assert sorted(r["route"] for r in made["left_out"]) == [
+        "DELETE /admin/users/{user_id}", "GET /files/{file_id}", "GET /go", "POST /files", "POST /import", "POST /signup",
+        "POST /tokens"]
+    assert {r["check"] for r in made["review"]} >= {"post-preview", "post-coupons-redeem", "post-transfer",
+                                                    "once-post-coupons-redeem", "once-post-transfer", "retry-post-transfer"}
+
+
+def test_a_run_that_differs_from_what_is_written_down_is_said_case_by_case():
+    first = _bench().first
+    plan = {"notes": {"review": [{"check": "post-transfer", "why": "a made-up value"}]}}
+
+    def record(**outcomes):
+        return {"ran": True, "outcomes": [{"check": k.split("/")[0], "case": k.split("/")[1], "outcome": v[0], "codes": v[1]}
+                                          for k, v in outcomes.items()]}
+    held = {"get-notes/nobody": ("held", []), "post-transfer/nobody": ("inconclusive", [])}
+    assert first.differences(None, record(**held), plan) == []
+    assert first.differences("no-login-list", record(**{**held, "get-notes/nobody": ("broken", ["let-in"])}), plan) == []
+    # the planted problem is not caught; a case breaks that nobody wrote down; a case is undecided and was not named
+    assert first.differences("no-login-list", record(**held), plan) == [
+        "get-notes/nobody: written down as broken (let-in), came out held"]
+    assert first.differences(None, record(**{**held, "get-notes/nobody": ("broken", ["let-in"])}), plan) == [
+        "get-notes/nobody: broken (let-in), which is not written down"]
+    assert first.differences(None, record(**{**held, "get-me/nobody": ("inconclusive", [])}), plan) == [
+        "get-me/nobody: inconclusive, and the plan did not name its check to look at first"]
+    assert first.differences(None, {"ran": False, "why_not": "the app could not be started"}, plan) == [
+        "the plan was not run: the app could not be started"]
+
+
+@starts_an_app
+@pytest.mark.parametrize("version", ["safe", "no-login-list", "refused-but-deleted", "limit-in-memory", "double-spend"])
+def test_the_plan_lantern_writes_for_the_benchmark_app_shows_what_was_written_down_before_its_first_run(tmp_path, version):
+    """Five of the 33 versions (`python bench/behaviour/run_behaviour.py WORKDIR --first-plan` runs them all): the
+    safe app, three planted problems a first plan is to catch, and one it is not (two coupons at the same moment)."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("jwt")
+    bench = _bench()
+    row = bench.run_first(tmp_path, version, bench.write_first(tmp_path, version))
+    assert row["differences"] == []
+    assert bool(row["broken"]) == (version in bench.first.CAUGHT)
+    assert row["checks"] == 16 and row["summary"]["held"] >= 14
