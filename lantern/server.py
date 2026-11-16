@@ -6,15 +6,19 @@ Serves the Home screen (projects, scores, runs), each project's Atlas report wit
 
 Safety model for a local server:
   * Binds to 127.0.0.1 by default.
-  * Every request needs the session token: from the link printed at start (?token=...), then a
-    SameSite=Strict HttpOnly cookie. Write requests also need it in the X-Lantern-Token header, which
-    a cross-site page can't send without a CORS preflight this server never approves.
+  * Every request for data needs the session key in the X-Lantern-Token header, which a cross-site page can't
+    send without a CORS preflight this server never approves. The key reaches the app's page in the part of the
+    printed link after "#", which a browser sends to no server; the page keeps it in its own storage, which the
+    browser keeps apart for each port. It is never put in a cookie: a browser sends a cookie to every server on
+    this computer, whatever its port. A file the browser opens by its address (a report in a frame) takes a pass
+    that works once (`App.view_pass`).
   * The Host header must name this server, which blocks DNS-rebinding attacks.
   * API keys stay in memory unless the user ticks "remember", then in ~/.lantern/keys.json (mode 0600).
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import html
 import json
@@ -26,7 +30,6 @@ import time
 import traceback
 import uuid
 import webbrowser
-from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -47,7 +50,6 @@ def home_dir() -> Path:
 
 
 def _pid(path: Path) -> str:
-    import hashlib
     return hashlib.sha256(str(path).encode()).hexdigest()[:10]
 
 
@@ -317,6 +319,30 @@ class App:
         self.own_address = own_address
         self.signins: dict[str, dict] = {}
         self.signins_lock = threading.Lock()
+        # Passes for a result file the browser opens by its address: the pass's fingerprint -> (the file, until when)
+        self.passes: dict[str, tuple[str, float]] = {}
+        self.passes_lock = threading.Lock()
+
+    PASS_SECONDS = 60
+    MOST_PASSES = 64
+
+    def view_pass(self, path: str) -> str:
+        """A pass for one result file: good once, for a minute. The page puts it on the address of a frame or a new
+        tab, where it cannot send the key."""
+        k, now = secrets.token_urlsafe(32), time.time()
+        with self.passes_lock:
+            for old in [h for h, (_file, until) in self.passes.items() if until < now]:
+                del self.passes[old]
+            while len(self.passes) >= self.MOST_PASSES:
+                del self.passes[next(iter(self.passes))]
+            self.passes[_print_of(k)] = (path, now + self.PASS_SECONDS)
+        return k
+
+    def use_pass(self, k: str, path: str) -> bool:
+        """Is `k` a pass for `path`? Whatever the answer, the pass is used up."""
+        with self.passes_lock:
+            held = self.passes.pop(_print_of(k), None)
+        return bool(held) and held[0] == path and held[1] >= time.time()
 
     SIGNIN_MINUTES = 10
 
@@ -482,6 +508,13 @@ class App:
             raise ValueError(f"Add an {DEFAULT_PROVIDER} key in Settings, or run `lantern login --token <token>` "
                              "for the free allowance.")
         return make_provider(f"{s['provider']}/{s['model']}", base_url=s.get("base_url") or None, api_key=key)
+
+
+RESULT_FILE = re.compile(r"/p/(\w+)/(report\.html|evidence\.html|badge\.svg|evidence\.json)")
+
+
+def _print_of(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
 
 
 def _same(given, token: str) -> bool:
@@ -916,15 +949,15 @@ class Handler(BaseHTTPRequestHandler):
             allowed.add(extra.lower())
         return host in allowed
 
-    def _cookie_token(self) -> str | None:
-        c = SimpleCookie(self.headers.get("Cookie") or "")
-        return c["lantern_token"].value if "lantern_token" in c else None
+    def _authed(self) -> bool:
+        """The key, sent in a header by the app's own pages. Nothing a browser sends by itself (a cookie) counts: it
+        would send that to every other server on this computer too."""
+        return _same(self.headers.get("X-Lantern-Token"), self.app.token)
 
-    def _authed(self, write: bool) -> bool:
-        tok = self.app.token
-        if write:
-            return _same(self.headers.get("X-Lantern-Token"), tok)
-        return _same(self._cookie_token(), tok)
+    def _passed(self, path: str, q: dict) -> bool:
+        """A result file asked for by its address, with a pass the page was given for exactly that file."""
+        k = (q.get("k") or [""])[0]
+        return bool(k) and bool(RESULT_FILE.fullmatch(path)) and self.app.use_pass(k, path)
 
     # ------------------------------------------------------------------ dispatch
     def do_HEAD(self):
@@ -949,18 +982,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200 if ok else 400, sign_in_back_page(ok, words), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
         if u.path == "/":
+            # The app's page holds no key and no data: it is the same for everybody. The key comes to it in the part
+            # of the link after "#" and goes back with each request the page makes.
             given = (q.get("token") or [""])[0]
-            if given and _same(given, self.app.token):
-                # set the cookie, then drop the token from the address bar
-                return self._send(303, "", "text/plain", {
-                    "Location": "/", "Set-Cookie": f"lantern_token={self.app.token}; HttpOnly; SameSite=Strict; Path=/"})
-            if not self._authed(False):
+            right = bool(given) and _same(given, self.app.token)
+            if given and not right:
                 return self._send(403, LOCKED_PAGE, "text/html; charset=utf-8")
+            own, key = self.app.own_address, (f"#token={self.app.token}" if right else "")
+            if own and (self.headers.get("Host") or "").lower() == f"localhost:{self.app.port}":
+                # `localhost` is a name, and another program may answer for it at this port on the computer's other
+                # own address: the page, and the key it keeps, are only ever at the address Lantern listens on
+                return self._send(307, "", "text/plain", {"Location": f"http://{own}:{self.app.port}/{key}"})
+            if right:      # the older form of the link (?token=...)
+                return self._send(303, "", "text/plain", {"Location": f"/{key}"})
             nonce = secrets.token_urlsafe(16)
-            html = (VIEWER / "app.html").read_text(encoding="utf-8").replace("__LANTERN_TOKEN__", self.app.token).replace(
+            html = (VIEWER / "app.html").read_text(encoding="utf-8").replace(
                 "__LANTERN_VERSION__", __version__).replace("<script>", f'<script nonce="{nonce}">')
             return self._send(200, html, "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
-        if not self._authed(False):
+        if not (self._authed() or self._passed(u.path, q)):
             return self._err(403, "open the link printed by `lantern serve`")
         try:
             return self._get(u.path, q)
@@ -976,7 +1015,7 @@ class Handler(BaseHTTPRequestHandler):
     def _write(self, method: str):
         if not self._host_ok():
             return self._err(403, "unexpected Host header")
-        if not self._authed(True):
+        if not self._authed():
             return self._err(403, "missing or wrong X-Lantern-Token")
         try:
             body = self._body()
@@ -1090,7 +1129,7 @@ class Handler(BaseHTTPRequestHandler):
             ex = _load(app.out(p) / "explanations.json") if p else None
             rec = ((ex or {}).get("explanations") or {}).get((q.get("node") or [""])[0])
             return self._json({"record": rec, "metaphor": (ex or {}).get("metaphor")})
-        m = re.fullmatch(r"/p/(\w+)/(report\.html|evidence\.html|badge\.svg|evidence\.json)", path)
+        m = RESULT_FILE.fullmatch(path)
         if m:
             p = app.store.project(m.group(1))
             if not p:
@@ -1101,6 +1140,14 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------ write routes
     def _post(self, method: str, path: str, b: dict):
         app = self.app
+        if path == "/api/view" and method == "POST":
+            # a pass for a result file the page is about to open by its address (a frame, a new tab)
+            m = RESULT_FILE.fullmatch(b["path"]) if isinstance(b.get("path"), str) else None
+            if not m:
+                raise ValueError("a pass is for a result file of a project, such as /p/<project>/report.html")
+            if not app.store.project(m.group(1)):
+                return self._err(404, "unknown project")
+            return self._json({"url": f"{m.group(0)}?k={app.view_pass(m.group(0))}"})
         m = re.fullmatch(r"/api/jobs/(\w+)/stop", path)
         if m and method == "POST":
             job = app.jobs.stop(m.group(1))   # ValueError (400) for a job that cannot be stopped part-way
@@ -1406,14 +1453,6 @@ def _usage_sender() -> None:
     threading.Thread(target=loop, daemon=True).start()
 
 
-def _unspecified(host: str) -> bool:
-    import ipaddress
-    try:
-        return ipaddress.ip_address(host).is_unspecified
-    except ValueError:
-        return False
-
-
 def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True,
           analyze_first: bool = True, check: bool = False) -> int:
     """`check`: start, print the link, fetch the home page once through it, stop. Adds no project, runs no
@@ -1428,7 +1467,7 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
     for candidate in range(port, port + 20):
         try:
             httpd = ThreadingHTTPServer((host, candidate), Handler)
-            port = candidate
+            port = httpd.server_address[1]
             break
         except OSError:
             continue
@@ -1449,15 +1488,19 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
             repo = Path(p["path"])
             app.jobs.start(p["id"], "analyze",
                            lambda log, repo=repo, privacy=privacy: pipeline.analyze(repo, pipeline.out_dir(repo), privacy, log=log))
-    url = f"http://{'127.0.0.1' if _unspecified(host) else host}:{port}/?token={token}"
+    # The key stands after the "#": a browser keeps that part of an address to itself and sends it to no server.
+    at = f"http://{app.own_address or host}:{port}"
+    url = f"{at}/#token={token}"
     if check:
         print(f"Lantern {__version__} is running. Open:\n\n  {url}\n", flush=True)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        import urllib.request   # the token link sets the cookie, then redirects to the app
-        local = f"http://127.0.0.1:{port}/?token={token}" if _unspecified(host) else url
+        import urllib.request   # the page answers, and the key opens the app's data
         try:
-            with urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor()).open(local, timeout=20) as r:
+            ask = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with ask.open(at + "/", timeout=20) as r:
                 ok = r.status == 200 and b"Lantern" in r.read()
+            with ask.open(urllib.request.Request(at + "/api/state", headers={"X-Lantern-Token": token}), timeout=20) as r:
+                ok = ok and r.status == 200
         except OSError as e:
             print(f"check failed: {e}")
             ok = False

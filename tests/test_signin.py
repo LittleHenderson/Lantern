@@ -663,7 +663,7 @@ def app_here(tmp_path, monkeypatch, live):
 def _app_asks(app: str, path: str, **body):
     if body:
         return httpx.post(app + path, json=body, headers={"X-Lantern-Token": "tok-123"})
-    return httpx.get(app + path, cookies={"lantern_token": "tok-123"})
+    return httpx.get(app + path, headers={"X-Lantern-Token": "tok-123"})
 
 
 def test_the_app_signs_in_when_the_browser_comes_back_to_it(app_here, live):

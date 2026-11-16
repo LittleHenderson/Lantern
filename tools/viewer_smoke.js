@@ -3,7 +3,7 @@
 // the page as markup (an element with data-pwn, or a changed title: see tools/poison_report.py).
 // Works on any report (it clicks whatever is on screen).
 // Usage: node tools/viewer_smoke.js path/to/report.html /tmp/shot   (needs `npm i playwright`)
-// App mode: node tools/viewer_smoke.js --app 'http://127.0.0.1:8765/?token=…' OUT_PREFIX [--image shot.png --expect-text WORD]
+// App mode: node tools/viewer_smoke.js --app 'http://127.0.0.1:8765/#token=…' OUT_PREFIX [--image shot.png --expect-text WORD]
 //                                        [--slow-tests 'python -m pytest -q tests/stop_check.py']
 //   drives a live `lantern serve` with one analyzed project: "Watch my tests run" (confirm and run in the sandbox,
 //   wait for the result; with --slow-tests, a test command of the project that would go on for minutes is started

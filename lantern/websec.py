@@ -2231,6 +2231,8 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
     findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + template_rules(repo) + inline_secrets(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo, g) + missing_auth(g)
     findings += token_pickup(g)
+    from . import localweb          # what a browser keeps for the site: a login cookie, a service worker's copies
+    findings += localweb.loopback_cookies(repo) + localweb.keeps_pages(repo)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

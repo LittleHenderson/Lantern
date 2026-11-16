@@ -62,14 +62,14 @@ def wait(base, job_id, timeout=60):
 
 def test_access_control(srv):
     base, _ = srv
-    assert call(base, "/", cookie=False, token=None)[0] == 403              # no token: locked page
+    code, page = call(base, "/", cookie=False, token=None)                  # the page itself holds no key and no data
+    assert code == 200 and "tok-123" not in page and "<title>Lantern</title>" in page
     assert call(base, "/api/state", cookie=False, token=None)[0] == 403
+    assert call(base, "/api/state", token=None)[0] == 403                    # a cookie opens nothing (tests/test_app_key.py)
     assert call(base, "/api/state", host="evil.example:80")[0] == 403        # DNS rebinding
     assert call(base, "/api/settings", "POST", {}, token=None)[0] == 403     # cookie alone can't write
     assert call(base, "/api/settings", "POST", {}, token="wrong")[0] == 403
-    code, page = call(base, "/")
-    assert code == 200 and "tok-123" in page and "<title>Lantern</title>" in page
-    # the tokenized link sets an HttpOnly, SameSite=Strict cookie and redirects
+    # the link's older form hands the key to the page after the "#" and sets no cookie
     req = urllib.request.Request(base + "/?token=tok-123")
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -79,8 +79,9 @@ def test_access_control(srv):
         urllib.request.build_opener(NoRedirect).open(req)
     except urllib.error.HTTPError as e:
         assert e.code == 303
-        c = e.headers["Set-Cookie"]
-        assert "HttpOnly" in c and "SameSite=Strict" in c
+        assert e.headers["Location"] == "/#token=tok-123" and e.headers["Set-Cookie"] is None
+    else:
+        raise AssertionError("the link's older form was not sent on")
 
 
 def test_project_lifecycle(srv, tmp_path):
@@ -217,7 +218,7 @@ def test_pages_carry_a_nonce_csp(srv, tmp_path):
     p = store.add_project(repo)
     wait(base, call(base, f"/api/projects/{p['id']}/analyze", "POST", {})[1]["id"])
     for path in ("/", f"/p/{p['id']}/report.html", f"/p/{p['id']}/evidence.html"):
-        req = urllib.request.Request(base + path, headers={"Cookie": "lantern_token=tok-123"})
+        req = urllib.request.Request(base + path, headers={"X-Lantern-Token": "tok-123"})
         with urllib.request.urlopen(req) as r:
             csp, body = r.headers["Content-Security-Policy"], r.read().decode()
         assert "script-src" in csp and "unsafe-inline" not in csp.split("script-src")[1].split(";")[0], path

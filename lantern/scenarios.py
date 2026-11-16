@@ -112,6 +112,17 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                "screen, is now signed in as that person.",
                "The login is handed only to the one who also shows something nobody else holds: a secret whose "
                "fingerprint was given when the sign-in started, or their own signed-in session."),
+    "local-cookie": (None,
+                     "The browser sends your app's login cookie along with that request, because it keeps cookies by "
+                     "the computer's name and not by port. The other program reads the cookie and can now ask your "
+                     "app for whatever the person can see there, and change it.",
+                     "The login is no longer in a cookie. The page keeps it in its own storage, which the browser "
+                     "keeps apart for each port, and sends it in a header, so no other program is sent it."),
+    "kept-pages": (None,
+                   "The service worker hands back the copies it kept: pages and answers that were made for the "
+                   "person who was signed in, with whatever they showed.",
+                   "The service worker keeps only files that are the same for everybody, so it has nothing of one "
+                   "person's to hand back."),
     "owner": (None,
               "The server finds the record with that id and hands it over (or changes it), because nothing compares "
               "the record's owner with who is asking. Going through the numbers one by one, they reach everyone's "
@@ -319,7 +330,7 @@ RULE_KIND = {
     "LV-EXEC-CONCAT": "shell", "LV-TLS-OFF": "tls-off", "LV-WEAK-HASH": "weak-hash", "LV-DESERIALIZE": "deserialize",
     "LV-CORS-ALL": "cors", "LW-PUBLIC-SECRET": "secret", "LW-SERVICE-ROLE": "service-role", "LW-JWT": "secret",
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
-    "LW-TOKEN-PICKUP": "pickup",
+    "LW-TOKEN-PICKUP": "pickup", "LW-LOOPBACK-COOKIE": "local-cookie", "LW-SW-KEEPS-PAGES": "kept-pages",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-NOTEBOOK-SECRET": "secret", "LP-DJANGO-DEBUG": "debug",
     "LT-SQL": "sql", "LT-SHELL": "shell", "LT-EVAL": "eval", "LT-XSS": "xss", "LT-DESERIALIZE": "deserialize",
@@ -646,6 +657,16 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
     elif f.get("in_tests"):
         steps.append(f"This line is in test code. {who} never gets to it: your users do not run your tests.")
         basis.append("the file is test code")
+    elif kind == "local-cookie":
+        steps.append(f"{who} gets the person at this computer to open a page of another program on the same computer "
+                     "while yours is in use: a second tool that runs there, or a page that a small program of their "
+                     "own serves on another port.")
+        basis.append("the server's own address and the cookie come from the lines Lantern read")
+    elif kind == "kept-pages":
+        steps.append(f"{who} uses the same browser after the person has signed out, or after the server has stopped.")
+        steps.append("They open the site again with the network off, or look at what the browser stored for it with "
+                     "the browser's own tools.")
+        basis.append("what the service worker keeps comes from its own lines")
     elif kind in LEAKS:
         if f.get("category") == "exposure" or str(f.get("rule")) == "LW-PUBLIC-SECRET":
             steps.append(f"{who} opens your site and looks at the files their browser downloaded (anyone can, with "
@@ -850,6 +871,8 @@ FIXED_HEADLINES = {
     "assert": "A safety check uses assert, which can be switched off",
     "subprocess-note": "This file starts other programs (a note, not a problem)",
     "pickup": "A login may be handed to whoever sends one value",
+    "local-cookie": "Another program on this computer may be sent this app's login",
+    "kept-pages": "The browser may keep a signed-in person's pages after they have left",
     "owner": "A signed-in person may be able to reach other people's records",
     "owner-late": "Something is done for a record before the app asks whose it is",
     "role": "An admin route may not ask for an admin",

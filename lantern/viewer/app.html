@@ -595,7 +595,19 @@ body[data-mode=simple] .sub.two .tabs{border-radius:0;background:none;padding:4p
 <div id="term" hidden role="region" aria-label="Terminal"><div class="tgrip" id="tgrip" role="separator" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="2000" aria-valuenow="340" aria-label="Terminal height: drag, or use the up and down arrow keys" tabindex="0"><i></i></div><div class="tbar"><b>Terminal</b><span class="muted" id="tsub">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop" aria-label="Terminal background opacity"></label><button class="x" id="termclose" aria-label="Close the terminal">×</button></div><div class="tout" id="tout" role="log" aria-live="polite"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" aria-label="Type a Lantern command" placeholder="help · projects · open NAME · analyze · trace python -m pytest -q · accept ID --reason …" autocomplete="off" spellcheck="false" autocapitalize="off"></div></div>
 <div id="ask"></div>
 <script>
-const TOKEN = '__LANTERN_TOKEN__';
+// The key of this run comes in the part of the link after "#", which a browser sends to no server. The page keeps it
+// in its own storage (kept apart by the browser for each port, so no other program on this computer is sent it), takes
+// it out of the address bar and sends it with each request. It is never in a cookie.
+const KEY_AT = 'lantern.k';
+const TOKEN = (() => {
+  const m = /[#&]token=([^&]+)/.exec(location.hash);
+  let k = '';
+  try { k = m ? decodeURIComponent(m[1]) : ''; } catch (e) {}
+  try { if (k) localStorage.setItem(KEY_AT, k); else k = localStorage.getItem(KEY_AT) || ''; } catch (e) { /* storage off: the key lasts as long as this page */ }
+  if (m) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+  return k;
+})();
+const LOCKED = '<div class="empty"><h2>Lantern is running</h2><p>For safety, open the link that <code>lantern serve</code> printed in your terminal (it carries the key of this run). Run <code>lantern serve</code> again to get a new link.</p><p><a href="/guide">How to use Lantern</a> (short animated demos; no link needed).</p></div>';
 const VERSION = '__LANTERN_VERSION__';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const arr = a => Array.isArray(a) ? a : [];
@@ -603,9 +615,18 @@ const api = async (path, opts = {}) => {
   const r = await fetch(path, {method: opts.method || 'GET', headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN},
     body: opts.body ? JSON.stringify(opts.body) : undefined, credentials: 'same-origin'});
   const data = await r.json().catch(() => ({error: 'bad response'}));
-  if (!r.ok) throw new Error(data.error || r.statusText);
+  if (!r.ok) {
+    const err = new Error(data.error || r.statusText);
+    err.locked = r.status === 403;
+    if (err.locked && path === '/api/state') { try { localStorage.removeItem(KEY_AT); } catch (e) {} }   // a key of an earlier run
+    throw err;
+  }
   return data;
 };
+// A file the browser opens by its address (a frame, a new tab) cannot carry the key: the app hands the page a pass
+// for that one file, good once and for a minute.
+const passFor = async path => (await api('/api/view', {method: 'POST', body: {path}})).url;
+const openIn = (frame, path) => passFor(path).then(u => { frame.src = u; }).catch(() => {});
 const S = {view: 'home', add: null, state: null, project: null, tab: 'atlas', reportTab: null, browse: null, jobs: {}, starters: null, open: {}};
 // Step text comes from Lantern's own starter files; escape it anyway, then allow **bold** and `code`.
 const fmt = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -1321,9 +1342,16 @@ function drawProject(el) {
   el.innerHTML = `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to ${simple ? 'my apps' : 'projects'}">${icon('back')}<span>${simple ? 'My apps' : 'Projects'}</span></button>${simple ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(p.name)}</span>
     ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100${releaseWord(p.release) ? ', release decision ' + releaseWord(p.release) : ''}">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}${releaseWord(p.release) ? ' · ' + releaseWord(p.release) : ''}</span>` : ''}
     <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>
-    <span class="spacer"></span>${simple ? '' : `<button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>`}${p.has_report ? `<button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
+    <span class="spacer"></span>${simple ? '' : `<button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>`}${p.has_report ? `<button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="#" data-path="/p/${esc(p.id)}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
     <div id="toast"></div>
     <div id="pbody"></div>`;
+  const newtab = el.querySelector('.newtab');
+  if (newtab) newtab.onclick = async e => {
+    e.preventDefault();
+    const path = newtab.dataset.path, w = window.open('about:blank', '_blank');   // opened in the click itself, so the browser allows it
+    try { const u = await passFor(path); if (w) { w.opener = null; w.location.replace(u); } }
+    catch (err) { if (w) w.close(); }
+  };
   el.querySelector('#back').onclick = () => go('home');
   const wt = el.querySelector('#watchtests'); if (wt) wt.onclick = () => watchTestsSheet(p);
   { const tb = el.querySelector('#termbtn'); if (tb) tb.onclick = () => termToggle(); }   // Advanced only (the ` key still opens it)
@@ -1340,8 +1368,9 @@ function drawProject(el) {
       // Same project: keep the loaded report and switch its tab, so the Atlas state (selection, zoom) survives.
       body.innerHTML = bar; body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     } else {
-      body.innerHTML = `${bar}<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}" allow="fullscreen"></iframe>`;
+      body.innerHTML = `${bar}<iframe title="${esc(W[S.tab])}" allow="fullscreen"></iframe>`;
       const fr = body.querySelector('iframe'); S.frame = {pid: p.id, el: fr};
+      openIn(fr, `/p/${p.id}/report.html`);
       // The report is served from this app's origin, so the app can open it on a tab and keep the theme in step.
       fr.onload = e => { try { themeOn(e.target.contentDocument); e.target.contentDocument.body.classList.add('embed'); e.target.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {} };
     }
@@ -1349,7 +1378,8 @@ function drawProject(el) {
   if (S.tab === 'explain') renderExplain(body.querySelector('#xbar'), p);
   if (REPORT_TABS[S.tab]) return;
   if (S.tab === 'evidence') {
-    body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
+    body.innerHTML = `<iframe title="Evidence Report"></iframe>`;
+    openIn(body.querySelector('iframe'), `/p/${p.id}/evidence.html`);
     body.querySelector('iframe').onload = e => { try { themeOn(e.target.contentDocument); } catch (err) {} };
   }
   else renderExplain(body, p);
@@ -1706,7 +1736,8 @@ function render() {
   if (S.view === 'learn') return renderLearn(el);
   renderHome(el);
 }
-refresh().catch(e => { document.getElementById('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+if (!TOKEN) document.getElementById('view').innerHTML = LOCKED;
+else refresh().catch(e => { document.getElementById('view').innerHTML = e.locked ? LOCKED : `<div class="empty">${esc(e.message)}</div>`; });
 </script>
 </body>
 </html>

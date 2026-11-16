@@ -39,6 +39,15 @@ file. New entries go under `## Unreleased`, on top.
   - Tests: `tests/test_signin.py` (68), `tests/test_gateway_limits.py` (118), `tests/test_cloud_site.py` (22). Left,
     and written in `docs/audit/THREAT_MODEL.md`: with nothing listening at the return address the one-time code
     stays in the browser's address bar for two minutes, worth nothing without the app's secret.
+- The app (`lantern serve`) keeps the key of a run in its page, not in a cookie. The printed link carries the key
+  after `#` (`http://127.0.0.1:8765/#token=…`); the page keeps it in its own storage and sends it with every request,
+  reads included. A report in a frame or a new tab is opened with a pass that is good once (`POST /api/view`). No
+  cookie is set and none counts; the link's older form (`/?token=…`) still works, and the page is served at the
+  address Lantern listens on (`localhost` is sent on to it).
+  - What changes for people: with the app stopped, a report opened earlier is no longer shown from the browser's
+    copy. The service worker now keeps the app's icon and manifest only and deletes what an earlier version kept.
+    The report file in the project's `.lantern` folder still opens by itself.
+  - Tests: `tests/test_app_key.py` (6).
 - The login check no longer takes a handler's own name for a login: `def revoke_token(...)` "called"
   `revoke_token`, so the route counted as asking who is calling. The name on the line that defines a handler is now
   left out (`websec.own_name`). Measured on 210 routes of 25 folders: no route's result changed.
@@ -48,6 +57,14 @@ file. New entries go under `## Unreleased`, on top.
   identifies, a value that is itself a credential, a credential made on the spot, or two values asked for. It says
   "check who can know the value", never that the route is open. No finding on the benchmark projects and the sample
   apps, so no precision is claimed. Tests: `tests/test_fullstack.py`.
+- Two new heuristics for what a browser keeps for a site (both medium, labelled heuristic; `lantern/localweb.py`).
+  `LW-LOOPBACK-COOKIE`: a server started on this computer's own address that puts a login in a cookie. A browser
+  keeps cookies by host name and not by port, so it sends that cookie to every other program that serves pages on
+  the computer. `LW-SW-KEEPS-PAGES`: a service worker that keeps a copy of everything it fetches, on a site people
+  sign in to, so a signed-in person's pages stay in the browser after they have left. Each says "check". Measured
+  on 25 folders (benchmark projects, sample apps, Lantern's own two services): no finding, after one false alarm of
+  the first measurement was fixed (a session key has to say who is signed in), so no precision is claimed.
+  Tests: `tests/test_localweb.py` (6).
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside

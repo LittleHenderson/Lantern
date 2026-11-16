@@ -2260,7 +2260,7 @@ async function live(path, body, method = 'POST') {
 }
 async function waitJob(id, onLog) {
   for (;;) {
-    const r = await fetch('/api/jobs/' + id, {credentials: 'same-origin'}); const j = await r.json();
+    const r = await fetch('/api/jobs/' + id, {headers: {'X-Lantern-Token': LIVE.token}, credentials: 'same-origin'}); const j = await r.json();
     if (onLog) onLog(j.log);
     if (j.status !== 'running') return j;
     await new Promise(res => setTimeout(res, 800));
@@ -2273,7 +2273,7 @@ async function explainLive(id, again = false) {
     const job = await live('/explain', {nodes: [id], fresh: again});
     const j = await waitJob(job.id, log => { msg.textContent = log[log.length - 1] || 'Working…'; });
     if (j.status === 'error') throw new Error(j.error);
-    const r = await fetch(LIVE.api + '/explanation?node=' + encodeURIComponent(id), {credentials: 'same-origin'}).then(x => x.json());
+    const r = await fetch(LIVE.api + '/explanation?node=' + encodeURIComponent(id), {headers: {'X-Lantern-Token': LIVE.token}, credentials: 'same-origin'}).then(x => x.json());
     if (r.record) { EXP[id] = r.record; }
     render();
   } catch (e) { msg.textContent = e.message; btn.disabled = false; }

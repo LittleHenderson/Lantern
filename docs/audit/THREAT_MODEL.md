@@ -78,13 +78,15 @@ and Ask Lantern through the allowance), see T7.
 
 | Attack | Mitigation | Where |
 |---|---|---|
-| Cross-site request forgery against write endpoints | Writes need the `X-Lantern-Token` header (a custom header forces a CORS preflight, which the server never approves) | `Handler._write`, `_authed(True)` |
-| Cross-site reads (JSON of projects, reports) | Reads need the `lantern_token` cookie (SameSite=Strict, so not sent on cross-site requests); browsers' same-origin policy blocks reading responses | `_authed(False)` |
+| Cross-site request forgery against write endpoints | Writes need the `X-Lantern-Token` header (a custom header forces a CORS preflight, which the server never approves) | `Handler._write`, `_authed()` |
+| Cross-site reads (JSON of projects, reports) | Reads need the key in the `X-Lantern-Token` header too, which a cross-site page cannot send, and no cookie counts; browsers' same-origin policy blocks reading responses | `_authed()` |
+| The app's key reaches another program on this computer that serves pages on a port of its own | The key is never in a cookie (a browser sends a cookie to every port of a host). The page keeps it in its own storage, which the browser keeps apart for each port, and sends it in a header; a result file opened by its address takes a pass for that one file, good once and for a minute (`POST /api/view`); the app's page is served only at the address Lantern listens on (a request for it under the name `localhost` is sent on) | `_authed`, `App.view_pass`, `do_GET`; `tests/test_app_key.py` |
+| What the browser keeps for the app's address is read later by another program that serves pages at that address | The service worker keeps the app's icon and manifest and nothing else, and deletes what an earlier version kept; every answer says `Cache-Control: no-store`; the key in the page's storage is the key of one run and opens nothing once that run has ended | `viewer/sw.js`; `tests/test_app_key.py` | Left: with the app stopped a report is no longer shown from the browser's copy; the report file in the project's `.lantern` folder opens by itself |
 | DNS rebinding (attacker domain resolves to 127.0.0.1) | Host header must be `127.0.0.1:PORT`, `localhost:PORT`, or `[::1]:PORT` | `_host_ok` |
 | Another local user on a shared machine | Needs the token printed in the starting user's terminal; 127.0.0.1 only | `serve` |
 | Clickjacking the app | `X-Frame-Options: SAMEORIGIN` | `_send` |
 | `--host 0.0.0.0` exposes it to the network | Prints a warning; token still required; plain HTTP | `serve` | **Use only on trusted networks** |
-| Token leakage through the address bar or Referer | Token link redirects to `/` after setting the cookie; `Referrer-Policy: no-referrer` | `do_GET` |
+| Token leakage through the address bar or Referer | The key stands after the `#` of the link, which a browser sends to no server, and the page takes it out of the address bar; `Referrer-Policy: no-referrer` | `do_GET`, `viewer/app.html` |
 
 Note: the token is also embedded in `app.html` and in served reports (`window.LANTERN_LIVE`), so anything that can run
 script in the app's origin can act as the user. That makes XSS in the viewers (T1, T3) the main path to a takeover.

@@ -31,10 +31,15 @@ Evidence Report rendered by `lantern/evidence.py`. A redesign replaces those fil
 
 ## Authentication
 
-`lantern serve` prints `http://127.0.0.1:8765/?token=...`. The first visit sets a `lantern_token` cookie
-(SameSite=Strict, HttpOnly). Every write (`POST`, `DELETE`) also needs the token in the `X-Lantern-Token`
-header; the app gets it from `window.LANTERN_TOKEN` (injected into `app.html`) and the report from
-`window.LANTERN_LIVE.token`. Wrong or missing token → 401. The `Host` header must name the server.
+`lantern serve` prints `http://127.0.0.1:8765/#token=...`. The part after `#` stays in the browser: the app's page
+(`GET /`, the same for everybody, with no key and no data in it) reads it, keeps it in its own storage
+(`localStorage` `lantern.k`, which a browser keeps apart for each port) and takes it out of the address bar. Every
+request for data, reads and writes alike, needs the key in the `X-Lantern-Token` header; the report gets it from
+`window.LANTERN_LIVE.token`. No cookie is set and none counts. A result file the browser opens by its address (a
+frame, a new tab) takes a pass: `POST /api/view {"path": "/p/<id>/report.html"}` answers
+`{"url": "/p/<id>/report.html?k=<pass>"}`, good once, for a minute, for that file. Wrong or missing key → 403. The
+`Host` header must name the server, and `GET /` under the name `localhost` is sent on to the address Lantern
+listens on. The link's older form (`/?token=...`) is sent on to `/#token=...`.
 
 ## Endpoints
 
@@ -90,6 +95,7 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | `GET /p/<id>/evidence.html` | The Evidence Report |
 | `GET /p/<id>/evidence.json` | Its data (schema below) |
 | `GET /p/<id>/badge.svg` | `Lantern · commit 1a2b3c · 0 critical · Oct 31` |
+| `POST /api/view` | `{path}` → `{url}`: a pass for one of the four result files above, so that the page can open it by its address (a frame, a new tab), where it cannot send the key. Good once and for a minute; 400 for any other path, 404 for an unknown project |
 
 ### Settings and connections
 
@@ -633,6 +639,20 @@ up with one plain value of the request, with no second proof and no sign of who 
 `medium`, `tool_confidence` `LOW`. The finding stands on the line that fetches; the title names the route, the
 word (`token`) and the value (`code`); `more_info` names the call that fetches and what to check (who can know
 the value). Its `scenario` is the story kind `pickup`.
+`LW-LOOPBACK-COOKIE` (287): a server the code starts on this computer's own address (`127.0.0.1`, `localhost`,
+`::1`) that puts a login into a cookie: a cookie set under a name that says so, a `Set-Cookie` header, or the
+framework's own session given a key that says who is signed in. A browser keeps cookies by host name and not by
+port, so it sends this one to every other program that serves pages on the computer. Rank `medium`,
+`tool_confidence` `LOW`. The finding stands on the line that sets the cookie; the title names the cookie;
+`more_info` names the file and line of the start and says what to check (what the cookie opens) and what to do
+for a server that stays on this computer (the key in a header the page adds itself). Its `scenario` is the story
+kind `local-cookie`.
+`LW-SW-KEEPS-PAGES` (525): a service worker whose `fetch` handler puts aside every answer it fetched under the
+request's own address (`put` or `add` on a cache, in the handler or in a function of the file the handler hands
+the request to) with nothing that narrows what is kept (the kind of file, its ending, a folder of static files, a
+list), in a project where some other code file shows that people sign in. Rank `medium`, `tool_confidence` `LOW`.
+The finding stands on the line that stores; `more_info` names the file that shows the login and says that the
+copies stay in the browser after the person has signed out. Its `scenario` is the story kind `kept-pages`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
