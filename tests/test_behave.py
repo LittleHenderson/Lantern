@@ -1054,7 +1054,7 @@ def _bench():
 
 @pytest.fixture(scope="module")
 def corkboard():
-    """Corkboard (bench/behaviour): a FastAPI app with sign-in tokens, the safe version and 31 with one planted
+    """Corkboard (bench/behaviour): a FastAPI app with sign-in tokens, the safe version and 32 with one planted
     problem each. tests/test_behaviour_apps.py tests the apps themselves."""
     pytest.importorskip("fastapi")
     pytest.importorskip("jwt")
@@ -1065,7 +1065,7 @@ def corkboard():
 def test_the_safe_app_holds_in_every_case_of_the_whole_plan(corkboard, tmp_path):
     row = corkboard.run_one(tmp_path, corkboard.SAFE)
     assert row["differences"] == [], row["log"]
-    assert row["summary"] == {"held": 80, "broken": 0, "inconclusive": 0, "not-run": 0}
+    assert row["summary"] == {"held": 83, "broken": 0, "inconclusive": 0, "not-run": 0}
 
 
 @starts_an_app
@@ -1074,15 +1074,14 @@ def test_every_planted_problem_is_caught_by_the_cases_written_down_for_it_before
     codes, the cases the problem leaves undecided come out so, and the other cases of the same checks hold.
     `bench/behaviour/run_behaviour.py` runs the whole plan against every version (no other case may break)."""
     names = list(corkboard.apps.PLANTED)
-    assert len(names) == 31 and set(names) == set(corkboard.plans.EXPECTED)
+    assert len(names) == 32 and set(names) == set(corkboard.plans.EXPECTED)
     with ThreadPoolExecutor(min(4, os.cpu_count() or 1)) as pool:
         rows = list(pool.map(lambda name: corkboard.run_one(tmp_path, name, own_checks=True), names))
     assert {r["name"]: r["differences"] for r in rows if r["differences"]} == {}
     assert all(r["summary"]["broken"] >= 1 for r in rows)
     codes = {code for r in rows for found in r["broken"].values() for code in found}
-    # `stuck` and `crashed` are judged by hand above; `lived-on` by hand and on the four tiny apps above (the
-    # benchmark app has no planted problem of that kind yet)
-    assert codes == set(behave.CODES) - {"stuck", "crashed", "lived-on"}
+    # `stuck` and `crashed` are judged by hand above
+    assert codes == set(behave.CODES) - {"stuck", "crashed"}
 
 
 def test_the_table_of_what_must_come_out_names_only_cases_the_plan_has(corkboard):

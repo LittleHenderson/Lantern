@@ -131,6 +131,13 @@ file. New entries go under `## Unreleased`, on top.
   The app's answer to "Does Lantern run my app or my tests?" and the help of `--sandbox` say the same. The
   command line asks nothing: the first lines of its log say what the sandbox holds. No wall changed.
   Tests written first: `tests/test_sheet_promise.py` (48).
+- Behaviour benchmark (`bench/behaviour`): the practice app has a thirty-second planted problem,
+  `sign-in-remembered` (a copy of the app that remembers whom it let in), and the plan a check of the kind
+  `ended` for it (`removed-user`: a removed person asks again straight after, after a restart and on another
+  copy). What must come out was written down before the first run; the first run of the whole plan against all
+  33 versions came out as written down (`bench/behaviour/results.md`: 33 of 33, the safe app 83 cases held).
+  Every outcome code but `stuck` and `crashed` now comes out of a version of the practice app. Reading the code
+  alone tells the new version from the safe app by nothing (`bench/behaviour/README.md`).
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside
