@@ -775,7 +775,12 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   as removed and added. Two versions are compared as they are: nothing says who made a change or when. The app's
   button compares the last commit with the files as they are now only (two named versions: the terminal). The
   website has no "What changed" yet, and the hand-over to GitHub's code scanning has only been tried against a
-  stand-in for GitHub.
+  stand-in for GitHub. A comparison costs two whole checks: kept work makes only the reading of unchanged files
+  cheap on the second. Measured 2026-11-16 on Lantern's own code (457 files, 9 changed), kept work empty at the
+  start: the first check 34.71 s, the second 32.01 s; the map 7.21 → 3.67 s (290 of 299 Python files from kept
+  work), Bandit 11.79 → 13.85 s (its answer is kept for a whole set of files, so one changed file runs it again),
+  the data-flow step 21.48 → 20.93 s (it looks at the whole program at once; about nine tenths of it is the
+  analysis, not the reading). The roadmap's "unchanged files cost near-zero time" is not met for those two.
 
 ## Conventions
 

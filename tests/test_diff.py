@@ -871,6 +871,28 @@ def test_checks_already_made_are_used_and_not_made_again(checks, tmp_path, capsy
     assert "checking" not in err
 
 
+def test_two_checks_a_service_already_holds_give_the_receipt_the_command_gives(checks, tmp_path, capsys):
+    """The website's GitHub App will hold a check of each side of a pull request already. From the two results
+    folders alone (no repository, no command, no git) the same receipt comes out as the command writes, the page
+    the app's server builds from the stored data is the same page, and the text fits a comment."""
+    from lantern.server import result_page
+    base, head = checks.of(BASE, "x")["out"], checks.of(changed(BASE, app=EXPORT_OPEN), "x")["out"]
+    plain, kept = tmp_path / "plain", tmp_path / "results"
+    plain.mkdir()
+    code, out, err = run(["diff", str(plain), "--base-results", base, "--head-results", head, "--out", str(kept / "change"),
+                          "--base-label", "main", "--head-label", "this pull request", "--format", "json"], capsys)
+    assert code == 0, err
+    made = diff.compare(diff.load(base, label="main"), diff.load(head, label="this pull request"))
+    as_stored = json.loads(json.dumps(made))
+    assert json.loads(out) == as_stored and diff.read(kept / "change" / "change.json") == as_stored
+    assert (kept / "change" / "change.md").read_text(encoding="utf-8") == diff.markdown(made)
+    status, page, kind, headers = result_page(kept, "change.html")
+    assert status == 200 and page == diff.page(made) and kind.startswith("text/html")
+    assert "script-src" not in headers["Content-Security-Policy"] and "default-src 'none'" in headers["Content-Security-Policy"]
+    text = diff.markdown(made, short=True)
+    assert text.startswith(diff.MARK) and len(text.encode("utf-8")) <= onrepo.MOST_CHANGE and "POST /api/admin/export" in text
+
+
 def test_a_check_already_made_of_the_files_is_compared_with_a_commit_under_the_names_given(tmp_path, capsys):
     """What Lantern's GitHub Action does on a pull request: the files as they are were checked a moment ago, so only
     the commit before is checked, and the two sides are called what the person calls them."""

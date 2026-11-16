@@ -78,5 +78,7 @@ finding at all. What a route shows about a login is read from names and shapes
   then not made again (the GitHub Action does this for the pull request's own check); `--base-label` /
   `--head-label` say what the receipt calls a side; `--privacy structure` keeps source out of the two checks' own
   reports (the receipt never holds source); `--offline` skips the look-up of libraries on both sides.
+* A comparison costs two whole checks. What Lantern keeps between runs (`lantern cache`) makes the second check's
+  reading of unchanged files cheap; the scanners and the data-flow step look at the whole project on each side.
 * In the app the receipt's page is built again from `change.json` by Lantern's template each time it is shown
   (`/p/<id>/change.html`); it holds no script, and the `change.html` in the results folder is never sent.
