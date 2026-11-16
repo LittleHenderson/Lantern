@@ -144,7 +144,7 @@ def test_stdio_framing(shop):
     s.serve_stdio(io.BytesIO("\n".join(lines).encode() + b"\n"), out)
     got = [json.loads(x) for x in out.getvalue().decode().splitlines()]
     assert [g.get("id") for g in got] == [1, None, 2] and got[1]["error"]["code"] == -32700
-    assert len(got[2]["result"]["tools"]) == 8
+    assert len(got[2]["result"]["tools"]) == 9          # 8 until lantern_fix_brief (2026-11-16)
 
 
 def test_setup_text_and_cli():
@@ -186,3 +186,33 @@ def test_the_fix_brief_and_a_recheck_that_refuses_a_fix_that_only_hides(shop, tm
     assert rc["contract"]["broken"] == [] and rc["contract"]["not_shown"] == ["tests"]
     assert rc["compared_with"]["what"] == "brief" and "kept when the fix brief was asked for" in text
     assert not (shop / "lantern-accepted.json").exists()                    # and nothing was accepted on the way
+
+
+def test_a_recheck_after_the_rule_that_found_it_was_changed_does_not_say_fixed(shop):
+    """The finding was made by a pack that comes with the project, and the "fix" changes the pack. The pack still
+    runs and says "ok"; that the finding stops showing proves nothing, and the answer is not `fixed`."""
+    pack = shop / "lantern-packs" / "house.json"
+    pack.parent.mkdir()
+    pack.write_text(json.dumps({"pack": "house", "version": "1", "rules": [
+        {"id": "LP-HOUSE-HASH", "title": "A weak hash for a password", "severity": "MEDIUM", "files": ["shop/*.py"],
+         "pattern": "md5\\("}]}), encoding="utf-8")
+    from lantern import pipeline
+    pipeline.analyze(shop, pipeline.out_dir(shop), log=lambda m: None, offline=True)
+    sec = json.loads((shop / ".lantern" / "security.json").read_text(encoding="utf-8"))
+    fid = next(f["id"] for f in sec["findings"] if f["rule"] == "LP-HOUSE-HASH")
+    s = Server(Projects([str(shop)]))
+    err, _, _ = call(s, "lantern_fix_brief", project="shop", finding=fid)
+    assert not err
+    pack.write_text(pack.read_text(encoding="utf-8").replace("md5", "md6"), encoding="utf-8")
+    err, text, rc = call(s, "lantern_recheck", project="shop", finding=fid)
+    assert not err and rc["status"] == "not-shown", text
+    assert "not shown to be fixed" in text.splitlines()[0] and "the rules of lantern-pack:house" in text
+    assert [f["id"] for f in rc["not_shown"]] == [fid] and not any(f["id"] == fid for f in rc["fixed"])
+    assert rc["contract"]["verdict"] == "incomplete" and "gone" in rc["contract"]["not_shown"]
+    # the safe twin: the pack as it was and the line itself changed
+    pack.write_text(pack.read_text(encoding="utf-8").replace("md6", "md5"), encoding="utf-8")
+    auth = shop / "shop" / "auth.py"
+    auth.write_text(auth.read_text(encoding="utf-8").replace("hashlib.md5(", "hashlib.sha256("), encoding="utf-8")
+    err, text, rc = call(s, "lantern_recheck", project="shop", finding=fid)
+    assert not err and rc["status"] == "fixed", text
+    assert rc["contract"]["broken"] == [] and rc["contract"]["not_shown"] == ["tests"]

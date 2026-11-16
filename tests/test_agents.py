@@ -33,6 +33,9 @@ AGENT = textwrap.dedent("""
     elif mode == "no_tests":   # a true fix that also takes the project's test away
         auth.write_text(src.replace("hashlib.md5(", "hashlib.sha256("))
         pathlib.Path("tests/test_auth.py").unlink()
+    elif mode == "pack":       # the rule that found it is changed; the code is as it was
+        pack = pathlib.Path("lantern-packs/house.json")
+        pack.write_text(pack.read_text().replace("md5", "md6"))
     elif mode == "nothing":
         pass
     print("prompt was:", sys.argv[2][:60])
@@ -223,3 +226,25 @@ def test_a_true_fix_says_that_the_tests_were_not_run(shop):
     assert res["status"] == "fixed" and "Your tests were not run on the change" in res["verdict"]
     assert res["contract"]["verdict"] == "incomplete" and res["contract"]["not_shown"] == ["tests"]
     assert [i["id"] for i in res["contract"]["items"]] == ["gone", "no-suppression", "still-read", "links", "calls", "nothing-new", "tests"]
+
+
+def test_a_rule_changed_so_that_the_finding_stops_showing_is_not_called_fixed(shop):
+    """A pack that comes with the project found it, and the agent changes the pack and not the code. The pack still
+    runs; only what it said at each check tells the two apart, and "no longer found" is then no proof of a fix."""
+    repo, mode, work = shop
+    (repo / "lantern-packs").mkdir()
+    (repo / "lantern-packs" / "house.json").write_text(json.dumps({"pack": "house", "version": "1", "rules": [
+        {"id": "LP-HOUSE-HASH", "title": "A weak hash for a password", "severity": "MEDIUM", "files": ["shop/*.py"],
+         "pattern": "md5\\("}]}), encoding="utf-8")
+    pipeline.analyze(repo, pipeline.out_dir(repo), log=lambda m: None, offline=True)
+    sec = json.loads((repo / ".lantern" / "security.json").read_text(encoding="utf-8"))
+    fid = next(f["id"] for f in sec["findings"] if f["rule"] == "LP-HOUSE-HASH")
+    mode.write_text("pack")
+    res = agents.run_fix(repo, repo / ".lantern", fid, "claude", "full", lambda m: None, work_root=work)
+    assert res["status"] == "not_fixed" and "does not show that it is fixed" in res["verdict"], res["verdict"]
+    assert "the rules of lantern-pack:house" in res["verdict"] and "Don't apply this one." in res["verdict"]
+    assert res["contract"]["verdict"] == "incomplete" and "gone" in res["contract"]["not_shown"]
+    agents.discard_fix(res["fix"], work_root=work)
+    mode.write_text("fix")              # the safe twin: the line itself is changed
+    res = agents.run_fix(repo, repo / ".lantern", fid, "claude", "full", lambda m: None, work_root=work)
+    assert res["status"] == "fixed", res["verdict"]

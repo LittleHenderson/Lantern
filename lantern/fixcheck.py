@@ -148,9 +148,16 @@ def _gone(target: dict, before: dict, after: dict, alike: bool) -> tuple[str, li
         return BROKEN, facts
     tool = target.get("tool")
     state = _scanners(after).get(tool) if isinstance(tool, str) else None
-    if state is not None and _scan_state(state) != "ok" and _scan_state(_scanners(before).get(tool) or {}) == "ok":
+    was = (_scanners(before).get(tool) if isinstance(tool, str) else None) or {}
+    if state is not None and _scan_state(state) != "ok" and _scan_state(was) == "ok":
         return NOT_SHOWN, [f"{_named(target)} does not show any more, but {_short(tool, 40)}, which found it, did "
                            "not read everything this time. That it does not show proves nothing."]
+    if state is None and _scan_state(was) in SCAN_ORDER:
+        return NOT_SHOWN, [f"{_named(target)} does not show any more, but {_short(tool, 40)}, which found it, is "
+                           "not in the check after the fix. That it does not show proves nothing."]
+    if state is not None and _rules_changed(was, state):
+        return NOT_SHOWN, [f"{_named(target)} does not show any more, but the rules of {_short(tool, 40)}, which "
+                           "found it, were changed with the fix. That it does not show proves nothing."]
     return HELD, [f"{_named(target)} is no longer found, there or at any place it was not before."]
 
 
@@ -214,6 +221,13 @@ def _scan_state(t: dict) -> str:
     return state
 
 
+def _rules_changed(old: dict, new: dict) -> bool:
+    """A pack's row says what the pack said when the check was made (`packs.said`). Rows of an older Lantern carry
+    no such number, and nothing is said of them."""
+    a, b = old.get("rules_sha256"), new.get("rules_sha256")
+    return isinstance(a, str) and isinstance(b, str) and a != b
+
+
 def _scan_gaps(t: dict) -> int:
     """How much one scanner's record says it did not read or could not look up."""
     n = len(manifest.rows(t.get("errors")))
@@ -250,6 +264,10 @@ def _still_read(before: dict, after: dict) -> tuple[str, list[str]]:
                           f"{_scan_said(new)}.")
         elif b != "ok" and _scan_gaps(new) > _scan_gaps(old):
             broken.append(f"{_short(name, 40)} left out more than before the fix: {_scan_said(new)}.")
+        if _rules_changed(old, new):
+            unknown.append(f"The rules of {_short(name, 40)} are not the ones the check before the fix was made "
+                           "with: what it no longer finds proves nothing. A change to a pack is checked in a "
+                           "change of its own.")
     nr0 = manifest.table(before["security"].get("not_read"))
     nr1 = manifest.table(after["security"].get("not_read"))
     r0, r1 = manifest.table(nr0.get("renamed")), manifest.table(nr1.get("renamed"))

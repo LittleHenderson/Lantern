@@ -473,6 +473,12 @@ def checks_judge(checks, after: dict, repo) -> dict:
     return fixcheck.judge(checks.of(BASE)[0], after, checks.finding("B602"), repo=repo, tests=RAN_AND_PASSED)
 
 
+def without(tool: str):
+    def take(side: dict) -> None:
+        side["security"]["tools"] = [t for t in side["security"]["tools"] if t.get("tool") != tool]
+    return take
+
+
 @pytest.mark.parametrize("was, now, state, words", [
     ({"state": "ok", "status": "ok"},
      {"state": "partial", "status": "partial: 1 file could not be read", "errors": ["pom.xml: not valid XML"]},
@@ -497,7 +503,8 @@ def test_a_scanner_that_reads_less_after_the_fix_than_before(checks, was, now, s
     """`still-read`, for the scanners a small app does not have: the record of a library look-up before and after."""
     fixed, repo = checks.of(TRUE_FIX)
     before = changed(checks.of(BASE)[0], scanner({"tool": "maven-audit", **was}))
-    after = changed(fixed, scanner({"tool": "maven-audit", **now})) if now is not None else fixed
+    # (as first written, the case with no record after the fix left the fixed version's own "skipped" record in)
+    after = changed(fixed, scanner({"tool": "maven-audit", **now}) if now is not None else without("maven-audit"))
     r = fixcheck.judge(before, after, checks.finding("B602"), repo=repo, tests=RAN_AND_PASSED)
     assert states(r)["still-read"] == state, said(r, "still-read")
     assert words in said(r, "still-read")
@@ -600,7 +607,57 @@ def test_no_more_than_so_many_checks_are_kept_for_one_project(checks, tmp_path, 
     monkeypatch.setattr(fixcheck, "MOST_KEPT", 3)
     for i in range(6):
         fixcheck.keep(home, repo, f"finding-{i}", side["out"])
-        os.utime(next(p for p in home.rglob("brief.json") if json.loads(p.read_text())["finding"] == f"finding-{i}").parent,
+        os.utime(next(p for p in home.rglob("brief.json") if json.loads(p.read_text(encoding="utf-8"))["finding"] == f"finding-{i}").parent,
                  (1_700_000_000 + i, 1_700_000_000 + i))
     left = sorted(json.loads(p.read_text(encoding="utf-8"))["finding"] for p in home.rglob("brief.json"))
     assert left == ["finding-3", "finding-4", "finding-5"]
+
+
+# ------------------------------------------------------------------------ rules that come with the project itself
+HOUSE = {"pack": "house", "version": "1", "rules": [
+    {"id": "LP-HOUSE-SPLIT", "title": "A token is taken apart by hand", "severity": "MEDIUM", "files": ["api/*.py"],
+     "pattern": "token\\.split\\("}]}
+WITH_PACK = {**BASE, "lantern-packs/house.json": json.dumps(HOUSE)}
+
+
+def test_a_rule_of_the_projects_own_pack_that_is_changed_is_no_fix(checks):
+    """A finding made by a pack that comes with the project stops showing when the pack's rule is changed. The pack
+    still runs and still says "ok", so only what the pack said, written down with each check, tells the two apart.
+    Until 2026-11-16 such a change read as a fix."""
+    looser = json.loads(json.dumps(HOUSE))
+    looser["rules"][0]["pattern"] = "token\\.split_by_hand\\("
+    r = checks.judge({**BASE, "lantern-packs/house.json": json.dumps(looser)}, "LP-HOUSE-SPLIT", base=WITH_PACK)
+    assert states(r)["gone"] == "not-shown" and states(r)["still-read"] == "not-shown", fixcheck.text(r)
+    assert r["verdict"] == "incomplete"
+    assert "the rules of lantern-pack:house" in said(r, "gone") and "proves nothing" in said(r, "gone")
+    assert "The rules of lantern-pack:house are not the ones" in said(r, "still-read")
+    # the pack taken away altogether: it ran before the fix and is not in the check after it
+    r = checks.judge(BASE, "LP-HOUSE-SPLIT", base=WITH_PACK)
+    assert states(r)["gone"] == "not-shown" and states(r)["still-read"] == "not-shown", fixcheck.text(r)
+    assert "is not in the check after the fix" in said(r, "gone") and r["verdict"] == "incomplete"
+
+
+def test_a_true_fix_of_a_packs_finding_passes_and_another_tools_finding_is_not_held_to_the_pack(checks):
+    """The safe twins: the flagged line itself is changed and the pack is as it was; and a fix of another tool's
+    finding, in a project with a pack, is judged as in a project without one."""
+    fixed = swap(WITH_PACK, "api/store.py", 'return token.split(":")[0]\n', 'return token.partition(":")[0]\n')
+    r = checks.judge(fixed, "LP-HOUSE-SPLIT", base=WITH_PACK)
+    assert r["verdict"] == "passed", fixcheck.text(r)
+    assert "is no longer found" in said(r, "gone")
+    with_fix = {**TRUE_FIX, "lantern-packs/house.json": json.dumps(HOUSE)}
+    r = checks.judge(with_fix, "B602", base=WITH_PACK)
+    assert r["verdict"] == "passed", fixcheck.text(r)
+    # a pack row of an older Lantern carries no such number: nothing is said of it
+    before, after = checks.of(WITH_PACK)[0], checks.of(with_fix)[0]
+    older = changed(before, lambda side: [t.pop("rules_sha256", None) for t in side["security"]["tools"]])
+    assert fixcheck.judge(older, after, checks.finding("B602", WITH_PACK), tests=RAN_AND_PASSED)["verdict"] == "passed"
+
+
+def test_what_a_pack_says_is_one_number_that_follows_its_rules():
+    from lantern import packs
+    a = packs.said(HOUSE)
+    assert len(a) == 16 and a == packs.said(json.loads(json.dumps(HOUSE)))
+    assert a == packs.said({**HOUSE, "source": "project", "file": "house.json"})      # where it lies is not what it says
+    for change in ({"version": "2"}, {"rules": []}, {"requires": {"files": ["manage.py"]}},
+                   {"entries": [{"kind": "route", "pattern": "x", "files": ["*.py"], "handler": "{1}"}]}):
+        assert packs.said({**HOUSE, **change}) != a, change

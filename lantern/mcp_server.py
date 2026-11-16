@@ -547,6 +547,12 @@ def tool_recheck(P: Projects, args: dict) -> dict:
         # no longer reported is not fixed: the target leaves that list and is named as what it is
         d["refused"] = [x for x in d["fixed"] if x["id"] == fid]
         d["fixed"] = [x for x in d["fixed"] if x["id"] != fid]
+    elif "gone" in result["not_shown"]:
+        # the scanner that found it read less this time, is not in this check, or was given other rules
+        verdict, status = ("no longer reported under its id, which proves nothing here (the part “gone” below says "
+                           "why); not shown to be fixed"), "not-shown"
+        d["not_shown"] = [x for x in d["fixed"] if x["id"] == fid]
+        d["fixed"] = [x for x in d["fixed"] if x["id"] != fid]
     else:
         verdict, status = "gone: no longer reported on this commit", "fixed"
     lines = [f"{fid} ({target['rule']} at {target['file']}:{target['line']}): {verdict}.",
@@ -658,7 +664,8 @@ TOOLS = [
      "After a fix: re-analyze and hold the fix to the contract of lantern_fix_brief. Says whether the finding is "
      "gone, still open, moved (the flagged line changed but the same rule still fires), or refused: no longer "
      "reported, but only hidden (a comment that excuses it, code moved where Lantern does not read it, a call put "
-     "together at run time, a route or a test removed) or with something made worse on the way. Each part of the "
+     "together at run time, a route or a test removed) or with something made worse on the way; or not shown to "
+     "be fixed (it stopped showing while the scanner that found it read less, or was given other rules). Each part of the "
      "contract comes back as held, broken or not shown, with the facts. This is how a fix is verified; a finding "
      "is never closed by hand.",
      {"type": "object", "properties": {"project": JSON_SCHEMA_PROJECT,

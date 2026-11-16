@@ -184,17 +184,24 @@ def run_fix(repo: Path, out: Path, fid: str, agent: str, privacy: str, log, *, r
     said = {i["id"]: i["facts"] for i in judged["items"] if i["state"] == fixcheck.BROKEN}
     worse = [x for x in d["new"] if x.get("rank") in ("critical", "high")]
     hidden = [part for part in said if part in ("no-suppression", "still-read", "links", "calls")]
+    unsure = {i["id"]: i["facts"] for i in judged["items"] if i["state"] == fixcheck.NOT_SHOWN and i["id"] != "tests"}
     if "gone" in said:
         status, verdict = "not_fixed", "Lantern still finds the problem in the changed copy. Don't apply this one."
     elif hidden:
         status, verdict = "not_fixed", ("The problem no longer shows in the changed copy, but it was hidden and not "
                                         f"fixed: {said[hidden[0]][0]} Don't apply this one.")
+    elif "gone" in unsure:      # the scanner that found it read less this time, or was given other rules
+        status, verdict = "not_fixed", ("The problem no longer shows in the changed copy, but that does not show that "
+                                        f"it is fixed: {unsure['gone'][0]} Don't apply this one.")
     elif worse:
         status, verdict = "fixed_with_new", (f"The problem is gone, but the change adds {len(worse)} new serious "
                                              f"finding{'s' if len(worse) != 1 else ''}. Look before you apply it.")
     elif said:
         status, verdict = "fixed_with_new", ("The problem is gone, but the change makes something else worse: "
                                              f"{next(iter(said.values()))[0]} Look before you apply it.")
+    elif unsure:
+        status, verdict = "fixed_with_new", ("The problem is gone, but Lantern could not check everything about the "
+                                             f"change: {next(iter(unsure.values()))[0]} Look before you apply it.")
     else:
         status, verdict = "fixed", ("Fixed: Lantern no longer finds the problem, and nothing else got worse. Your "
                                     "tests were not run on the change: run them after you apply it.")

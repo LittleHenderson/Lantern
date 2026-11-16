@@ -28,6 +28,7 @@ What a pack cannot do, by construction:
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -265,8 +266,16 @@ def _lines(text: str):
 
 # ---------------------------------------------------------------------------- rules -> findings
 
+def said(pk: dict) -> str:
+    """What a pack says, as one short number: its name and version, what it requires, its rules and its entry
+    patterns. It is written on the pack's row of every check (`rules_sha256`), so two checks of a project can be
+    told to have been made with the same rules or not (`lantern/fixcheck.py`: a finding of a pack that stops showing
+    after the pack itself was changed is not shown to be fixed)."""
+    told = {k: pk.get(k) for k in ("pack", "version", "requires", "rules", "entries")}
+    return hashlib.sha256(json.dumps(told, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
 def _fid(*parts) -> str:
-    import hashlib
     return hashlib.sha1("|".join(map(str, parts)).encode(), usedforsecurity=False).hexdigest()[:12]
 
 
@@ -299,7 +308,8 @@ def scan_packs(repo: Path, packs: list[dict]) -> tuple[list[dict], list[dict]]:
                                      "snippet": s[:300], "category": r.get("category", "code"), "pack": pk["pack"]})
                     n += 1
         tools.append({"tool": f"lantern-pack:{pk['pack']}", "status": f"ok ({pk['source']}, {n} finding(s))",
-                      "version": str(pk.get("version", "-"))})
+                      "version": str(pk.get("version", "-")), "rules": len(pk.get("rules", [])),
+                      "rules_sha256": said(pk)})
     return findings, tools
 
 
