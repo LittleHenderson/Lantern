@@ -4,7 +4,7 @@ One server works in Claude (Desktop and Code), ChatGPT, Cursor and any other MCP
 gets Lantern's facts (paths, findings, readiness, explanations) and can ask for a re-check or verify an
 Evidence Report. Standard library only; newline-delimited JSON-RPC 2.0 on stdin/stdout.
 
-What the connector can do: read, analyze, re-check, verify.
+What the connector can do: read, analyze, brief a fix, re-check, verify.
 What it deliberately cannot do: accept a risk, close or dismiss a finding, or change a project's files.
 Accepting a risk needs a person's written reason and goes through `lantern accept`; that keeps
 "a model never closes a finding" true by construction, not by policy.
@@ -26,7 +26,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, pipeline, programs, release, results, usage
+from . import __version__, diff, fixcheck, pipeline, programs, release, results, usage
 from .graph import Graph, action_name, route_words
 from .python_frontend import project_text
 
@@ -39,8 +39,12 @@ INSTRUCTIONS = (
     "database, security findings ranked by whether a user can reach them, a deployment readiness score, and "
     "three-lens explanations. Its facts come from deterministic analysis, never from a model. Use lantern_paths "
     "before editing a function to see what calls it and whether a user can reach it. Use lantern_findings to get "
-    "the exact file, line, click path and fix for a finding. After writing a fix, call lantern_recheck with the "
-    "finding id to see whether it is gone. lantern_verify re-runs an Evidence Report's analysis and compares "
+    "the exact file, line, click path and fix for a finding. Before fixing one, call lantern_fix_brief with its id: "
+    "it gives the path from the door to the line, how the value gets there, and the contract the fix is held to. "
+    "After writing the fix, call lantern_recheck with the finding id: it re-analyzes and judges the fix against "
+    "that contract, so a comment that excuses the finding, code moved where Lantern does not read it, a route "
+    "taken away or a test deleted is refused and not called fixed. lantern_verify re-runs an Evidence Report's "
+    "analysis and compares "
     "digests. This connector can read, analyze, re-check and verify. It cannot accept a risk or close a finding: "
     "only the builder can, with a written reason, by running `lantern accept`."
 )
@@ -48,6 +52,11 @@ INSTRUCTIONS = (
 CANNOT_CLOSE = ("This connector cannot accept, close or dismiss findings. If a finding is a deliberate, acceptable "
                 "risk, the builder runs: lantern accept PATH FINDING_ID --reason \"...\" (the reason is shown in the "
                 "Evidence Report).")
+
+
+RUN_THE_TESTS = ("The connector starts no code of a project, so it does not run the tests. A person runs them on the "
+                 "fixed code under Lantern: `lantern fix check PATH FINDING_ID -- <test command>`, or “Watch my "
+                 "tests run” in the app. Until then the part `tests` of the contract is not shown.")
 
 
 # ---------------------------------------------------------------------------- projects
@@ -429,21 +438,111 @@ def tool_analyze(P: Projects, args: dict) -> dict:
     return {"text": "\n".join(lines), "data": {"project": repo.name, **res, "log": log, **d}}
 
 
-def tool_recheck(P: Projects, args: dict) -> dict:
+def _open_finding(side: dict, fid: str, repo: Path) -> dict | None:
+    """The open finding outside test code that `fid` names in one check: by its id, or as the only one whose id
+    begins with it. None when there is none (an accepted finding is a person's decision and no finding to fix)."""
+    opened = {k: f for k, f in diff._open(side).items() if not diff._accepted(f)}
+    if fid in opened:
+        return opened[fid]
+    hits = [f for k, f in opened.items() if fid and k.startswith(fid)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _not_open(fid: str, repo: Path) -> ValueError:
+    return ValueError(f"{fid} is not an open finding in {repo.name} (ids change when the flagged line changes, and a "
+                      "finding the project accepted is not open; call lantern_findings to see what is open)")
+
+
+def _steps(g: Graph, ids: list[str]) -> list[dict]:
+    """A path as rows: each function with its file and line, and how the one before it reaches it."""
+    rows = []
+    for i, nid in enumerate(ids):
+        n, how = g.nodes.get(nid), None
+        if i:
+            e = next((x for x in g.callees(ids[i - 1]) if x.dst == nid), None)
+            how = (f"HTTP {e.detail or ''}".strip() if e and (e.via or "").startswith("http-")
+                   else e.detail if e and e.detail else "calls")
+        rows.append({"function": _node_name(g, nid), "file": n.file if n else None,
+                     "line": n.start_line if n else None, "reached_by": how})
+    return rows
+
+
+def tool_fix_brief(P: Projects, args: dict) -> dict:
+    """What a coding assistant needs to fix one finding, from facts only, and the contract the fix is held to. The
+    check as it is now is kept under LANTERN_HOME as the one `lantern_recheck` compares the fix with. Read-only for
+    the project: nothing in its folder is written, and no finding is accepted, closed or re-ranked."""
     repo = P.resolve(args.get("project"))
     out = _out(repo)
     fid = str(args.get("finding") or "").strip()
     if not fid:
         raise ValueError("give finding: the id from lantern_findings")
-    before = _snapshot(out)
-    target = before.get(fid)
+    side = fixcheck.load(out)
+    target = _open_finding(side, fid, repo)
     if target is None:
-        raise ValueError(f"{fid} is not an open finding in {repo.name} (ids change when the flagged line changes; "
-                         "call lantern_findings to see what is open)")
+        raise _not_open(fid, repo)
+    g = Graph.load(out / "graph.json", repo)
+    view = _finding_view(target, g, _load(out, "explanations.json"))
+    reach = target.get("reachable") if isinstance(target.get("reachable"), dict) else {}
+    path = [x for x in (target.get("ui_path") or reach.get("path") or []) if isinstance(x, str)]
+    flow = target.get("flow") if isinstance(target.get("flow"), dict) else None
+    steps = [{k: st.get(k) for k in ("file", "line", "what")} for st in (flow or {}).get("steps") or []
+             if isinstance(st, dict)]
+    note = fixcheck.keep(P.store.root, repo, target["id"], out)
+    parts = fixcheck.contract()
+    lines = [f"Fix brief for {target['id']}: [{view['rank']}] {view['rule']} {view['title']} at "
+             f"{view['file']}:{view['line']}" + (f" in {view['function']}" if view.get("function") else "")
+             + (" (heuristic)" if view["heuristic"] else "")]
+    if view.get("snippet"):
+        lines += [str(view["snippet"])]
+    lines.append("How it is reached: " + _chain(g, path) if path else
+                 view.get("note") or "No path found from a page, route or command; that is not proof that nothing runs it.")
+    if steps:
+        lines.append("How the value gets there:")
+        lines += [f"  {st['file']}:{st['line']}  {st['what']}" for st in steps]
+    elif view.get("uses_outside_input"):
+        lines.append(f"Uses outside input: {view['uses_outside_input']}")
+    if view.get("fix"):
+        lines.append(f"Suggested fix: {view['fix']}")
+    lines += ["", "The contract. lantern_recheck calls the finding fixed only when no part is broken:"]
+    lines += [f"  {i}. {p['id']}: {p['need']}" for i, p in enumerate(parts, 1)]
+    lines += [f"The check as it is now was kept ({note['kept_at']}). The fix is compared with it, whatever is "
+              "analyzed in between; ask for the brief again to start from the code as it is then.",
+              RUN_THE_TESTS, CANNOT_CLOSE]
+    return {"text": "\n".join(lines),
+            "data": {"project": repo.name, "finding": view, "path": _steps(g, path),
+                     "flow": {"steps": steps, "class": flow.get("class")} if flow else None,
+                     "contract": parts, "kept_at": note["kept_at"],
+                     "then": {"tool": "lantern_recheck", "finding": target["id"]},
+                     "tests": RUN_THE_TESTS, "cannot_close": True}}
+
+
+def tool_recheck(P: Projects, args: dict) -> dict:
+    """After a fix: analyze again and hold the fix to the contract (`fixcheck.judge`), against the check kept by
+    `lantern_fix_brief` when there is one for this finding, else against the last check in the project's folder."""
+    repo = P.resolve(args.get("project"))
+    out = _out(repo)
+    fid = str(args.get("finding") or "").strip()
+    if not fid:
+        raise ValueError("give finding: the id from lantern_findings")
+    held = fixcheck.kept(P.store.root, repo, fid)
+    if held is None:
+        was, note = fixcheck.load(out), None
+        target = _open_finding(was, fid, repo)
+        if target is None:
+            raise _not_open(fid, repo)
+        fid = target["id"]
+        held = fixcheck.kept(P.store.root, repo, fid)       # the brief was asked for by the whole id
+    if held is not None:
+        was, note = held
+        target = _open_finding(was, fid, repo)
+        if target is None:
+            raise _not_open(fid, repo)
     log: list[str] = []
     pipeline.analyze(repo, out, P.store.settings().get("privacy", "full"), log=log.append, offline=args.get("offline"))
-    after = _snapshot(out)
-    d = _diff(before, after)
+    now = fixcheck.load(out)
+    result = fixcheck.judge(was, now, fid, repo=repo, tests=None)
+    after = diff._open(now)
+    d = _diff(diff._open(was), after)
     still = after.get(fid)
     same_place = [f for f in d["new"] if f["rule"] == target["rule"] and f.get("file") == target.get("file")]
     if still is not None:
@@ -451,14 +550,29 @@ def tool_recheck(P: Projects, args: dict) -> dict:
     elif same_place:
         verdict, status = (f"the flagged line changed but {target['rule']} still fires in {target['file']} "
                            f"(now {', '.join(f['id'] for f in same_place)}); not fixed"), "changed"
+    elif result["verdict"] == fixcheck.REFUSED:
+        verdict, status = (f"no longer reported under its id, but the fix is refused (broken: "
+                           f"{', '.join(result['broken'])}); not fixed"), "refused"
+        # no longer reported is not fixed: the target leaves that list and is named as what it is
+        d["refused"] = [x for x in d["fixed"] if x["id"] == fid]
+        d["fixed"] = [x for x in d["fixed"] if x["id"] != fid]
     else:
         verdict, status = "gone: no longer reported on this commit", "fixed"
-    text = (f"{fid} ({target['rule']} at {target['file']}:{target['line']}): {verdict}.\n"
-            f"Whole project since the last analysis: {len(d['fixed'])} fixed, {len(d['new'])} new, "
-            f"{len(d['changed_still_open'])} changed but still open. Counts now: {_load(out, 'security.json').get('counts')}")
-    return {"text": text, "data": {"project": repo.name, "finding": fid, "status": status, "verdict": verdict,
-                                   "was": {k: target.get(k) for k in ("rule", "title", "file", "line", "rank")},
-                                   "now": still and _finding_view(still, None, None), **d}}
+    since = (f"the check kept when the fix brief was asked for ({note.get('kept_at')})" if note is not None
+             else "the last analysis")
+    lines = [f"{fid} ({target['rule']} at {target['file']}:{target['line']}): {verdict}.",
+             f"Compared with {since}.", "", fixcheck.text(result).rstrip()]
+    if "tests" in result["not_shown"]:
+        lines.append(RUN_THE_TESTS)
+    lines += ["", f"Findings of the whole project since then: {len(d['fixed'])} no longer reported, {len(d['new'])} "
+                  f"new, {len(d['changed_still_open'])} changed but still open. Counts now: "
+                  f"{now['security'].get('counts')}"]
+    return {"text": "\n".join(lines),
+            "data": {"project": repo.name, "finding": fid, "status": status, "verdict": verdict,
+                     "was": {k: target.get(k) for k in ("rule", "title", "file", "line", "rank")},
+                     "now": still and _finding_view(still, None, None), "contract": result,
+                     "compared_with": {"what": "brief" if note is not None else "last-check",
+                                       "kept_at": note.get("kept_at") if note is not None else None}, **d}}
 
 
 def tool_verify(P: Projects, args: dict) -> dict:
@@ -542,9 +656,23 @@ TOOLS = [
      {"type": "object", "properties": {"project": JSON_SCHEMA_PROJECT,
                                        "offline": {"type": "boolean", "description": "Skip the dependency audits (the only network step)."}},
       "additionalProperties": False}),
+    ("lantern_fix_brief", tool_fix_brief,
+     "Before fixing a finding: everything needed to fix it, from facts only. The exact file and line, the path from "
+     "the page or route to the line, how outside input gets there step by step, and the contract lantern_recheck "
+     "holds the fix to: the finding is gone and not moved, no `# nosec` comment or accepted-risk entry was added, "
+     "no scanner was kept from reading the code, no route or link between page and server is broken, no call was "
+     "hidden from the map, nothing got worse elsewhere, no test was removed. Keeps the check as it is now, to "
+     "compare the fix with. It cannot accept or close a finding.",
+     {"type": "object", "properties": {"project": JSON_SCHEMA_PROJECT,
+                                       "finding": {"type": "string", "description": "The finding id from lantern_findings."}},
+      "required": ["finding"], "additionalProperties": False}),
     ("lantern_recheck", tool_recheck,
-     "After a fix: re-analyze and say whether one finding is gone, still open, or moved (the flagged line changed "
-     "but the same rule still fires in that file). This is how a fix is verified; a finding is never closed by hand.",
+     "After a fix: re-analyze and hold the fix to the contract of lantern_fix_brief. Says whether the finding is "
+     "gone, still open, moved (the flagged line changed but the same rule still fires), or refused: no longer "
+     "reported, but only hidden (a comment that excuses it, code moved where Lantern does not read it, a call put "
+     "together at run time, a route or a test removed) or with something made worse on the way. Each part of the "
+     "contract comes back as held, broken or not shown, with the facts. This is how a fix is verified; a finding "
+     "is never closed by hand.",
      {"type": "object", "properties": {"project": JSON_SCHEMA_PROJECT,
                                        "finding": {"type": "string", "description": "The finding id from lantern_findings."},
                                        "offline": {"type": "boolean"}},
@@ -564,7 +692,8 @@ TOOL_INDEX = {name: (fn, desc, schema) for name, fn, desc, schema in TOOLS}
 
 def tool_list() -> list[dict]:
     return [{"name": name, "description": desc, "inputSchema": schema,
-             "annotations": {"readOnlyHint": name not in ("lantern_analyze", "lantern_recheck", "lantern_verify"),
+             "annotations": {"readOnlyHint": name not in ("lantern_analyze", "lantern_fix_brief", "lantern_recheck",
+                                                          "lantern_verify"),
                              "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}}
             for name, _, desc, schema in TOOLS]
 

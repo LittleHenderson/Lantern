@@ -10,6 +10,10 @@ press Apply.
 - The agent works on a copy of the project in a temporary folder, never on the project itself.
 - Lantern then analyzes the copy, compares it with the project's own results, and shows the verdict and the
   changed files. Apply copies only those files back, and only if the person has not changed them meanwhile.
+- The verdict is the fix contract's (`lantern/fixcheck.py`, 2026-11-16): a change after which the finding no longer
+  shows because a comment excuses it, the code was moved where Lantern does not read it, the call is put together at
+  run time, the route was taken away or a test was deleted is `not_fixed`, with the fact that says so. Until then
+  only the finding's id and new serious findings were looked for. The project's tests are not run here.
 - The agent runs as the person, with their own sign-in to that agent; Lantern passes it no Lantern token or key.
 """
 
@@ -90,7 +94,9 @@ def _prompt(f: dict) -> str:
     return (f"Fix this security problem in this project, with the smallest change that fixes it: {f.get('title')} "
             f"({f.get('rule')}) at {where}.{reach}{via}\n"
             "Change only the files needed. Keep the app's behavior for normal use. Do not add dependencies, do not "
-            "touch tests to make them pass, and do not commit. When you are done, stop.")
+            "touch tests to make them pass, and do not commit. Fix the code itself: a comment that silences the "
+            "finding, an entry in a list of accepted risks, moving or hiding the code, or removing the route or a "
+            "test is checked for afterwards and refused. When you are done, stop.")
 
 
 def _finding(out: Path, fid: str) -> dict:
@@ -129,8 +135,8 @@ def run_fix(repo: Path, out: Path, fid: str, agent: str, privacy: str, log, *, r
             work_root: Path | None = None) -> dict:
     """Copy the project, let the agent fix finding `fid` in the copy, analyze the copy, and say what changed.
     Returns the verdict and the changed files; the copy is kept for `apply_fix` or `discard_fix`."""
-    from . import pipeline
-    from .mcp_server import _diff, _snapshot
+    from . import diff, fixcheck, pipeline
+    from .mcp_server import _diff
     if agent not in AGENTS:
         raise ValueError("Pick a coding agent in Settings first.")
     name, prog, build = AGENTS[agent]
@@ -171,17 +177,27 @@ def run_fix(repo: Path, out: Path, fid: str, agent: str, privacy: str, log, *, r
     log(f"{name} changed {len(changed)} file(s); Lantern is checking the copy")
     cout = pipeline.out_dir(copy)
     pipeline.analyze(copy, cout, privacy, log=lambda ln: log("check: " + str(ln)), offline=True)
-    was, now = _snapshot(out), _snapshot(cout)
-    d = _diff(was, now)
-    target = was.get(fid) or f
+    before, after = fixcheck.load(out), fixcheck.load(cout)
+    d = _diff(diff._open(before), diff._open(after))
+    # the contract decides (fixcheck.py); the project's tests are not run here, so that part is never shown
+    judged = fixcheck.judge(before, after, fid, repo=copy, tests=None)
+    said = {i["id"]: i["facts"] for i in judged["items"] if i["state"] == fixcheck.BROKEN}
     worse = [x for x in d["new"] if x.get("rank") in ("critical", "high")]
-    if fid in now or any(x["rule"] == target.get("rule") and x.get("file") == target.get("file") for x in d["new"]):
+    hidden = [part for part in said if part in ("no-suppression", "still-read", "links", "calls")]
+    if "gone" in said:
         status, verdict = "not_fixed", "Lantern still finds the problem in the changed copy. Don't apply this one."
+    elif hidden:
+        status, verdict = "not_fixed", ("The problem no longer shows in the changed copy, but it was hidden and not "
+                                        f"fixed: {said[hidden[0]][0]} Don't apply this one.")
     elif worse:
         status, verdict = "fixed_with_new", (f"The problem is gone, but the change adds {len(worse)} new serious "
                                              f"finding{'s' if len(worse) != 1 else ''}. Look before you apply it.")
+    elif said:
+        status, verdict = "fixed_with_new", ("The problem is gone, but the change makes something else worse: "
+                                             f"{next(iter(said.values()))[0]} Look before you apply it.")
     else:
-        status, verdict = "fixed", "Fixed: Lantern no longer finds the problem, and nothing new and serious appeared."
+        status, verdict = "fixed", ("Fixed: Lantern no longer finds the problem, and nothing else got worse. Your "
+                                    "tests were not run on the change: run them after you apply it.")
     files = [{"path": rel, "change": "added" if rel not in before_files else "deleted" if rel not in after_files else "changed",
               "diff": _diff_text(repo if rel in before_files else None, copy if rel in after_files else None, rel)}
              for rel in changed]
@@ -191,7 +207,10 @@ def run_fix(repo: Path, out: Path, fid: str, agent: str, privacy: str, log, *, r
     (base / fix_id / "fix.json").write_text(json.dumps(manifest), encoding="utf-8")
     return {"fix": fix_id, "status": status, "verdict": verdict, "agent": name, "returncode": res.returncode,
             "files": files, "new": [{k: x.get(k) for k in ("rank", "title", "file", "line")} for x in d["new"]][:10],
-            "fixed": len(d["fixed"])}
+            "fixed": len(d["fixed"]) - (1 if status == "not_fixed" and "gone" not in said else 0),
+            "contract": {"verdict": judged["verdict"], "words": judged["words"], "broken": judged["broken"],
+                         "not_shown": judged["not_shown"],
+                         "items": [{k: i[k] for k in ("id", "state", "facts")} for i in judged["items"]]}}
 
 
 def _fix_dir(fix_id: str, work_root: Path | None) -> Path:
