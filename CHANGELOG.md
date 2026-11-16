@@ -36,9 +36,18 @@ file. New entries go under `## Unreleased`, on top.
   - For whoever runs a gateway: deploy the gateway and the website one after the other, the gateway first
     (`docs/deploy.md`). A website at another address than `LANTERN_HOME_URL` is named in the new setting
     `LANTERN_RETURN_ORIGINS`. What an earlier version kept for its pick-up is deleted and written over at start-up.
-  - Tests: `tests/test_signin.py` (65), `tests/test_gateway_limits.py` (118), `tests/test_cloud_site.py` (22). Left,
+  - Tests: `tests/test_signin.py` (68), `tests/test_gateway_limits.py` (118), `tests/test_cloud_site.py` (22). Left,
     and written in `docs/audit/THREAT_MODEL.md`: with nothing listening at the return address the one-time code
     stays in the browser's address bar for two minutes, worth nothing without the app's secret.
+- The login check no longer takes a handler's own name for a login: `def revoke_token(...)` "called"
+  `revoke_token`, so the route counted as asking who is calling. The name on the line that defines a handler is now
+  left out (`websec.own_name`). Measured on 210 routes of 25 folders: no route's result changed.
+- New heuristic `LW-TOKEN-PICKUP` (medium, labelled heuristic): a Python or JS/TS route that takes one plain value
+  from the request, fetches something the server keeps under it and sends it back under a credential's name
+  (`token`, `secret`, `session`), asking for nothing else. Quiet where the handler shows a second proof, a caller it
+  identifies, a value that is itself a credential, a credential made on the spot, or two values asked for. It says
+  "check who can know the value", never that the route is open. No finding on the benchmark projects and the sample
+  apps, so no precision is claimed. Tests: `tests/test_fullstack.py`.
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside

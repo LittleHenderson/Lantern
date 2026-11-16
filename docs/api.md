@@ -628,6 +628,11 @@ a value made safe for a page, the rank is `low`; anything else is `medium`; `fix
 falls back to text in the code when the setting is missing), `password` (the password of an account the app
 connects with) or `address` (a database address that carries its password); the `snippet` has `[redacted]` in the
 secret's place and no field repeats the text.
+`LW-TOKEN-PICKUP` (639): a Python or JS/TS route that hands back, under a credential's name, something it looks
+up with one plain value of the request, with no second proof and no sign of who is calling in the handler; rank
+`medium`, `tool_confidence` `LOW`. The finding stands on the line that fetches; the title names the route, the
+word (`token`) and the value (`code`); `more_info` names the call that fetches and what to check (who can know
+the value). Its `scenario` is the story kind `pickup`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
