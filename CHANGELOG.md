@@ -138,6 +138,10 @@ file. New entries go under `## Unreleased`, on top.
   33 versions came out as written down (`bench/behaviour/results.md`: 33 of 33, the safe app 83 cases held).
   Every outcome code but `stuck` and `crashed` now comes out of a version of the practice app. Reading the code
   alone tells the new version from the safe app by nothing (`bench/behaviour/README.md`).
+- Gateway: every call on the store's one database connection, a read too, stands under the store's lock, which
+  a thread may now take again, so requests that arrive at the same moment are answered as they would be one
+  after the other. The website's store was written that way already. Tests written first:
+  `tests/test_store_at_once.py` (10: both stores asked by eight threads at once, and both stores' code read).
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside

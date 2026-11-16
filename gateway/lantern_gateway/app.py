@@ -199,7 +199,10 @@ class Store:
     """SQLite: token hashes and counters only."""
 
     def __init__(self, path: str, free_requests: int = 300):
-        self.lock = threading.Lock()
+        # One connection for every request, and requests are answered on several threads: whatever is done on
+        # it, a read too, is done under this lock (tests/test_store_at_once.py). A thread may take it again,
+        # so a step under it can ask a function that reads under it.
+        self.lock = threading.RLock()
         self.free_requests = free_requests
         # Requests that were let through and whose answer is not back: number -> (token hash, day, tokens, usd).
         # In this process's memory: the gateway is one process (`gateway/Dockerfile`), and a request that is under
@@ -385,16 +388,16 @@ class Store:
         """The counter row behind a token: a sign-in's session leads to its account's anchor; a token minted by
         hand is its own row. `hash` is the counter row's, which every count and lookup after this uses."""
         h = _hash(token)
-        sess = self.db.execute("select anchor_hash, last_used from sessions where token_hash = ?", (h,)).fetchone()
-        if sess:
-            h = sess[0]
-            now = dt.datetime.now(dt.UTC).isoformat()
-            if (sess[1] or "")[:13] != now[:13]:          # the session's last use, kept to the hour
-                with self.lock:
+        with self.lock:
+            sess = self.db.execute("select anchor_hash, last_used from sessions where token_hash = ?", (h,)).fetchone()
+            if sess:
+                h = sess[0]
+                now = dt.datetime.now(dt.UTC).isoformat()
+                if (sess[1] or "")[:13] != now[:13]:          # the session's last use, kept to the hour
                     self.db.execute("update sessions set last_used = ? where token_hash = ?", (now, _hash(token)))
                     self.db.commit()
-        row = self.db.execute("select token_hash, used_requests, used_tokens, disabled from users where token_hash = ?",
-                              (h,)).fetchone()
+            row = self.db.execute("select token_hash, used_requests, used_tokens, disabled from users "
+                                  "where token_hash = ?", (h,)).fetchone()
         if not row:
             return None
         return {"hash": row[0], "used_requests": row[1], "used_tokens": row[2], "disabled": bool(row[3])}
@@ -413,11 +416,13 @@ class Store:
         return {"account": row[0], "label": row[1] or ""}
 
     def today_requests(self, h: str, day: str) -> int:
-        row = self.db.execute("select requests from daily where day = ? and token_hash = ?", (day, h)).fetchone()
+        with self.lock:
+            row = self.db.execute("select requests from daily where day = ? and token_hash = ?", (day, h)).fetchone()
         return row[0] if row else 0
 
     def spend_today(self, day: str) -> float:
-        row = self.db.execute("select usd from spend where day = ?", (day,)).fetchone()
+        with self.lock:
+            row = self.db.execute("select usd from spend where day = ?", (day,)).fetchone()
         return row[0] if row else 0.0
 
     def record(self, h: str, day: str, tokens: int, usd: float, model: str = "") -> None:
