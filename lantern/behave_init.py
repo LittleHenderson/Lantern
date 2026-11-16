@@ -63,10 +63,9 @@ PAY_WORDS = frozenset({"pay", "payment", "payments", "charge", "charges", "check
                        "purchases", "redeem", "withdraw", "withdrawal", "refund", "refunds", "donate", "donation",
                        "topup", "deposit", "buy", "spend"})
 FREE_TEXT = frozenset({"text", "title", "body", "content", "message", "description", "note", "comment", "subject",
-                       "label", "summary", "caption", "instructions", "details", "bio", "about"})
+                       "label", "summary", "caption", "instructions", "details", "bio", "about", "question",
+                       "prompt"})
 ASKED = frozenset({"q", "query", "search", "term", "keyword", "keywords", "filter"})
-NUMBERS = frozenset({"amount", "quantity", "qty", "count", "price", "total", "servings", "number", "value", "size",
-                     "limit", "offset", "page", "rating", "score", "age", "points", "credits"})
 WHO_NAMES = frozenset({"username", "user", "login", "handle", "nickname", "nick", "name", "fullname", "firstname",
                        "lastname", "displayname", "team", "teamname", "org", "organisation", "organization", "company",
                        "workspace"})
@@ -356,8 +355,6 @@ def _value(field: _Field, who: str | None, code: _Code, unsure: list, depth: int
             n = int(lim["lt"]) - 1
         elif "le" in lim and n > lim["le"]:
             n = int(lim["le"])
-        if not words & NUMBERS and not name.lower().endswith(("_id", "id")):
-            pass                                  # a plain number under any name is a value like another
         if name.lower() == "id" or name.lower().endswith("_id") or name in ("to", "recipient", "owner"):
             unsure.append(name)                   # the number of another row: Lantern cannot know one that is there
         return float(n) if t in ("float", "PositiveFloat", "confloat") else n
@@ -745,6 +742,9 @@ def _doors(routes: list[_Route], logins: dict) -> tuple[_Route | None, _Route | 
               and not r.words() & LOGIN_WORDS]
     makers.sort(key=sureness)
     signup = makers[0] if makers and sureness(makers[0])[0] < 2 else None
+    if signup is None and login is not None and not login.words() & LOGIN_WORDS and sureness(login)[0] < 2 \
+            and (logins.get(login.node.id) or {}).get("login") != "shown":
+        signup = login                       # the one request that makes an account answers with its token
     if login is None and signup is not None and _token_key(signup.answer_keys()):
         login = signup                       # the account's own answer carries the token
     return signup, login
@@ -930,6 +930,7 @@ def draft(repo, g: Graph | None = None) -> dict:
     by_path = {(r.verb, r.path.rstrip("/") or "/"): r for r in routes}
     checks: list[dict] = []
     ids: set = set()
+    case_of: dict = {}                       # a route's id -> the id of its case without a login
 
     def new_id(text: str) -> str:
         base, n = _slug(text)[:60], 1
@@ -1032,6 +1033,7 @@ def draft(repo, g: Graph | None = None) -> dict:
                                   + ", ".join(f"`{u}`" for u in dict.fromkeys(unsure)) + ". If the app refuses it from "
                                   f"{OWNER} too, the case reads undecided: put a value the app accepts."})
         checks.append(c)
+        case_of[route.node.id] = c["id"]
 
     # ---- limits and repeats
     wrong = dict(_sign_in_values(login, made[OWNER], OWNER))
@@ -1080,6 +1082,13 @@ def draft(repo, g: Graph | None = None) -> dict:
                                   "starts turning requests away."
                                   + ("" if hosts else " Put the address the service is asked at under \"may_reach\", "
                                      "or each try reads as a reach for an outside address.")})
+            if route.node.id in case_of:
+                out["review"].append({"check": case_of[route.node.id], "why": f"{OWNER}'s own request cannot be "
+                                      "finished in the sandbox (it sets out for the paid service, and the sandbox has "
+                                      "no network), so this case reads undecided where the visitor is turned away. "
+                                      "Where the visitor is let through to the service it reads broken. An app with "
+                                      "a setting that swaps the service for a stand-in can be given it under "
+                                      "\"app\" > \"env\"."})
         if pays and route.verb in MUTATING:
             c = {"id": new_id(f"once {route.verb} {route.path}"), "kind": "once", "request": req, **who,
                  "about": (f"Two requests to {route.detail} at the same moment must end like two requests one after "
@@ -1123,13 +1132,14 @@ def write(repo, force: bool = False, g: Graph | None = None) -> dict:
     unless `force`. The answer is `draft`'s, with `written` (the file's path, or None) and `exists`."""
     repo = Path(repo).resolve()
     target = repo / PLAN_NAME
+    exists = os.path.lexists(target)
+    if exists and not force:
+        return {"plan": None, "review": [], "left_out": [], "notes": [], "cases": 0, "written": None, "exists": True,
+                "why_not": f"the project has a {PLAN_NAME} already, and it was left as it is (--force writes the new "
+                           "one over it)"}
     made = draft(repo, g)
-    made["written"], made["exists"] = None, os.path.lexists(target)
+    made["written"], made["exists"] = None, exists
     if made["plan"] is None:
-        return made
-    if made["exists"] and not force:
-        made["why_not"] = (f"the project has a {PLAN_NAME} already, and it was left as it is (--force writes the new "
-                           "one over it)")
         return made
     results.write(target, json.dumps(made["plan"], indent=1, ensure_ascii=False) + "\n", where="the project folder")
     made["written"] = str(target)
