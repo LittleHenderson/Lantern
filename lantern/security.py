@@ -1389,6 +1389,11 @@ def _scanned_as_text(tools: list[dict]) -> list[str]:
     return []
 
 
+def _route_logins(g: Graph, lines_for, flows, findings, is_test) -> list[dict]:
+    from .websec import route_logins
+    return route_logins(g, lines_for, flows, findings, is_test=is_test)
+
+
 def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> dict:
     """All scanners. `offline` skips the dependency audits, the only steps that use the network
     (None: follow LANTERN_OFFLINE). `early`: the scanners a run started before the map was built (`Early`), used
@@ -1610,4 +1615,7 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
             # logins`; None when it did not run): the card "Login check on routes that change data" counts them as
             # checked, so it tells the story the findings tell (`protections.advise`)
             "logins_shown": sorted(x for x in flows.logins if x in g.nodes) if flows is not None else None,
+            # what each route shows about asking who is calling, one record a route (`websec.route_logins`): written
+            # down so that two checks of one project can be compared route by route (`lantern/diff.py`)
+            "route_logins": _route_logins(g, lines_for, flows, findings, named_test),
             "ai": ai, "mobile": g.meta.get("mobile")}
