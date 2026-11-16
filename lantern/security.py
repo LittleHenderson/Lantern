@@ -1436,6 +1436,17 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
     told = {(f["file"], f["line"]) for f in wf if f["rule"] == "LW-SECRET-INLINE"}
     findings = [f for f in findings if not (f["rule"] in ("B105", "B106", "B107") and
                                             (f["file"], f["line"]) in told)]
+    # and a key the secret scan lists, on a line that gives it to a setting for the browser (LW-CLIENT-ENV-SECRET),
+    # is the secret scan's one finding, which then also says where the key goes
+    given = {(f["file"], f["line"]): f for f in wf
+             if f["rule"] == "LW-CLIENT-ENV-SECRET" and f["public"]["why"] == "key"}
+    for f in findings:
+        mine = given.get((f["file"], f["line"])) if f.get("category") == "secret" else None
+        if mine is not None:
+            from . import publicvalues
+            f["public"] = mine["public"]
+            f["more_info"] = " ".join(x for x in (f.get("more_info"), publicvalues.also_public(mine["public"])) if x)
+            wf = [x for x in wf if x is not mine]
     findings += wf
     tools += wt
     findings += af

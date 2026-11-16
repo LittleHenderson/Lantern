@@ -344,6 +344,7 @@ RULE_KIND = {
     "LR-TLS-OFF": "tls-off", "LR-WEAK-HASH": "weak-hash", "LR-UNSAFE": "unsafe", "LV-SQL-CONCAT": "sql",
     "LV-EXEC-CONCAT": "shell", "LV-TLS-OFF": "tls-off", "LV-WEAK-HASH": "weak-hash", "LV-DESERIALIZE": "deserialize",
     "LV-CORS-ALL": "cors", "LW-PUBLIC-SECRET": "secret", "LW-SERVICE-ROLE": "service-role", "LW-JWT": "secret",
+    "LW-CLIENT-ENV-SECRET": "secret",
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LW-TOKEN-PICKUP": "pickup", "LW-LOOPBACK-COOKIE": "local-cookie", "LW-SW-KEEPS-PAGES": "kept-pages",
     "LW-LIMIT-COUNTED-LATER": "counted-later", "LW-SHARED-CONNECTION": "shared-connection",

@@ -307,6 +307,9 @@ def _claim(f: dict, kind: str) -> str:
         return f"{base}. The text looks like a key; Lantern does not test it."
     if f.get("rule") == "LW-PUBLIC-SECRET":
         return f"{base}. Visible in the browser; that alone is not proof anyone can get in."
+    if f.get("rule") == "LW-CLIENT-ENV-SECRET":
+        return (f"{base}. Read from one line of the file; whether this file gives its values to the page visitors "
+                "get is not checked.")
     if f.get("category") == "dependency":
         return f"{base}. The version is affected; whether the app uses the affected part is not checked."
     return f"{f.get('tool')} says: {base}. A pattern in the code, not a confirmed attack."

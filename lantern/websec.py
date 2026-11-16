@@ -2289,6 +2289,9 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += countlater.counted_later(g)
     from . import sharedconn        # one database connection for every thread, used with no lock held
     findings += sharedconn.shared_connections(g)
+    from . import publicvalues      # a setting for the browser whose value is a secret, where its name says nothing
+    findings += publicvalues.public_values(
+        repo, said={(f["file"], f["snippet"]) for f in findings if f["rule"] == "LW-PUBLIC-SECRET"})
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
