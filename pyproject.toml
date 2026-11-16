@@ -51,7 +51,7 @@ lantern = "lantern.cli:main"
 include = ["lantern*"]
 
 [tool.setuptools.package-data]
-lantern = ["viewer/*.html", "viewer/*.js", "viewer/*.svg", "viewer/*.webmanifest", "starters/**/*.tmpl", "packs/*.json"]
+lantern = ["viewer/*.html", "viewer/*.js", "viewer/*.svg", "viewer/*.webmanifest", "starters/**/*.tmpl", "packs/*.json", "typecheck_ts.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

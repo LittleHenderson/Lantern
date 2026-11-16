@@ -106,3 +106,81 @@ export async function POST(req: Request) {
     wd = [f for f in sec["findings"] if f["rule"] == "LA-WALLET-DRAIN"]
     assert len(wd) == 1 and wd[0]["rank"] == "high"
     assert not [f for f in sec["findings"] if f["rule"] == "LA-NOTEBOOK-SECRET"]      # a placeholder is not a key
+
+
+# ------------------------------------------------------------------ the story says what the finding says
+
+def _paid(sec, line):
+    f = next(f for f in sec["findings"] if f["rule"] == "LA-WALLET-DRAIN" and f["line"] == line)
+    return f, f["scenario"], f.get("headline")
+
+
+def test_the_paid_call_story_says_what_the_finding_says_about_a_login(aiapp):
+    """A route that asks for a login and has no limit: the finding says so, and so do the record beside it, the
+    story and the heading. Until 2026-11-15 every paid-call story said "not signed in" and every heading "Anyone",
+    whatever the finding itself had found."""
+    _, sec = aiapp
+    f, story, head = _paid(sec, 31)                                         # POST /api/checkout: a login, no limit
+    assert f["title"].endswith("with no rate limit") and f["paid"] == {"login": True, "limit": False}
+    assert story["steps"][-1] == ("They sign in with an account of their own, and they send POST /api/checkout "
+                                  "again and again.")
+    assert not any("not signed in" in s for s in story["steps"])
+    assert head == "Anyone with an account can make POST /api/checkout spend your money on paid calls"
+    assert story["after_fix"] == "The route has a limit on how often one person can call it."
+    assert "nothing stops it" in story["harm"]                  # still true: a login does not stop a script
+    # the twin beside it, no login and no limit, keeps every word it had
+    f, story, head = _paid(sec, 14)                                         # POST /api/chat
+    assert f["title"].endswith("anyone can call it as often as they like")
+    assert f["paid"] == {"login": False, "limit": False}
+    assert story["steps"][-1] == "They are not signed in, and they send POST /api/chat again and again."
+    assert head == "Anyone can make POST /api/chat spend your money on paid calls"
+    assert story["after_fix"] == "The route needs a signed-in user and has a limit on how often one person can call it."
+    assert "nothing stops it" in story["harm"]
+
+
+def test_the_paid_call_story_with_a_limit_and_no_login(tmp_path):
+    """The third reading: a limit is there and no login. Anyone can still call it, so the heading stays; the story
+    no longer says "again and again" with nothing to stop it, and the fix it names is the login alone."""
+    _write(tmp_path, {
+        "requirements.txt": "fastapi\nslowapi\nanthropic\n",
+        "app.py": '''from fastapi import FastAPI
+import anthropic
+from slowapi import Limiter
+
+app = FastAPI()
+limiter = Limiter(key_func=lambda: "ip")
+
+@app.post("/ask")
+@limiter.limit("5/minute")
+def ask(q: str):
+    return anthropic.Anthropic().messages.create(model="claude-haiku-5-5", max_tokens=100, messages=[{"role": "user", "content": q}])
+''',
+    })
+    sec = scan(build_graph(tmp_path))
+    f, story, head = _paid(sec, 8)                              # a decorated route is reported on its first line
+    assert f["rank"] == "medium" and f["title"].endswith("without a login check")
+    assert f["paid"] == {"login": False, "limit": True}
+    assert story["steps"][-1] == "They are not signed in, and they send POST /ask as often as the limit lets them."
+    assert "nothing stops it" not in story["harm"] and "up to that limit" in story["harm"]
+    assert story["after_fix"] == "The route needs a signed-in user."
+    assert head == "Anyone can make POST /ask spend your money on paid calls"
+
+
+def test_a_paid_call_finding_with_no_record_is_read_from_its_title_or_left_as_it_was(aiapp):
+    """Results written before the record existed carry only the title: its fixed ending says the same. A finding of
+    the same kind from another tool, whose title says nothing of the two, keeps the older words."""
+    from lantern import scenarios
+    g, sec = aiapp
+    old = {k: v for k, v in _paid(sec, 31)[0].items() if k not in ("paid", "scenario", "headline")}
+    assert old["title"] == "POST /api/checkout spends money (payment API) with no rate limit"
+    steps = scenarios.for_finding(old, g)["steps"]
+    assert steps[-1] == "They sign in with an account of their own, and they send POST /api/checkout again and again."
+    assert scenarios.headline(old, g) == "Anyone with an account can make POST /api/checkout spend your money on paid calls"
+    other = dict(old, rule="X-770", title="Requests are not limited")
+    assert scenarios.kind_of(other) == "wallet"
+    assert scenarios.for_finding(other, g)["steps"][-1] == ("They are not signed in, and they send POST /api/checkout "
+                                                            "again and again.")
+    assert scenarios.headline(other, g) == "Anyone can make POST /api/checkout spend your money on paid calls"
+    # a record wins over the title: what the rule found is the fact, the title is its sentence
+    both = dict(old, paid={"login": False, "limit": False})
+    assert scenarios.headline(both, g) == "Anyone can make POST /api/checkout spend your money on paid calls"

@@ -171,12 +171,42 @@ PY_INPUT = {"args", "form", "values", "json", "data", "files", "cookies", "heade
 JS_INPUT = {"query", "params", "body", "headers", "cookies", "signedCookies", "files", "file", "url", "originalUrl",
             "path", "hostname", "host", "ip", "get", "header", "param", "nextUrl", "json", "formData", "text",
             "rawBody", "protocol", "subdomains", "baseUrl", "search", "searchParams", "payload"}
+# tRPC hands a procedure one object: `input` is what the caller sent (as the procedure's `.input()` schema let it
+# through, or as it came: `rawInput`); `ctx` is what the server made for this request (the session, the database).
+TRPC_INPUT = {"input", "rawInput"}
 # What a request object knows about who is signed in (never request data; used by the ownership check).
 IDENT_ATTRS = {"user", "session", "auth", "userId", "user_id", "currentUser", "current_user", "identity", "account",
                "principal", "token_payload", "jwt", "state", "locals", "decoded", "userid", "uid"}
 STRING_ONLY = {"args", "form", "values", "GET", "POST", "query_params", "path_params", "view_args", "headers",
                "cookies", "COOKIES", "META", "params", "url", "path", "originalUrl", "match_info", "query_string"}
 REQUEST_NAMES = {"request", "req"}
+# SvelteKit hands a route one event: the request and its parts, and `locals`, which the server's own hook filled for
+# this request (who is signed in). A helper of the project is handed the event or its `locals`: told by the written
+# type, or by the name in a file of a SvelteKit project that runs on the server (`flow.Engine.param_val`).
+KIT_EVENT_TYPES = re.compile(r"\b(RequestEvent|ServerLoadEvent|PageServerLoadEvent|LayoutServerLoadEvent)\b")
+KIT_LOCALS_TYPES = re.compile(r"\bApp\.Locals\b")
+KIT_SERVER_FILE = re.compile(r"\.server\.[cm]?[jt]s$|(^|/)server/|(^|/)\+server\.[jt]s$")
+# What a SvelteKit app's own hook keeps on `locals` for asking who is signed in, as the sign-in libraries' guides
+# write it: `await locals.auth()` (Auth.js), `locals.safeGetSession()` / `locals.getSession()` (Supabase),
+# `locals.validate()` (Lucia). What such a call hands back is there when somebody is signed in.
+KIT_ASKS = {"auth", "getSession", "safeGetSession", "getUser", "validate", "validateUser", "getSessionAndUser"}
+# Remix and React Router: a session kept with the library's own storage. `getSession(request.headers.get("Cookie"))`
+# hands back the session of whoever sent the cookie, and what the server put into it under a name that says who is
+# signed in (`session.get("userId")`, `session.has("userId")`) is there when somebody is. `createCookieSessionStorage`
+# keeps all of it in the cookie itself, which only the server can have written where the cookie is made with secrets
+# to sign it (`flow.secrets_given`); the other storages keep it on the server, under a number the cookie carries.
+SESSION_LIB = r"(@remix-run/[\w-]+|react-router|@react-router/[\w-]+)"
+SESSION_STORE = re.compile(rf"^{SESSION_LIB}\.create(?P<kind>\w*)SessionStorage$")
+SESSION_COOKIE = re.compile(rf"^{SESSION_LIB}\.createCookie$")
+SESSION_COOKIE_SIGNED = re.compile(rf"^{SESSION_LIB}\.createCookie\(\)$")
+SESSION_ASKS = re.compile(rf"^{SESSION_LIB}\.create\w*SessionStorage\(\)\.getSession$")
+SESSION_HELD = re.compile(rf"^{SESSION_LIB}\.create\w*SessionStorage\(\)\.getSession\(\)$")
+SESSION_READS = {"get", "has"}
+# What such a storage, its cookie or a part taken out of it is called once made (`flow.Engine.lookup` follows these,
+# and nothing else, into the file of the project that made them); `UNSIGNED` is put where the call's `()` would
+# stand when the code does not show that the server alone can have written the session.
+SESSION_MADE = re.compile(rf"^{SESSION_LIB}\.create(\w*SessionStorage|Cookie)\([^()]*\)(\.\w+)?$")
+UNSIGNED = "(not signed)"
 REQUEST_TYPES = re.compile(r"\b(Request|HttpRequest|WSGIRequest|NextRequest|NextApiRequest|FastifyRequest|"
                            r"WebSocket|HTTPConnection|IncomingMessage)\b")
 REQUEST_GLOBALS = {"flask.request", "quart.request", "bottle.request", "flask.globals.request", "sanic.request"}
@@ -733,6 +763,12 @@ SIGNS_IN = re.compile(r"^(make|create|generate|gen|issue|sign|new|build|encode|m
                       r"add|grant|give|refresh|rotate|revoke|delete|remove|clear|destroy)\b|"
                       r"\b(password|passwd|pwd|credentials?|otp|2 ?fa|mfa)\b|"
                       r"^(log ?in|log ?out|sign ?in|sign ?up|sign ?out|register)( user)?$")
+# What a called function is named when it starts or ends a session, or signs somebody in: what it calls on its way
+# (it reads the session it is about to write) is part of signing in, and says nothing of who is calling.
+SESSION_MAKER = re.compile(r"^(make|create|generate|gen|issue|sign|new|build|mint|set|save|store|write|start|begin|"
+                           r"open|commit|grant|give|refresh|rotate|revoke|delete|remove|clear|destroy|end|close)\b"
+                           r".*\b(session|token|jwt|cookie|credentials?|login)\b|"
+                           r"^(log ?in|log ?out|sign ?in|sign ?up|sign ?out|register)( user)?$")
 # What says who is signed in, besides `request.user` and its like (IDENT_ATTRS) and a dependency named for it.
 IDENT_GLOBALS = {"flask_login.current_user", "flask.session", "flask.g.user", "flask.g.current_user",
                  "flask_jwt_extended.current_user", "flask_security.current_user", "flask_security.core.current_user",
@@ -788,8 +824,9 @@ SIGNED_IN = re.compile(r"(^|[._\[\]'\" ])((current_?)?(user|account|member|princ
 WHICH_PAGE = re.compile(r"^(request|req|ctx|c)\.(endpoint|path|url|originalUrl|baseUrl|url_rule|blueprint|full_path|"
                         r"routerPath|route)\b")
 # Which verb the request is (`req.method === 'OPTIONS'`, `request.method in ("GET", "HEAD")`): a check may let some
-# verbs through unasked, and is then a login for the routes of the other verbs only (`flow.which_verbs`)
-VERB_READ = re.compile(r"^(request|req|ctx|c)(\.(request|req))?\.method$")
+# verbs through unasked, and is then a login for the routes of the other verbs only (`flow.which_verbs`).
+# `event.request.method` is SvelteKit's.
+VERB_READ = re.compile(r"^(request|req|ctx|c|event)(\.(request|req))?\.method$")
 VERB_CASE = {"toUpperCase", "toLowerCase", "upper", "lower"}
 ALL_VERBS = frozenset(v.upper() for v in HTTP_VERBS)
 # Asked of the request itself (Passport): `req.isAuthenticated()`.
@@ -896,6 +933,10 @@ REFUSAL = re.compile(r"forbidden|denied|not allowed|unauthori[sz]ed|not authori[
 REFUSAL_CALL = re.compile(r"^(abort|redirect|deny|reject|fail)$|forbidden|unauthori[sz]ed|"
                           r"permission_?denied|httpexception|notfound", re.I)
 REFUSAL_CODES = {401, 403, 404, "401", "403", "404"}
+# JavaScript functions that refuse by throwing, called as they are (no `throw` before them): SvelteKit 2's `error`
+# and `redirect`, Next.js's `redirect`, `permanentRedirect`, `notFound`, `unauthorized` and `forbidden`. Where such a
+# failure is caught and the request goes on, the check asked nothing (`flow.thrown`).
+JS_THROWS = {"error", "redirect", "permanentRedirect", "notFound", "unauthorized", "forbidden"}
 # Database text that reads, changes or removes rows that exist (an INSERT makes a new one: nobody else's record)
 RECORD_SQL = re.compile(r"^\W*(select|update|delete|with|replace)\b", re.I)
 SQL_WHERE = re.compile(r"\bwhere\b", re.I)
@@ -923,6 +964,11 @@ DATA_LIBS = re.compile(r"^(sqlalchemy|flask_sqlalchemy|django\.db|peewee|tortois
                        r"objection|bookshelf|mikro-orm|@mikro-orm/[\w-]+|drizzle-orm|waterline|@supabase/[\w-]+|"
                        r"firebase-admin|firebase/firestore|@google-cloud/firestore|dynamoose|redis-om|"
                        r"flask_pymongo|" + SQL_LIBS[1:] + r"(?![\w-])")
+# A query builder whose conditions are functions of the library: `where(eq(notes.id, id))`,
+# `and(eq(…), eq(notes.ownerId, user.id))`, `inArray(notes.id, ids)`. What such a function hands back stands for the
+# values it was given, as the object in `{ where: { id } }` does. Not the `sql` tag: its text is read elsewhere.
+CONDITIONS = re.compile(r"^drizzle-orm(/[\w.-]+)*\.(eq|ne|gt|gte|lt|lte|and|or|not|inArray|notInArray|like|ilike|notLike|"
+                        r"notIlike|between|notBetween|isNull|isNotNull|arrayContains|arrayContained|arrayOverlaps)$")
 # Calls that write what they are given onto a stored record, or make one of it.
 WRITE_MEMBERS = {"update", "create", "insert", "insertOne", "insert_one", "insertMany", "insert_many", "save",
                  "updateOne", "update_one", "updateMany", "update_many", "findByIdAndUpdate", "findOneAndUpdate",

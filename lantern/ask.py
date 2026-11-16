@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from . import programs, release, results
+from .graph import route_words
 from .lanes import LANE_WORDS  # the four stack stops: Browser, Frontend, Server, Data
 
 SYSTEM = """You are Lantern's assistant inside the Lantern app. Lantern maps an app's code (every path from a
@@ -75,7 +76,7 @@ def facts(project_dir: Path, focus: dict | None = None, limit: int = 40, out: Pa
     nodes = g.get("nodes") or []
     routes = [n for n in nodes if isinstance(n, dict) and (n.get("entry") or {}).get("kind") == "route"][:limit]
     if routes:
-        lines.append("Routes: " + "; ".join(f"{(n['entry'] or {}).get('detail')} → {_short(n.get('qualname') or n.get('id') or '')} ({n.get('file')}:{n.get('start_line')})" for n in routes))
+        lines.append("Routes: " + "; ".join(f"{route_words((n['entry'] or {}).get('detail'))} → {_short(n.get('qualname') or n.get('id') or '')} ({n.get('file')}:{n.get('start_line')})" for n in routes))
     st = g.get("stats") or {}
     if st:
         lines.append(f"Map: {st.get('nodes', {}).get('callable', '?')} functions, {st.get('internal_call_edges', '?')} calls between them, {st.get('entry_points', '?')} entry points, languages {', '.join((g.get('meta') or {}).get('languages') or {})}.")

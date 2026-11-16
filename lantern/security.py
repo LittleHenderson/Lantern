@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import context, flowscan, kept, lanes, listing, manifest, programs, quick, results, unread
 from .calls import NAME_ONLY_VIA
+from .flow_rules import TRPC_INPUT
 from .graph import Graph
 from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_bytes, project_text, skipped_dir
 from .strings import sub as strings_sub
@@ -678,6 +679,10 @@ RUBY_REQUEST_DATA = re.compile(REQUEST_DATA.pattern + r"|\bparams\b(?:\[[^\]\n]*
 # C/C++: program arguments, the environment, what arrives on a socket or stdin, and the request objects of cpp-httplib,
 # Crow, Drogon and Pistache.
 C_EXTS = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".ipp")
+# JavaScript has no `input()` of its own: `.input(…)` there is a method of what stands before the dot (a tRPC
+# procedure's `.input(z.object(…))` says what it accepts), not Python's built-in that asks the person at the keyboard
+JS_FILES = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts")
+JS_REQUEST_DATA = re.compile(REQUEST_DATA.pattern.replace(r"\binput\(", r"(?<![\w$.])input\("))
 C_REQUEST_DATA = re.compile(REQUEST_DATA.pattern + r"|\bargv\s*\[\s*\w*\s*\]|\bgetenv\s*\(|\b(?:recv|recvfrom|fgets|gets)\s*\(|"
                             r"\bgetline\s*\(\s*(?:std::)?cin\b|\bstd::cin\b|\bscanf\s*\(|\breq(?:uest)?(?:\.|->)(?:get_param_value|get_header_value|"
                             r"get_file_value|body|params|path_params|url_params|matches|getParameter|getBody|getJsonObject|"
@@ -804,7 +809,8 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
     if f["file"].endswith(".php"):
         src = [_php_line(x) for x in src]
         show = (lambda x: re.sub(r"^(request|_[A-Z]+)\b", r"$\1", x).replace(".", "->"))   # back to PHP spelling
-    req_re = C_REQUEST_DATA if f["file"].endswith(C_EXTS) else REQUEST_DATA
+    req_re = C_REQUEST_DATA if f["file"].endswith(C_EXTS) else JS_REQUEST_DATA if f["file"].endswith(JS_FILES) \
+        else REQUEST_DATA
     if f["file"].endswith(C_EXTS):
         src = [_c_line(x) for x in src]
     if f["file"].endswith(".rb"):
@@ -854,6 +860,9 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         params = [m.group(1) for piece in inner.split(",") for m in [re.search(r"([A-Za-z_$][\w$]*)\s*$", piece.strip())] if m]
     else:
         params = re.findall(r"[(,{]\s*\*{0,2}(?:\.\.\.)?([A-Za-z_$][\w$]*)", plist)
+        if (n.entry or {}).get("trpc") and "{" in plist:
+            # a tRPC procedure is handed one argument: its `input` is what the request sent, its `ctx` the server made
+            params = [x for x in params if x in TRPC_INPUT]
     tainted = {name: f"parameter `{name}`" for name in params if name not in ("self", "cls", "this")}
     stmts = _statements(src, n.start_line, max(n.end_line or n.start_line, line + 3), js)
     flagged = next((st for st in stmts if st[0] <= line <= st[1]), None)
@@ -897,7 +906,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
 def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
     if not file:
         return None
-    best, best_span = None, None
+    best, best_span, of_file = None, None, False
     for n in g.nodes_in(file):
         if n.file != file or n.start_line is None:
             continue
@@ -907,8 +916,9 @@ def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
             continue
         if n.start_line <= line <= (n.end_line or n.start_line):
             span = (n.end_line or n.start_line) - n.start_line
-            if best_span is None or span < best_span:
-                best, best_span = n.id, span
+            # a function as long as its file (a Svelte component is its whole file) before the file itself
+            if best_span is None or span < best_span or (span == best_span and of_file and n.kind != "module"):
+                best, best_span, of_file = n.id, span, n.kind == "module"
     return best
 
 

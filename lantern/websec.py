@@ -34,7 +34,7 @@ from pathlib import Path
 
 from .flow_rules import READS_TOKEN, VERIFIES
 from .graph import Graph
-from .js_frontend import jwt_role
+from .js_frontend import TEST_RE as JS_TEST_RE, jwt_role
 from . import listing, strings
 from .python_frontend import inside_repo, project_text, skipped
 
@@ -126,7 +126,8 @@ AUTH_WORDS = re.compile(
 JS_AUTH_WORDS = re.compile(r"\b(?:get server session|get session|use session)\b")
 IDENT = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
 # Read from a handler's body. Shapes that are a check wherever they appear: the framework's view of the caller.
-BODY_AUTH_SHAPED = re.compile(r"request\.user|req\.user|locals\.user|session\.user|session\[.{0,20}user|"
+BODY_AUTH_SHAPED = re.compile(r"request\.user|req\.user|locals\.user|locals\.session|session\.user|"
+                              r"session\[.{0,20}user|"
                               r"\bin\s+session\s*[:)]|request\.state\.user|ctx\.state\.user|req\.session|"
                               r"request\.session", re.I)
 # A parameter whose bare name means the caller (anything else named like an auth word is data: `permissions`)
@@ -622,7 +623,7 @@ def _cors_finding(rel, line, creds):
                     more="Fine for a truly public API; otherwise list your own frontend's address instead of '*'.")
 
 
-def database_rules(repo: Path) -> list[dict]:
+def database_rules(repo: Path, g: Graph | None = None) -> list[dict]:
     out = []
     for p in _files(repo, names=("firestore.rules", "storage.rules", "database.rules.json")):
         text = _read(p, repo)
@@ -637,29 +638,137 @@ def database_rules(repo: Path) -> list[dict]:
         for m in re.finditer(r"['\"]\.(read|write)['\"]\s*:\s*true", text):
             out.append(_finding("LW-DB-OPEN", "Realtime Database rules let anyone read or write", "HIGH", rel,
                                 _line_of(text, m.start()), category="config", cwe=284, fixed_rank="critical"))
-    sql_files = list(_files(repo, {".sql"}))
     uses_supabase = (repo / "supabase").is_dir() or any(
         "@supabase" in _read(pj, repo) for pj in _files(repo, names=("package.json",)))
-    if sql_files and uses_supabase:
-        rls, created = set(), []
-        for p in sql_files:
-            text = _read(p, repo)
-            for m in re.finditer(r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?\s+"
-                                 r"enable\s+row\s+level\s+security", text, re.I):
-                rls.add(m.group(1).lower())
-            for m in re.finditer(r"create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?", text, re.I):
-                created.append((m.group(1).lower(), p.relative_to(repo).as_posix(), _line_of(text, m.start())))
-            for m in re.finditer(r"create\s+policy[^;]*using\s*\(\s*true\s*\)", text, re.I | re.S):
-                out.append(_finding("LW-NO-RLS", "Row-level security policy allows everyone (using (true))",
-                                    "MEDIUM", p.relative_to(repo).as_posix(), _line_of(text, m.start()),
-                                    category="config", cwe=284, fixed_rank="medium"))
-        for name, rel, line in created:
-            if name not in rls:
-                out.append(_finding(
-                    "LW-NO-RLS", f"Table '{name}' has no row-level security: anyone with the public key can read it",
-                    "HIGH", rel, line, category="config", cwe=284, fixed_rank="high",
-                    more=f"alter table {name} enable row level security; then add policies for who may read and write."))
+    if uses_supabase:
+        out += row_rules(repo, g)
     return out
+
+
+ROW_WAYS = {"insert": "add rows", "update": "change any row", "delete": "remove any row"}
+ROW_WHO = {"everyone": "anyone", "signed-in": "any signed-in user"}
+ROW_ORDER = ("select", "insert", "update", "upsert", "delete")
+ROW_RANKS = ("medium", "high", "critical")
+
+
+def _and(words) -> str:
+    words = list(words)
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def row_rules(repo: Path, g: Graph | None = None) -> list[dict]:
+    """`LW-NO-RLS`: where a Supabase project's SQL files leave a table open (`lantern/rowrules.py`, which replays
+    them in the order they are applied), read with the code that reaches the table when the map is given.
+
+    * the files create the table and never switch row-level security on: high, and critical where code that runs in
+      the browser or on the phone reaches the table (`lantern/clientside.py`, through the map's `db:<table>` links);
+      where code that runs in the database names row-level security, whether it is on is not known: medium, a guess;
+    * row-level security is on and a policy lets every one of its roles change or remove any row: for everyone
+      high, critical where the visitor's side reaches the table; for any signed-in user high;
+    * such a policy that only lets rows be added, or lets every row be read: medium.
+
+    A policy for the server's own roles, one that asks who is calling, and one a restrictive policy narrows are
+    none. A table the files do not create is not judged. The id is the one the older rule gave the same line."""
+    from . import clientside, rowrules
+    st = rowrules.read(repo)
+    reached: dict[str, list[dict]] = {}
+    if g is not None:
+        side = clientside.where(g)
+        rows: dict[tuple[str, str], dict] = {}
+        for c in g.meta.get("db_calls") or ():
+            if c["src"] not in side:
+                continue
+            row = rows.setdefault((c["id"], c["src"]), {"node": c["src"], "does": [], "file": c["file"],
+                                                        "line": c["line"], **side[c["src"]]})
+            row["line"] = min(row["line"], c["line"])
+            if c["op"] not in row["does"]:
+                row["does"].append(c["op"])
+        for (tid, _), row in sorted(rows.items()):
+            row["does"].sort(key=lambda o: ROW_ORDER.index(o) if o in ROW_ORDER else len(ROW_ORDER))
+            reached.setdefault(tid, []).append(row)
+    best: dict[str, dict] = {}
+
+    def add(t, state, rank, title, file, line, why, more, conf="HIGH", **facts):
+        name = t.name if t.schema == "public" else t.key
+        tid = f"db:{name}"
+        f = _finding("LW-NO-RLS", title, "MEDIUM" if rank == "medium" else "HIGH", file, line, category="config",
+                     conf=conf, cwe=284, fixed_rank=rank, more=more)
+        f["fixed_why"] = why
+        f["row_rules"] = {"table": t.key, "state": state, **facts, "client": reached.get(tid, [])}
+        if g is not None and tid in g.nodes:
+            f["pin"] = tid
+        had = best.get(f["id"])
+        if had is None or ROW_RANKS.index(rank) > ROW_RANKS.index(had["fixed_rank"]):
+            best[f["id"]] = f
+
+    def visitor(t) -> str:
+        """The code on the visitor's side that reaches the table, in words, or nothing."""
+        client = reached.get("db:" + (t.name if t.schema == "public" else t.key))
+        if not client:
+            return ""
+        c = client[0]
+        more = f" and {len(client) - 1} more" if len(client) > 1 else ""
+        return (f"code that runs in {c['on']} reaches this table (`{_func_name(g, c['node'])}` in "
+                f"{c['file']}:{c['line']}{more}; {c['why']})")
+
+    for t in st.tables.values():
+        name = t.name if t.schema == "public" else t.key
+        seen = visitor(t)
+        if t.file is not None and t.rls is False:
+            fix = f"alter table {name} enable row level security; then add policies for who may read and write."
+            if t.policies:
+                fix += " The table's policies are not in force while row-level security is off."
+            if st.in_database:
+                at = "; ".join(f"{f}:{ln}" for f, ln in st.in_database[:3])
+                add(t, "off-in-the-files", "medium",
+                    f"Table '{name}' has no row-level security in the files that create it (code in the database "
+                    "may switch it on)", t.file, t.line,
+                    "Medium, and a guess: the files that create the table never switch row-level security on, but "
+                    f"code that runs in the database names row-level security ({at}), and Lantern does not run "
+                    "that code.", f"If {at} does not switch it on for this table: {fix}", conf="LOW")
+                continue
+            why = (f"Critical: {seen}, so the key that opens the table and the table's name are in every visitor's "
+                   "hands, and nothing in the database asks who is reading or writing." if seen else
+                   "High: with row-level security off the table answers anyone who has the project's public key. "
+                   "Lantern found no code on the visitor's side that reaches it, which is not proof that none does.")
+            add(t, "off", "critical" if seen else "high",
+                f"Table '{name}' has no row-level security: anyone with the public key can read and change every row",
+                t.file, t.line, why, fix)
+            continue
+        wrote = set()
+        for pol, ways, who in t.open_writes():
+            wrote.add((pol.file, pol.line))
+            lets = _and(ROW_WAYS[w] for w in ways)
+            title = f"Policy '{pol.name[:60]}' on '{name}' lets {ROW_WHO[who]} {lets}"
+            fix = ("Write the policy so that it compares the row's owner with who is asking, for example "
+                   "`using (auth.uid() = user_id) with check (auth.uid() = user_id)`.")
+            if "update" in ways and pol.check is not None and not pol.check_always:
+                fix += (" A changed row still has to pass this policy's `with check`, which keeps nobody from "
+                        "taking another person's row over.")
+            if not {"update", "delete"} & set(ways):
+                rank, why = "medium", (f"Medium: the policy lets {ROW_WHO[who]} add rows and nothing else. That is "
+                                       "often meant (a sign-up, a feedback form), and it still lets rows be added "
+                                       "without end or in another person's name.")
+            elif who == "signed-in":
+                rank, why = "high", ("High: the policy asks only that somebody is signed in, so any account can "
+                                     f"{lets} that is not its own.")
+            else:
+                rank = "critical" if seen else "high"
+                why = (f"Critical: the policy lets anyone {lets}, and {seen}." if seen else
+                       f"High: the policy lets anyone who has the project's public key {lets}. Lantern found no "
+                       "code on the visitor's side that reaches the table, which is not proof that none does.")
+            add(t, "open-write", rank, title, pol.file, pol.line, why, fix, policy=pol.name, lets=list(ways),
+                **{"for": who})
+        for pol, who in t.open_reads():
+            if (pol.file, pol.line) in wrote:
+                continue
+            add(t, "open-read", "medium", f"Policy '{pol.name[:60]}' on '{name}' lets {ROW_WHO[who]} read every row",
+                pol.file, pol.line,
+                f"Medium: the policy lets {ROW_WHO[who]} read every row of the table. That is right for what is "
+                "meant for all and wrong for anything personal.",
+                "If the rows are personal, let a row be read only by its owner: `using (auth.uid() = user_id)`.",
+                policy=pol.name, lets=["select"], **{"for": who})
+    return sorted(best.values(), key=lambda f: (f["file"], f["line"]))
 
 
 _NOT_IN_A_NAME = re.compile(r"[^A-Za-z0-9]+")
@@ -710,9 +819,13 @@ def mentions_auth(code: str, js: bool = False) -> bool:
 
 
 def _func_name(g: Graph, nid: str) -> str:
-    """Just the function's own name (never its module path, which may contain words like 'auth')."""
+    """Just the function's own name (never its module path, which may contain words like 'auth'). A database table
+    (`db:<table>`) is no function and has none: a route that removes a row of `auth_tokens` has asked nobody who is
+    calling."""
     if nid.startswith("ext:"):
         return nid[4:]
+    if nid.startswith("db:"):
+        return ""
     n = g.nodes.get(nid)
     if n is None:
         return ""
@@ -1057,11 +1170,20 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doub
             d_check = re.sub(r"[A-Za-z_$][\w$]*", lambda m: "x" if m.group(0) in doubted else m.group(0), d_check)
         if auth_ident(d_check, js):
             return f"decorator @{d.split('(')[0]}"
+    for name in ((n.entry or {}).get("trpc") or {}).get("procedures") or ():
+        # tRPC: `create: protectedProcedure.input(…).mutation(…)`. The route is built on a procedure, and the login
+        # step is that procedure's, not a line of the handler: its name says so, as a middleware's does
+        if name not in doubted and auth_word(name, True):
+            return f"the procedure `{name}` it is built on"
     sig = signature_sign(n.signature or "", doubted)
     if sig:
         return sig
     for mid in (n.entry or {}).get("middleware") or ():   # Express: router.delete('/x', requireLogin, handler)
         if _in_doubt(mid, doubt):
+            continue
+        if ((g.nodes[mid].entry if mid in g.nodes else None) or {}).get("serves"):
+            # SvelteKit's hook stands before every route and usually turns away only some addresses: whatever it is
+            # called (`sequence(populate, authGuard)`), its name does not say this route is one of them
             continue
         # the function's own name: not the package or file it comes from, and never the folders on the way
         name = _func_name(g, mid).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]
@@ -1090,9 +1212,10 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doub
     return None
 
 
-def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> list[str]:
+def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, stop=None) -> list[str]:
     """The name of every function within `depth` calls of a route that is named like an auth check: the walk of
-    `route_auth_sign`, which stops at the first one."""
+    `route_auth_sign`, which stops at the first one. `stop(name)`: a function whose own calls are not walked (its
+    name is still read)."""
     out, seen, frontier = [], {n.id}, [n.id]
     for _ in range(depth):
         nxt = []
@@ -1104,9 +1227,54 @@ def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> list
                 name = _func_name(g, v)
                 if auth_word(name, v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
                     out.append(name)
-                nxt.append(v)
+                if stop is None or not stop(name):
+                    nxt.append(v)
         frontier = nxt
     return out
+
+
+# tRPC: the step that turns a caller away is a function put before the procedure (`t.procedure.use(fn)`), under
+# whatever name (`adminProcedure`, `authed`, `isAuthed`): it throws `new TRPCError({ code: "UNAUTHORIZED" })`, or
+# FORBIDDEN. Read from the lines of the functions the route's entry names (`entry["middleware"]`) and of the handler
+# itself. A text or a comment that holds those words is none, and neither is another code (TOO_MANY_REQUESTS).
+TRPC_REFUSES = re.compile(r"\bTRPCError\s*\(\s*\{[^{}]{0,200}?\bcode\s*:\s*[\"'`](UNAUTHORIZED|FORBIDDEN)[\"'`]")
+
+
+def _refusal_in(text: str | None, first: int, last: int) -> tuple[str, int] | None:
+    """(code, line) of the first `new TRPCError({ code: "UNAUTHORIZED" })` (or FORBIDDEN) written as code in these
+    lines of a file."""
+    if not text or not first:
+        return None
+    raw = "\n".join(text.splitlines()[first - 1:last or first])
+    code = code_only(raw, js=True)
+    for m in TRPC_REFUSES.finditer(raw):
+        if code[m.start():m.start() + 9] == "TRPCError":
+            return m.group(1), first + raw.count("\n", 0, m.start(1))
+    return None
+
+
+def trpc_refusal(g: Graph, n, text: str | None, doubt=None) -> str | None:
+    """A tRPC route whose own way turns a caller away: one of the functions that run before it does (named after
+    the procedure it was put on), or the handler itself. In words, or None."""
+    e = n.entry or {}
+    if not e.get("trpc"):
+        return None
+    for mid in e.get("middleware") or ():
+        fn = g.nodes.get(mid)
+        if fn is None or not fn.file or _in_doubt(mid, doubt):
+            continue
+        body = text if fn.file == n.file else None
+        if body is None:
+            try:
+                body = project_text(Path(g.repo_root) / fn.file, g.repo_root)
+            except OSError:
+                continue
+        hit = _refusal_in(body, fn.start_line or 0, fn.end_line or 0)
+        if hit:
+            who = re.sub(r"\.use\d*$", "", fn.qualname.split("::")[-1])
+            return f"`{who}` turns a caller away (TRPCError {hit[0]}, {fn.file}:{hit[1]})"
+    hit = _refusal_in(text, n.start_line or 0, n.end_line or 0)
+    return f"it turns a caller away itself (TRPCError {hit[0]}, line {hit[1]})" if hit else None
 
 
 def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None, doubt=None) -> tuple[str, str] | None:
@@ -1118,7 +1286,7 @@ def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None, doubt=
     are no sign (`_in_doubt`), and neither are the handler's lines on which the token library is called. What
     `passed_over` names on the route (a login made optional, a token only carried in) is no sign either."""
     skip = frozenset(passed_over(n, text))
-    sign = route_auth_sign(g, n, adj, doubt=doubt, skip=skip)
+    sign = route_auth_sign(g, n, adj, doubt=doubt, skip=skip) or trpc_refusal(g, n, text, doubt)
     if sign:
         return "strong", sign
     if text is None or not n.file:
@@ -1147,6 +1315,153 @@ def mutating_route(detail: str) -> bool:
     return bool({v.upper() for v in verb.split("/")} & MUTATING)
 
 
+# --------------------------------------------------------- a Server Action that changes data (LW-AUTH-MISSING)
+# A Server Action has no verb to read and no request written in the frontend, so what it does is read from the map and
+# from its lines: a link to a database table with a change among what is done there, an SQL text that changes rows, or
+# a call whose last name is what a database library calls a change. Names, so a heuristic: the finding says which line
+# it read. Until measured on real apps (`bench/`) the list is provisional.
+ACTION_SQL = re.compile(r"\b(?:insert\s+into|update\s+[\w.\"`\[\]]+\s+set|delete\s+from|replace\s+into|merge\s+into|"
+                        r"truncate\s+table)\b", re.I)
+ACTION_CHANGE = re.compile(
+    r"(?P<dot>\??\.)\s*(?P<name>create|createMany|createManyAndReturn|update|updateMany|upsert|delete|deleteMany|"
+    r"insert|insertOne|insertMany|insertInto|updateOne|updateTable|deleteOne|deleteFrom|replaceOne|findOneAndUpdate|"
+    r"findOneAndDelete|findOneAndReplace|findByIdAndUpdate|findByIdAndDelete|findByIdAndRemove|bulkCreate|destroy|"
+    r"save|remove|softDelete|softRemove|\$executeRaw|\$executeRawUnsafe)\s*(?=[(`~])")
+ACTION_CHANGE_BARE = re.compile(r"(?<![\w$.])(?P<name>setDoc|addDoc|updateDoc|deleteDoc)\s*\(")
+# what such a name is said on that is no database: the request's own parts, the browser's and the language's objects
+ACTION_NOT_DATA = frozenset(
+    "formData form data cookies cookieStore headers params searchParams url URL map set cache localStorage "
+    "sessionStorage document window console Object Array JSON Math Promise router res response req request event "
+    "ref state this crypto createHash createHmac hash hmac".split())
+ACTION_OWN = re.compile(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]*)?=\s*(?:await\s+)?(?:new\s+(?:Set|Map|"
+                        r"WeakSet|WeakMap|URLSearchParams|FormData|Headers|URL|AbortController)\b|"
+                        r"(?:cookies|headers|draftMode)\s*\()")
+# The libraries that keep an app's data, by the name they are installed under. `create`, `update` and `delete` are
+# also what a model provider, a payment provider and a mail service call their requests: where the map followed a
+# call into a library, only one of these makes it a change of the app's data.
+ACTION_DATA_LIBS = frozenset(
+    "@prisma/client prisma drizzle-orm mongoose mongodb sequelize sequelize-typescript typeorm knex kysely objection "
+    "bookshelf pg pg-promise postgres mysql mysql2 mariadb better-sqlite3 sqlite sqlite3 mssql oracledb "
+    "@vercel/postgres @vercel/kv @neondatabase/serverless @libsql/client @planetscale/database @electric-sql/pglite "
+    "@supabase/supabase-js @supabase/ssr @supabase/auth-helpers-nextjs firebase firebase-admin "
+    "@google-cloud/firestore @google-cloud/datastore @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb dynamoose redis "
+    "ioredis @upstash/redis convex @mikro-orm/core @mikro-orm/postgresql @mikro-orm/mysql @mikro-orm/sqlite "
+    "@mikro-orm/mongodb neo4j-driver cassandra-driver @clickhouse/client faunadb fauna pocketbase nedb lowdb pouchdb "
+    "dexie payload".split())
+PACKAGE_NAME = re.compile(r"(@[a-z0-9][\w.-]*/)?[a-z0-9][\w.-]*")
+DB_CHANGES = {"insert": "adds rows to", "update": "changes rows of", "upsert": "adds or changes rows of",
+              "delete": "deletes rows of"}
+
+
+def _chain_root(code: str, dot: int) -> str | None:
+    """The first name of the chain whose last dot is at `dot` (`db` in `db.note.delete`), read backwards over names,
+    dots and balanced brackets, 400 characters at most. None when the chain begins with something that is no name."""
+    i, limit, root = dot, max(0, dot - 400), None
+    while True:
+        j = i
+        while j > limit and code[j - 1].isspace():
+            j -= 1
+        while j > limit and code[j - 1] in ")]":
+            depth = 0
+            while j > limit:
+                c = code[j - 1]
+                depth += 1 if c in ")]" else -1 if c in "([" else 0
+                j -= 1
+                if depth == 0:
+                    break
+            if depth:
+                return None
+        k = j
+        while k > limit and (code[k - 1].isalnum() or code[k - 1] in "_$"):
+            k -= 1
+        if k == j:
+            return None
+        root, i = code[k:j], k
+        while i > limit and code[i - 1].isspace():
+            i -= 1
+        if i > limit and code[i - 1] == ".":
+            i -= 2 if i - 1 > limit and code[i - 2] == "?" else 1
+            continue
+        return root
+
+
+def _library_called(g: Graph, n, line: int, name: str) -> str | None:
+    """The package a member call named `name`, written on this line of `n` (or begun up to five lines above it, for
+    a chain broken over lines), goes into, where the map followed the call into a library; None where it did not,
+    and for an import that names a file of the project (`@/lib/db`, `../db`)."""
+    best = None
+    for e in g.callees(n.id):
+        if not e.dst.startswith("ext:") or e.dst.startswith("ext:HTTP ") or not e.dst.rstrip("()").endswith("." + name):
+            continue
+        at = max((ln for ln in e.lines or () if line - 5 <= ln <= line), default=None)
+        if at is not None and (best is None or at > best[0]):
+            spec = e.dst[4:].split(".", 1)[0]
+            parts = spec.split("/")
+            best = (at, "/".join(parts[:2]) if spec.startswith("@") else parts[0])
+    return best[1] if best and PACKAGE_NAME.fullmatch(best[1]) else None
+
+
+def _change_in(g: Graph, n, text: str | None) -> tuple[str, int] | None:
+    """What shows that this function changes data, in words, and the line it is on; None when nothing does."""
+    for c in g.meta.get("db_calls") or ():
+        if c.get("src") == n.id and c.get("op") in DB_CHANGES:
+            return f"it {DB_CHANGES[c['op']]} the table `{c.get('table')}`", c.get("line") or n.start_line or 0
+    if not text or not n.start_line:
+        return None
+    first = n.start_line
+    raw = "\n".join(text.splitlines()[first - 1:n.end_line or first])
+    quoted = strings.sub("'\"", _blank, strings.templates(_blank, raw))            # strings blanked, comments kept
+    code = re.sub(r"//[^\n]*", _blank_data, strings.block_comments(_blank_data, quoted))   # comments `^`, strings `~`
+    for m in ACTION_SQL.finditer(raw):
+        at = m.start()
+        if quoted[at] != raw[at] and code[at] == "~":       # inside a string, and that string not inside a comment
+            return f"it holds SQL that changes rows (`{' '.join(m.group(0).split())[:60]}`)", first + raw.count("\n", 0, at)
+    own = set(ACTION_OWN.findall(code))
+    for m in ACTION_CHANGE.finditer(code):
+        root = _chain_root(code, m.start("dot"))
+        if root is not None and (root in ACTION_NOT_DATA or root in own):
+            continue
+        line = first + raw.count("\n", 0, m.start())
+        into = _library_called(g, n, line, m.group("name"))
+        if into is not None and into not in ACTION_DATA_LIBS:
+            continue    # a model provider's `create`, a payment provider's `update`: none of the app's own data
+        said = " ".join(raw[max(m.start() - 40, 0):m.end()].split())
+        said = re.search(r"[\w$.?()\[\]]*$", said).group(0)[-60:] or m.group("name")
+        return f"it calls `{said.lstrip('.?)]')}`", line
+    m = ACTION_CHANGE_BARE.search(code)
+    if m:
+        return f"it calls `{m.group('name')}`", first + raw.count("\n", 0, m.start())
+    return None
+
+
+def action_change(g: Graph, n, adj: dict[str, list[str]], texts: dict[str, str], depth: int = 2) -> tuple[str, int] | None:
+    """What shows that a Server Action changes data: its own lines, then those of the project's JS/TS functions it
+    calls, `depth` calls deep. The words name the function when it is not the action itself; the line is the
+    action's own (where it calls on) or the one read."""
+    seen, frontier = {n.id}, [n]
+    for _ in range(depth + 1):
+        nxt = []
+        for fn in frontier:
+            if fn.file and fn.file not in texts:
+                try:
+                    texts[fn.file] = project_text(Path(g.repo_root) / fn.file, g.repo_root)
+                except OSError:
+                    texts[fn.file] = ""
+            found = _change_in(g, fn, texts.get(fn.file or ""))
+            if found:
+                if fn is n:
+                    return found
+                return f"{found[0]}, in `{fn.name}` ({fn.file}:{found[1]}), which the action calls", n.start_line or 0
+            for dst in adj.get(fn.id, ()):
+                callee = g.nodes.get(dst)
+                if callee is None or dst in seen or not dst.startswith("js:") or callee.kind in ("module", "class"):
+                    continue
+                seen.add(dst)
+                nxt.append(callee)
+        frontier = nxt
+    return None
+
+
 # Said on a finding the flow step asks for: the route calls a library that reads a login token, and that is not
 # taken as a login check there. What Lantern found, and the three ways it comes about; never "the token is not
 # checked", which Lantern has not shown.
@@ -1156,8 +1471,57 @@ TOKEN_LETS_ON = ("The code on the way to this route calls a library that reads a
                  "answer is not waited for. So that call was not taken as a login check for this route. ")
 
 
+def _actions_unasked(g: Graph, adj: dict[str, list[str]], texts: dict[str, str], doubt=None,
+                     only=None) -> list[dict]:
+    """Server Actions that change data, that the project's own code uses, and in which no login check is found.
+    With `only` (`missing_auth`): those actions alone, read with `doubt`."""
+    used: set[str] = set()
+    for e in g.call_edges():
+        src = g.nodes.get(e.src)
+        if src is not None and e.src != e.dst and src.file and not JS_TEST_RE.search(src.file):
+            used.add(e.dst)
+    out = []
+    for n in g.nodes.values():
+        route = str((n.entry or {}).get("detail") or "")
+        if (n.entry or {}).get("kind") != "route" or not route.startswith("ACTION ") or n.id not in used:
+            continue
+        if only is not None and n.id not in only:
+            continue
+        if is_public_route(route) or (n.file and JS_TEST_RE.search(n.file)):
+            continue
+        change = action_change(g, n, adj, texts)
+        if not change:
+            continue
+        sign = login_check(g, n, adj, texts.get(n.file or ""), doubt=doubt)
+        if sign and sign[0] == "strong":
+            continue
+        name = route.partition(" ")[2]
+        more = ("Heuristic: a Server Action has an address of its own on your server, and anyone who has that address "
+                f"can send to it, with or without your pages. Lantern read this one as changing data because {change[0]}"
+                f"{'' if ', in `' in change[0] else f' (line {change[1]})'}, looked three calls deep for anything named "
+                "like an auth check (current_user, auth, login_required, token, permission...) and read the action's "
+                "own lines for the same words. ")
+        if sign:
+            more += (f"The only sign in the action is that {sign[1]}: that finds a record, not the caller. "
+                     "Check the signed-in user as well. ")
+        more += passed_over_words(n, texts.get(n.file or ""))
+        rows = (texts.get(n.file or "") or "").splitlines()
+        shown = rows[change[1] - 1].strip() if 0 < change[1] <= len(rows) else ""
+        title = f"The Server Action {name} changes data, the app uses it, and no login check was found"
+        if only is not None:
+            title = (f"The Server Action {name} changes data, the app uses it, and Lantern found nothing that turns "
+                     "away a request whose login token does not hold")
+            more = TOKEN_LETS_ON + more
+        out.append(_finding(
+            "LW-AUTH-MISSING", title,
+            "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306, fixed_rank="medium",
+            more=more + "If this action is meant to be public, ignore it.", snippet=shown))
+    return out
+
+
 def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
-    """Routes the frontend calls that change data, where no login check is visible within 3 calls. With `only`
+    """Routes the frontend calls that change data, where no login check is visible within 3 calls, and Server
+    Actions the project uses that change data (`_actions_unasked`: an action has no verb and no request to read). With `only`
     (the map's nodes of routes, from the flow step: `flow.Result.caught`) those routes are asked instead, called by
     the frontend or not, and read with `doubt` (`login_check`): a token library on the way to them is no sign."""
     out = []
@@ -1176,6 +1540,8 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
         route = n.entry.get("detail") or ""
         if not mutating_route(route) or is_public_route(route):
             continue
+        if n.entry.get("serves"):     # the one door every tRPC procedure stands behind, SvelteKit's `handle`,
+            continue                   # which runs before every route: the routes behind it are asked
         if n.file and n.file not in texts:
             try:
                 texts[n.file] = project_text(Path(g.repo_root) / n.file, g.repo_root)
@@ -1189,6 +1555,10 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
         if sign:
             more += (f"The only sign in the handler is that {sign[1]}: that finds a record, not the caller. "
                      "Check the signed-in user as well. ")
+        if n.entry.get("trpc"):
+            built = ", ".join(f"`{x}`" for x in n.entry["trpc"].get("procedures") or ())
+            more += ("A tRPC procedure: the names it is built on" + (f" ({built})" if built else "") + " and the "
+                     "functions put before it were read as well, for one that turns a caller away. ")
         more += passed_over_words(n, texts.get(n.file or ""))
         title = f"{n.entry['detail']} changes data, is called by the app, and no login check was found"
         if only is not None:
@@ -1198,6 +1568,7 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
         out.append(_finding(
             "LW-AUTH-MISSING", title, "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306,
             fixed_rank="medium", more=more + "If this route is meant to be public, ignore it.", snippet=detail or ""))
+    out += _actions_unasked(g, adj, texts, doubt=doubt, only=only)
     return out
 
 
@@ -1658,7 +2029,7 @@ def template_rules(repo: Path) -> list[dict]:
 
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + template_rules(repo) + inline_secrets(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + template_rules(repo) + inline_secrets(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo, g) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

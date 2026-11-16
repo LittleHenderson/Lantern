@@ -1080,6 +1080,15 @@ JS_TOKENS = ("const bcrypt = require('bcryptjs')\nconst jwt = require('jsonwebto
              "function verifyToken (req) {\n  return jwt.verify(req.headers.authorization, process.env.JWT_SECRET)\n}\n")
 JS_CHECK = ("  if (!user || !(await bcrypt.compare(req.body.password, user.passwordHash))) "
             "return res.status(401).end()\n")
+# a session kept by the app itself: read by one function, started by another that reads it first
+JS_SESSIONS = ("const sessions = new Map()\n"
+               "function getSession (req) {\n  return sessions.get(req.headers.cookie) || {}\n}\n"
+               "function startSession (req, user) {\n  const session = getSession(req)\n"
+               "  session.userId = user.id\n  sessions.set(req.headers.cookie, session)\n}\n"
+               "function touch (req) {\n  return getSession(req)\n}\n")
+JS_JOIN = ("  const taken = await User.findOne({ email: req.body.email })\n"
+           "  if (taken) return res.status(409).end()\n"
+           "  const user = await User.create({ email: req.body.email })\n")
 JS_SIGN_IN = {
     "clean: signing in, the session is told who it is":
         (_js("  const user = await User.findOne({ email: req.body.email })\n" + JS_CHECK +
@@ -1100,13 +1109,23 @@ JS_SIGN_IN = {
         (_js("  const user = await User.findOne({ email: req.body.email })\n" + JS_CHECK +
              "  req.session.userId = user.id\n  res.json({ ok: true })\n", mw="", verb="post", path="/admin/login"),
          []),
+    # the only sign of a login is that a session is read on the way: by the function that starts one, nobody is
+    # signed in yet (a sign-up page under a word of its own); by the route itself or a helper of another kind, it is
+    "clean: signing up under another word, the session is read by the function that starts it":
+        (_js(JS_JOIN + "  startSession(req, user)\n  res.json({ ok: true })\n", mw="", verb="post", path="/join"),
+         []),
+    "caught: the route reads the session itself, then looks a person up by what was typed":
+        (_js("  getSession(req)\n" + JS_JOIN + "  res.json({ ok: true })\n", mw="", verb="post", path="/join"),
+         ["LT-AUTHZ-OWNER"]),
+    "caught: the session is read by a helper of another kind on the way to another person's order":
+        (_js("  touch(req)\n  res.json(await Order.findById(req.params.id))\n", mw=""), ["LT-AUTHZ-OWNER"]),
 }
 
 
 @pytest.mark.parametrize("case", sorted(JS_SIGN_IN))
 def test_express_a_sign_in_page(tmp_path, case):
     body, want = JS_SIGN_IN[case]
-    fs = _scan(tmp_path, {"server.js": JS + JS_TOKENS + body, "models.js": JS_MODELS},
+    fs = _scan(tmp_path, {"server.js": JS + JS_TOKENS + JS_SESSIONS + body, "models.js": JS_MODELS},
                project={"package.json": PACKAGE})
     assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
 
@@ -3403,3 +3422,227 @@ def test_the_names_check_reads_a_maker_of_random_text_as_no_auth_word(name, word
     from lantern import websec
     got = websec.auth_word(name)
     assert (got is None) == (word is None), got
+
+
+# ------------------------------------------------------------------ conditions that are functions of the library
+BUILDER_PACKAGE = ('{"dependencies": {"next": "15.0.0", "react": "19.0.0", "next-auth": "4.24.7", "jose": "5.2.0", '
+                   '"drizzle-orm": "0.36.0", "postgres": "3.4.0", "lodash": "4.17.21"}}')
+BUILDER_DB = ('import { drizzle } from "drizzle-orm/postgres-js";\nimport postgres from "postgres";\n'
+              'export const db = drizzle(postgres(process.env.POSTGRES_URL));\n')
+BUILDER_SCHEMA = ('import { integer, pgTable, serial, text } from "drizzle-orm/pg-core";\n'
+                  'export const users = pgTable("users", { id: serial("id").primaryKey(), name: text("name") });\n'
+                  'export const invoices = pgTable("invoices", { id: serial("id").primaryKey(), '
+                  'userId: integer("user_id"), note: text("note") });\n')
+BUILDER_PROJECT = {"package.json": BUILDER_PACKAGE, "lib/db.ts": BUILDER_DB, "lib/schema.ts": BUILDER_SCHEMA,
+                   "lib/auth.ts": "export const authOptions = {};\n",
+                   "lib/util.ts": "export function pick(column, value) {\n  return [column, value];\n}\n"}
+BUILDER_HEAD = ('import { getServerSession } from "next-auth";\n'
+                'import { and, eq, inArray } from "drizzle-orm";\nimport _ from "lodash";\n'
+                'import { db } from "../../../../lib/db";\nimport { invoices } from "../../../../lib/schema";\n'
+                'import { authOptions } from "../../../../lib/auth";\n\n')
+BUILDER_ASK = ('  const session = await getServerSession(authOptions);\n'
+               '  if (!session) return new Response("sign in", { status: 401 });\n')
+BUILDER_MINE = "and(eq(invoices.id, params.id), eq(invoices.userId, session.user.id))"
+BUILDER_CASES = {
+    "caught: rows read by the id alone":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  const rows = await db.select().from(invoices).where(eq(invoices.id, params.id));\n"
+         "  return Response.json(rows[0]);\n}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: rows read by the id and the signed-in person":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  const rows = await db.select().from(invoices).where(" + BUILDER_MINE + ");\n"
+         "  return Response.json(rows[0]);\n}\n", []),
+    "clean: the rows of the signed-in person":
+        ("export async function GET(req) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.select().from(invoices).where(eq(invoices.userId, session.user.id)));\n"
+         "}\n", []),
+    "caught: one row found by the id alone":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.query.invoices.findFirst({ where: eq(invoices.id, params.id) }));\n"
+         "}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: one row found by the id and the signed-in person":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.query.invoices.findFirst({ where: " + BUILDER_MINE + " }));\n"
+         "}\n", []),
+    "caught: a row removed by the id alone":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(eq(invoices.id, params.id));\n"
+         "  return new Response(null, { status: 204 });\n}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: a row removed by the id and the signed-in person":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(" + BUILDER_MINE + ");\n"
+         "  return new Response(null, { status: 204 });\n}\n", []),
+    "caught: a row changed by the id alone, with a field the code names":
+        ("export async function PATCH(req, { params }) {\n" + BUILDER_ASK +
+         "  const body = await req.json();\n"
+         "  await db.update(invoices).set({ note: body.note }).where(eq(invoices.id, params.id));\n"
+         "  return new Response(null, { status: 204 });\n}\n", ["LT-AUTHZ-OWNER"]),
+    "caught: rows read by a list of ids that was sent":
+        ("export async function POST(req) {\n" + BUILDER_ASK +
+         "  const body = await req.json();\n"
+         "  return Response.json(await db.select().from(invoices).where(inArray(invoices.id, body.ids)));\n"
+         "}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: a function of that name from another library says nothing about the row":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  const rows = await db.select().from(invoices).where(_.eq(invoices.id, params.id));\n"
+         "  return Response.json(rows[0]);\n}\n", []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BUILDER_CASES))
+def test_next_with_a_query_builder_whose_conditions_are_functions(tmp_path, case):
+    """`where(eq(invoices.id, params.id))`: the library's own condition functions stand for the values they are
+    given, as `{ where: { id } }` does with another library. Until 2026-11-15 what they were given was dropped: a
+    row picked by the id alone was not reported, and a row picked by who is signed in was not known to be theirs.
+    A function of that name from another library is read as before."""
+    body, want = BUILDER_CASES[case]
+    fs = _scan(tmp_path, {"app/api/invoices/[id]/route.ts": BUILDER_HEAD + body}, project=BUILDER_PROJECT)
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+BUILDER_SESSION = ('import { jwtVerify } from "jose";\n'
+                   'const key = new TextEncoder().encode(process.env.AUTH_SECRET);\n'
+                   'export async function readSession(input) {\n'
+                   '  const { payload } = await jwtVerify(input, key, { algorithms: ["HS256"] });\n'
+                   '  return payload;\n}\n')
+BUILDER_WHO = ('import { cookies } from "next/headers";\nimport { eq } from "drizzle-orm";\n'
+               'import { db } from "./db";\nimport { users } from "./schema";\n'
+               'import { readSession } from "./session";\n\n'
+               'export async function whoIsIt() {\n'
+               '  const kept = (await cookies()).get("session");\n'
+               '  if (!kept || !kept.value) {\n    return null;\n  }\n'
+               '  const told = await readSession(kept.value);\n'
+               '  if (!told || !told.user || typeof told.user.id !== "number") {\n    return null;\n  }\n')
+BUILDER_LOOKUPS = {
+    "shown: the user's row, read with the id the token holds":
+        ("  const rows = await db.select().from(users).where(eq(users.id, told.user.id)).limit(1);\n"
+         "  if (rows.length === 0) {\n    return null;\n  }\n  return rows[0];\n}\n", True),
+    "shown: the user's row, found with the id the token holds":
+        ("  const row = await db.query.users.findFirst({ where: eq(users.id, told.user.id) });\n"
+         "  return row ?? null;\n}\n", True),
+    "not shown: the first row of the table, whoever is calling":
+        ("  const rows = await db.select().from(users).limit(1);\n  return rows[0];\n}\n", False),
+}
+BUILDER_ROUTE = ('import { whoIsIt } from "../../../lib/who";\nimport { db } from "../../../lib/db";\n'
+                 'import { invoices } from "../../../lib/schema";\n\n'
+                 'export async function DELETE() {\n  const who = await whoIsIt();\n'
+                 '  if (!who) {\n    return new Response(null, { status: 401 });\n  }\n'
+                 '  await db.delete(invoices);\n  return new Response(null, { status: 204 });\n}\n')
+
+
+@pytest.mark.parametrize("case", sorted(BUILDER_LOOKUPS))
+def test_a_login_that_looks_the_user_up_with_a_condition_function(tmp_path, case):
+    """A helper checks a signed cookie, reads the user's row with the id the token holds and hands the row back;
+    the route turns away a caller with no row. The row is that person's (asked in the query itself), so the route
+    shows a login. Until 2026-11-15 `eq(users.id, …)` dropped the id, the row said nothing about who is calling,
+    and no route of such an app showed a login. A row read without asking for anybody says nothing, as before."""
+    from lantern.security import scan
+    tail, want = BUILDER_LOOKUPS[case]
+    files = {**BUILDER_PROJECT, "lib/session.ts": BUILDER_SESSION, "lib/who.ts": BUILDER_WHO + tail,
+             "app/api/invoices/route.ts": BUILDER_ROUTE}
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    g = build_graph(tmp_path)
+    sec = scan(g, offline=True)
+    shown = [g.nodes[i].entry["detail"] for i in sec["logins_shown"]]
+    assert shown == (["DELETE /api/invoices"] if want else []), shown
+
+
+# ------------------------------------------------------------------ the database handle kept in a package of the project
+SHARED_PROJECT = {
+    "package.json": '{"name": "mono", "private": true, "workspaces": ["apps/*", "packages/*"]}',
+    "packages/data/package.json": ('{"name": "@team/data", "exports": {".": "./src/index.ts", '
+                                   '"./tables": "./src/tables.ts"}, '
+                                   '"dependencies": {"drizzle-orm": "0.36.0", "postgres": "3.4.0"}}'),
+    "packages/data/src/index.ts": ('import { drizzle } from "drizzle-orm/postgres-js";\nimport postgres from "postgres";\n'
+                                   'export * from "drizzle-orm/sql";\n'
+                                   'export const db = drizzle(postgres(process.env.POSTGRES_URL));\n'),
+    "packages/data/src/tables.ts": BUILDER_SCHEMA,
+    "apps/web/package.json": ('{"name": "web", "dependencies": {"next": "15.0.0", "react": "19.0.0", '
+                              '"next-auth": "4.24.7", "@team/data": "workspace:*"}}'),
+    "apps/web/lib/auth.ts": "export const authOptions = {};\n",
+}
+SHARED_HEAD = ('import { getServerSession } from "next-auth";\nimport { and, db, eq } from "@team/data";\n'
+               'import { invoices } from "@team/data/tables";\n'
+               'import { authOptions } from "../../../../lib/auth";\n\n')
+SHARED_CASES = {
+    "caught: a row removed by the id alone":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(eq(invoices.id, params.id));\n"
+         "  return new Response(null, { status: 204 });\n}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: a row removed by the id and the signed-in person":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(" + BUILDER_MINE + ");\n"
+         "  return new Response(null, { status: 204 });\n}\n", []),
+    "caught: one row found by the id alone":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.query.invoices.findFirst({ where: eq(invoices.id, params.id) }));\n"
+         "}\n", ["LT-AUTHZ-OWNER"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SHARED_CASES))
+def test_a_database_handle_kept_in_a_package_of_the_project(tmp_path, case):
+    """A monorepo keeps its database handle in a package of its own (`@team/data`), which also hands the query
+    builder's condition functions on (`export * from "drizzle-orm/sql"`), and an app of the same project imports
+    both by the package's name. That is the project's own file, as `../lib/db` is. Until 2026-11-15 the handle was
+    read as some library that is no database, and no record reached through it was looked at."""
+    body, want = SHARED_CASES[case]
+    fs = _scan(tmp_path, {"apps/web/app/api/invoices/[id]/route.ts": SHARED_HEAD + body}, project=SHARED_PROJECT)
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+# ------------------------------------------------------------------ sent on to another page is not turned away
+SENT_ON_PAY = ('import { redirect } from "next/navigation";\nimport { whoIsIt } from "./who";\n\n'
+               'export async function openCheckout(plan) {\n  const who = await whoIsIt();\n'
+               '  if (!who) {\n    redirect("/enter");\n  }\n  return { plan, by: who.id };\n}\n')
+SENT_ON_HEAD = ('"use server";\nimport { redirect } from "next/navigation";\nimport { db } from "../lib/db";\n'
+                'import { invoices } from "../lib/schema";\nimport { openCheckout } from "../lib/pay";\n'
+                'import { whoIsIt } from "../lib/who";\n\nexport async function enter(form) {\n')
+SENT_ON_BRANCH = ('  if (form.get("then") === "pay") {\n    return openCheckout(form.get("plan"));\n  }\n')
+SENT_ON_CASES = {
+    "not shown: done for everybody, some go on to a step that asks, the rest are sent to their page":
+        ('  await db.insert(invoices).values({ note: "seen" });\n' + SENT_ON_BRANCH + '  redirect("/home");\n}\n',
+         False),
+    "not shown: the same with nothing done before":
+        (SENT_ON_BRANCH + '  redirect("/home");\n}\n', False),
+    "not shown: the same, sent on for good":
+        (SENT_ON_BRANCH + '  permanentRedirect("/home");\n}\n', False),
+    "shown: the rest is sent to the sign-in page":
+        (SENT_ON_BRANCH + '  redirect("/login");\n}\n', True),
+    "shown: the rest is refused":
+        (SENT_ON_BRANCH + '  throw new Error("Not allowed");\n}\n', True),
+    "shown: the rest is sent away with words that say no":
+        (SENT_ON_BRANCH + '  redirect("/home?error=unauthorized");\n}\n', True),
+    "shown: the condition itself asks who is signed in":
+        ('  const who = await whoIsIt();\n  if (who) {\n    await db.insert(invoices).values({ note: "seen" });\n'
+         '    return { ok: true };\n  }\n  redirect("/home");\n}\n', True),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SENT_ON_CASES))
+def test_a_visitor_sent_on_to_another_page_was_not_turned_away(tmp_path, case):
+    """A sign-in action does its work for everybody, hands those who came to pay to a step that asks who is signed
+    in, and sends the rest to their page (`redirect("/home")`). A redirect after an `if` was read as turning the
+    rest away, so the login the paying step asks counted for every request, and the action "showed a login" (found
+    2026-11-15 on a sample project, on its sign-in and sign-up actions; such a route's "no login check" finding
+    would have been dropped). Where the route answers the request itself, what follows the `if` only sends the
+    visitor to a page that is not the sign-in page, and the condition says nothing about who is calling, those
+    requests were let through, not turned away. The twins stay as they were: sent to the sign-in page, refused
+    with an error or with words that say no, and a condition that asks who is signed in."""
+    from lantern.security import scan
+    body, want = SENT_ON_CASES[case]
+    head = SENT_ON_HEAD.replace("{ redirect }", "{ permanentRedirect, redirect }") if "permanent" in body else SENT_ON_HEAD
+    files = {**BUILDER_PROJECT, "lib/session.ts": BUILDER_SESSION,
+             "lib/who.ts": BUILDER_WHO + BUILDER_LOOKUPS["shown: the user's row, read with the id the token holds"][0],
+             "lib/pay.ts": SENT_ON_PAY, "app/actions.ts": head + body}
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    g = build_graph(tmp_path)
+    sec = scan(g, offline=True)
+    shown = [g.nodes[i].entry["detail"] for i in sec["logins_shown"]]
+    assert shown == (["ACTION enter"] if want else []), shown

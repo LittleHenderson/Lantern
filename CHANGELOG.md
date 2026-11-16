@@ -16,6 +16,322 @@ file. New entries go under `## Unreleased`, on top.
   A name shown nowhere is still refused. `model-eval`'s `min_first_try` default is 0.7 (was 0.8), Wakil's choice,
   near the measured rate across seven repos (72.9%); the target in docs/explain-runs.md is unchanged.
 
+- Lantern leaves its report on the GitHub repository it checked (`docs/github.md`), in three ways: one comment with
+  the result (Passed, Blocked or Incomplete) on every pull request, edited on each push; one pull request on the main
+  branch that saves the report in `.lantern/report/` (README in words, the commit-pinned Evidence Report, the digest
+  `lantern verify` checks); and the badge on the front page, linked to the saved report. `lantern github setup` puts
+  the workflow, the first badge, the README line and the `.gitignore` lines on a repository in one command; the
+  GitHub Action is `action.yml` at the top of this repository (`uses: LittleHenderson/Lantern@<commit or tag>`).
+  `lantern github summary` and `lantern github save` write the words and the folder from a finished check
+  (`lantern/onrepo.py`); every value from the results is written as text (no link, image, HTML or mention can be
+  made through a finding's title). Lantern's own pull requests get the comment (`.github/workflows/lantern-report.yml`).
+
+- **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
+  SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
+  (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside
+  twins that must stay clean. Measured on five public sample projects that were read and never run, and the type-aware
+  pass on twelve: the first numbers, the faults they showed and the numbers after the fixes are kept apart, below and
+  in `bench/modern_stack_results.md`. The samples were read by hand, which is not a recorded benchmark run, and each
+  new kind of link keeps the confidence its numbers support and no more).
+  - **A Supabase table is on the map.** A call written `<client>.from("<table>")` followed by `select`,
+    `insert`, `update`, `upsert` or `delete` is a link from the function to the table (`db:<table>`, Data lane),
+    with what the function does there. The link is "likely" (`supabase-from`) where the client's value was
+    followed to the library call that made it, and "possible" (`supabase-name`) where the receiver is only named
+    like one. No link for `supabase.storage.from("bucket")`, for a name given another value, or for a table whose
+    name is not written. A table is no called function for a rule that reads those names: a route that deleted
+    from `auth_tokens` had read as one with a login check. Tests: `tests/test_supabase.py` (15).
+  - **The row rules a project's SQL files write down** (`lantern/rowrules.py`). Every `.sql` file is replayed in
+    the order it is applied, so what counts is what stands at the end: row-level security switched on in a later
+    file counts, in a comment or a text it does not, a later `disable` switches it off, a renamed or dropped
+    table is followed. Nothing is run and nothing is connected to. Tests: `tests/test_rowrules.py` (10).
+  - **`LW-NO-RLS` says what is open, for whom, and what reaches it.** *Before:* patterns over the SQL files: a
+    table that is created and that no `enable row level security` names, whatever the order and whatever came
+    after, and any policy with `using (true)`, all at medium. That also flagged a `using (true)` policy for
+    `service_role`, which is the server's own role, and one on a table with row-level security off, where no
+    policy is in force; the new rule flags neither. *Now:* row-level security off is high, and critical where
+    code that runs in the browser or on the phone reaches the table through the map (`lantern/clientside.py`
+    names each such function with the reason it runs there). On, with a policy that is true whatever the row and
+    whoever asks: for everyone, changing or removing any row is high, critical where the visitor's side reaches
+    it; for any signed-in user high; a policy that only lets rows be added, or lets every row be read, medium.
+    None for the server's own roles, a policy that asks who is calling, one a restrictive policy narrows, or a
+    table the files do not create. Where code that runs in the database names row-level security, which Lantern
+    does not run, an off table is medium and a guess. The finding keeps the id the older rule gave the same
+    line, and its heading, story and case say what is open and for whom (before, one story, "answers with every
+    row", was told for every kind, which was false for a policy that only lets rows be added: 9 of the 10 tests
+    of the new words failed on it). Tests: `tests/test_supabase_rules.py` (38).
+  - **A Next.js Server Action is a route.** Where the nearest `package.json` depends on `next` (or `waku`, a
+    `react-server-dom-*` package), every function a `"use server"` file exports, and every function whose own
+    body begins with `"use server"`, is an entry point `ACTION <name>`: the framework gives it an address of its
+    own that anyone can send to, with or without the pages. It runs on the server (an action written inside a
+    page alone; the page stays where it was), `<form action={fn}>` and `formAction={fn}` are links to it
+    ("likely"; a call by name from a client component is a confirmed link, as any call), every argument is
+    followed as request data, and a finding in it is told through its page and form, or as a request sent
+    straight to the action when no page uses it.
+  - **The login check asks Server Actions.** An action that the app uses, that changes data, and in which no
+    login check is found gets `LW-AUTH-MISSING` (medium, a heuristic): "The Server Action removeNote changes
+    data, the app uses it, and no login check was found". An action has no verb to say that it changes data, so
+    its code is read (a Supabase table call, SQL in a string, a call named like a database library's change;
+    its own lines, then the functions it calls, two deep). Left alone: an action that checks who is asking, one
+    that only reads, one open by its name, one the app does not use, a `delete` on a `Set` or on the request's
+    cookies, SQL in a comment, and a call the map followed into a library that keeps none of the app's data.
+    That last twin was found by running the whole analysis on a tiny app and reading every sentence: a call to
+    a model provider (`openai.chat.completions.create`) had been read as "changes data". The readiness page
+    counts such an action among the "routes that change data" of its request-limit and login-check lines
+    (before, an app written with actions alone got neither line).
+  - **The map's word stays on the map.** `ACTION summarize` is how the map writes an action down. The same
+    reading found it in two finding titles ("ACTION summarize spends money …"), two readiness lists and the
+    report's rows. Every sentence a reader gets now says "the Server Action summarize" (`graph.route_words`),
+    and the report's rows and chips "Server Action summarize". The report also said of every JavaScript function
+    that it runs "in the visitor's browser"; one on the Server lane (an Express handler, a Next.js route, an
+    action) is now "a function running on your server".
+    Tests: `tests/test_server_actions.py` (26; the 7 newest failed on the code before them).
+  - **A value one file hands to another is followed.** `export const db = new PrismaClient()` in `lib/db.ts`
+    and `db.note.delete()` in a route: the call was "not followed" (`missing-export`), because an import was
+    followed only to a function or a class. Now it is a likely link to the library's function
+    (`library-value`), named as the same call on a value made in the file; a value of the project's own class
+    links to its method (`module-value`). Also through `export default`, `export { x } from`, `export *`,
+    `import * as lib` and a destructured `require`. Two readings a real `lib/db.ts` needs: a variable's
+    written type (`let prisma: PrismaClient`) and "the kept one or a new one" (`cached ?? new T()`). So a
+    Server Action that only asks the payment or the model provider through such a handle is no longer read
+    as "changes data" by the name `create`. *Measured* on the benchmark's seven projects (read, never run):
+    73 call sites newly followed (69 across files, each checked by hand against the exporting line: 69 name
+    the right library; 4 on what those calls returned), no link gone, no finding changed on nine projects; on
+    one of them the Data lane went from 1 node to 16 (its routes now reach the database and the payment
+    provider on the map). Left alone, with their reason: a name set again, a value built by a condition, an
+    object written out, what a function of the project hands back, `x && new T()`, and a name the project
+    puts a function of its own on. Tests: `tests/test_js_values.py` (6, all failed on the code before).
+  - **A tRPC procedure is a route.** A tRPC app has no route files: one handler serves every procedure, and
+    that one door was all the map showed. Where the nearest `package.json` depends on `@trpc/server`, each
+    procedure of a router (`createTRPCRouter({ create: protectedProcedure.input(…).mutation(fn) })`, a router
+    inside a router, routers merged or spread, a router written out as an object) is an entry point named by
+    where it is served and its path: `POST /api/trpc/post.create` for a mutation, `GET` for a query or a
+    subscription. Where it is served comes from the adapter call (`endpoint`, `basePath`, `prefix`), the
+    Express path it is mounted under, or the Next.js route file; with none of them the path stands alone. A
+    page's call through the tRPC client (`api.post.create.useMutation()`, `client.post.hello.query()`,
+    `trpc.post.hello.queryOptions()`) is a link to the procedure, as a request (`http-trpc`): confirmed on a
+    client that tRPC's own function made, "likely" where the client comes out of a hook Lantern does not
+    follow. *The login check* reads what a route is built on: `protectedProcedure` is a check by its name; any
+    other name by what the function put before it does (it turns a caller away with a `TRPCError`
+    `UNAUTHORIZED` or `FORBIDDEN`), and the handler's own lines the same way. A comment, a text and another
+    error code (`TOO_MANY_REQUESTS`) are none. *What the caller sends* is the handler's `input` (also
+    `opts.input`), followed as request data; `ctx` is the server's own, and `ctx.session` is who is signed in.
+    The one handler is marked (`serves: "trpc"`) and is no longer counted as a route that changes data: its
+    procedures are asked instead. Reading every sentence of a whole analysis on a tiny app found three wrong
+    wordings, fixed with a test first: a finding on a procedure's first line said the request's data arrives
+    through `input(`, the step that says what the procedure accepts (the reader of a flagged line knew that
+    word as Python's built-in in every language; in JS/TS a method after a dot is not that); the login
+    finding did not say what it had read for a procedure; and the report's list said "frontend" beside every
+    JavaScript entry, also beside one that runs on the server (a route file, an action, a procedure).
+    *Measured* on the projects already on the benchmark machine, none of which uses tRPC, so nothing should
+    move: 0 of 31,168 call sites changed on seven, no finding changed on nine.
+    Tests: `tests/test_trpc.py` (15; the first 9 failed on the code before them).
+  - **A SvelteKit app's files are its routes.** A SvelteKit app has no router in its code: files with fixed names
+    under `src/routes` are its doors. None of them was an entry point, `$lib/…` was read as a library, and a `.svelte`
+    file was not read at all. Now, where the nearest `package.json` depends on `@sveltejs/kit`: a `+server.ts` gives
+    one route per verb it exports (`GET /api/notes/[id]`; `fallback` answers every verb); a `+page.server.ts` gives
+    `load` (`GET /notes`) and one route per form action (`POST /notes` for `default`, `POST /notes?/remove` for a
+    named one; written in place, as a method, by name, or inside a helper such as `save: withAuth(fn)`, whose name is
+    then read as a middleware's is); a `+layout.server.ts` gives `load` for the pages below it (`GET /*`, and `GET
+    /(app)/*` for a group of pages); `src/hooks.server.ts` gives `handle`, or each named part of `sequence(a, b)`, as
+    the one door every request passes (`ANY /*`, marked `serves: "sveltekit"`: the routes behind it are asked, not
+    it). A folder in round brackets is no part of an address and a matcher (`[id=integer]`) is `[id]`. *A `.svelte`
+    file is read*, in every project: its script with the file's own line numbers, and its markup for three things: an
+    event on a tag (`on:click={save}`, `onclick={save}`) is a click path, a tag with a capital draws that component,
+    and `<form method="POST">` posts. Text that only looks like one of them is none (an attribute's look-alike outside
+    a tag, a `<Form>` component). *The framework's own wiring is on the map*, as confirmed links, since it is the
+    framework's rule and not a reading of names: a page reaches the `load` beside it and of the layouts above it and
+    each action its forms post to (`http-sveltekit`: `action="?/remove"`, the page's own `default`, another page's
+    address `/login?/register`; a form that posts to a `+server.ts` is matched like any request), the `load` of a
+    `+page.ts` or `+layout.ts`, which also runs in the browser and which nobody can ask for from outside, so it is no
+    route (`sveltekit-load`), and the layouts it is drawn in (`sveltekit-layout`). `$lib/x` is the project's own
+    `src/lib/x`. An import written `./util.js` where only `util.ts` is there means that file, as TypeScript reads it
+    (in every project). Svelte's own words (`$state`, `$derived`, `$props`, `$effect` …) in a `.svelte` or
+    `.svelte.ts` file are the language's, no longer calls "not followed". *The login check* reads what the server
+    knows of the caller: `locals.user` or `locals.session` asked in a route's own lines or in a helper it calls is a
+    sign. A hook's name is no sign (`sequence(populate, authGuard)` usually turns away only some addresses). *The hook
+    is read from its code, with the addresses it names.* It is a function every request passes through, and
+    `resolve(event)` is the way on. A part that turns away every request with nobody signed in is a login for every
+    route behind it. A part that names addresses is a login for the routes whose own address is certainly among those
+    asked, and for no other: `event.url.pathname.startsWith("/app") && !event.locals.user`, the same in a branch of
+    its own or after the other addresses were sent on with `return resolve(event)`, "every address but `/login`", a
+    list of open pages, `event.route.id`, the path kept under a name; a part of a route's address that changes
+    (`[id]`) counts for neither side. Who is signed in is read as the sign-in libraries' guides write it:
+    `locals.user`, `locals.session`, what `await locals.auth()` or `locals.safeGetSession()` hands back. A request
+    that was handed on was not asked what comes after; a check after `await resolve(event)` counts for nothing (the
+    route has run), and neither does one whose refusal is caught and only logged (`error(401)` throws by itself; so
+    does Next.js's `redirect("/login")`, read the same way on a Next.js route). This was found by trying what a
+    current SvelteKit app does on the first writing of this change, before this entry was written. Of the 49 hook
+    shapes now in the tests, that first writing read 24 as no login at all where the hook has one (the guards of the
+    Auth.js and Supabase guides among them: every route behind them would have been reported as open) and five as a
+    login where there is none: one area guarded and every route taken as guarded (three shapes), a check after the
+    route had already run, a refusal that was caught. The code before the SvelteKit work read 29 of the 49 wrong, all
+    as no login. *What the caller sends* is followed from the event a route is handed, whole or taken apart
+    (`request`, `url`, `params`, `cookies`), also through a helper handed the event; `locals` is what the server's own
+    hook put there. *Seven wrong sentences* were found by reading every sentence of a whole analysis of a tiny app, in
+    the result files and in the report in a browser, and each was fixed with a test first: a story said "click the
+    svelte::+page button" (a page file has no name of its own: "click a button on it", under the heading "A button on
+    the /ask page can run shell commands on your server"); a risky line in a page's markup was said to be reached by
+    nothing (it is on the page); every form was taken for a file upload (`request.formData()` is how the fields of
+    every SvelteKit, Remix and Next.js form arrive: the readiness page speaks of uploads only where the file takes a
+    file out of the form); a word of the address read with `searchParams.get("id")` was called `searchParams`; the
+    report said "It runs when the page /notes." (it runs when someone opens it: true of every kind of app) and "It
+    runs when +page call it" (every SvelteKit page file is called `+page`: such a page is called by its address); and
+    a shared load of one group of pages was listed for every address. *Two gains beyond SvelteKit* came from giving
+    that word of the address its name: read with `searchParams.get("id")` on SvelteKit's `url`, Next.js's
+    `request.nextUrl` or `new URL(request.url)`, it is `id`, as `req.query.id` is on Express. So a record picked by it
+    is seen by the "another person's record" rule (`LT-AUTHZ-OWNER`), and a route that turns everyone away unless the
+    address says `admin=1` by the rule for the caller's own word (`LT-AUTHZ-CLIENT-ROLE`). Neither was seen before, on
+    Next.js either; the twins stay clean (a search word, the role the server keeps, a word nobody is turned away on).
+    *Measured* on the projects already on the benchmark machine, none of which is a SvelteKit app, so nothing should
+    move: 0 of 31,168 call sites changed on seven, and on 22 (those seven and the 15 sample apps of the tests) every
+    finding, story, protection line, entry point and login shown reads the same. Tests: `tests/test_sveltekit.py` (74,
+    49 of them on the hook), six more in `tests/test_flow_js.py` and one more in `tests/test_js_values.py` (7 now). On
+    the code before the SvelteKit work 58 of these 81 fail; the 23 that pass there are cases in which nothing is to be
+    found: 20 hook shapes that show no login (look-alikes of a guard, and three shapes that are not read) and the
+    three twins of the caught refusal on a Next.js route. Of the 49 hook tests, the first 11 and the 4 added last were
+    written before the change they are for, the other 34 after it and then run on the code before it; the four Next.js
+    cases of the caught refusal were written after it too (one of them fails on the code before it).
+  - **A Remix app's files are its routes** (step 4, second half; also React Router's framework mode where
+    `app/routes.ts` says `flatRoutes()`). Read only where the nearest `package.json` depends on one of Remix's own
+    packages (`REMIX_PACKAGES`). A file of `app/routes` is a route by its name (`REMIX_FILE`, `remix_parts`): `_index`
+    is `/`, `concerts.trending` is `/concerts/trending`, `concerts.$city` is `/concerts/:city`, `files.$` is
+    `/files/*`, `($lang).categories` is `/:lang?/categories`, `admin_.reports` is `/admin/reports`, `_auth.enter` is
+    `/enter`, `sitemap[.]xml` is `/sitemap.xml`, and a folder's `route` file (its `index` file where no route file is
+    there) is the folder's route. The `loader` a route file exports is a `route` entry `GET <path>` (`entry["remix"] =
+    "loader"`), its `action` `POST <path>` (`"action"`; `?index` on an index route; an action answers every verb but
+    GET, `bridge.REMIX_ACTION_VERBS`), a layout's loader `GET <path>/*` (`"layout loader"`), and what the file exports
+    by default is a `page`. A door made by a helper (`export const action = guarded(async (…) => …)`) is one too, with
+    the helper as what runs first (`action-helper`, `entry["middleware"]`), and a door handed on from another file is
+    that route's. Links: a page to its own loader and to the loaders of the layouts it is drawn in, and a posting form
+    (`<Form method="post">`, `<form>`) to the action its address names, read from where the form stands
+    (`via="http-remix"`, resolved, detail = the route; possible where several fit); a page to the layouts' own
+    components (`remix-layout`). `g.meta["remix"] = {routes, pages, forms, linked}`. A route file that shows something
+    holds both sides: its loader and action are the server's, its page the browser's (`lanes`). The flow step reads a
+    route's one argument as the request (`request`, `params`; `context` is the server's own) and knows the framework's
+    own session: what `getSession` of `createCookieSessionStorage` hands back for the request's cookie shows who is
+    signed in only when the cookie is signed (`flow_rules.SESSION_LIB`). Not read, and said in the result and in the
+    Evidence page's Limits (`meta.remix.not_read`, `evidence.ROUTES_NOT_READ`): Remix 1's route folders, where the
+    same names mean other addresses (read by the newer rules where `v2_routeConvention` is on), and a React Router
+    route list written by hand in `app/routes.ts` or `flatRoutes` with a folder of its own. Tests:
+    `tests/test_remix.py` (19).
+  - **Measured on five public sample projects, read and never run, and what the measurement changed** (step 6; the
+    tables are in `bench/modern_stack_results.md`). Five public starter projects, one for each kind of app this stage
+    reads (A: Next.js with Supabase; B: Next.js with a database library and Server Actions; C: a tRPC monorepo; D:
+    SvelteKit with Supabase; E: Remix), were downloaded, read and never run; their libraries were not installed. Every
+    server door and every new link was read by hand against the project's own code. *First numbers, before any fix* (A
+    to D): server doors of the kinds this stage reads (Server Actions, tRPC procedures, SvelteKit's route files) found
+    32 of 39, none wrong (B: 3 of 10 Server Actions); links right: tRPC 12 of 12, SvelteKit's `http-sveltekit` 20 of
+    20 (18 from a page to a server `load`, 2 from a form to its action), `sveltekit-load` 18 of 18 and
+    `sveltekit-layout` 67 of 67, Supabase by where the client came from 12 of 12 and by name 3 of 3, a library's name
+    reached through a value 65 of the 67 checked; in D 6 of 10 table calls were linked, 2 of the 8 pages that post a
+    form were linked to their action (the other six post through one form in a shared part), and the flow step showed
+    a login on 0 of the 8 routes that have one. *Ten faults that showed, each fixed after a failing test:* (1) a
+    paid-call finding keeps what it found about login and limit (`paid: {login, limit}`), and its story and heading
+    are written from that (they said "anyone with an account" where no login was found); (2) in SvelteKit a function
+    taken out of `locals` first (`({ locals: { safeGetSession } })`, `const { auth } = event.locals`) is the same
+    function; (3) a Supabase client under a longer name that begins with the library's (`supabaseServiceRole`) is a
+    client by its name (`supabase-name`, possible); (4) a Server Action made by a helper (`export const save =
+    checked(schema, async (data) => …)` in a `"use server"` file) is a route, the helper is what runs first
+    (`action-helper`, likely), its login counts and one asked late or not enforced does not; (5) drizzle-orm's
+    condition functions (`eq`, `and`, `inArray`; `flow_rules.CONDITIONS`) hold the values they compare, so an owner
+    asked for in a `where` is seen; (6) a package of the project itself (`@team/store` in `packages/store`) is
+    followed to its file (`SpecResolver.own_path`: `exports`, `main`/`module`/`source`, a folder's `index`; only where
+    the importer says `workspace:`, `file:`, `link:` or `portal:` or the folder stands in a workspace; a name two
+    folders carry is nobody's), and a library's name that a project file hands on is that library's (`handed_from`);
+    (7) a SvelteKit form in a shared part posts where the page that uses the part says (`http-sveltekit-prop`, likely,
+    possible where several fit; `meta.sveltekit.handed`); (8) a visitor who is sent on to another page was not turned
+    away (`flow.sends_on`); (9) `useActionState(first ? signIn : signUp, null)` links both actions (`_either`); (10)
+    `flow.whole_name` puts back the members the map's cut name lost, so a webhook's sender check on
+    `require("stripe")(key)` made in another file counts again (two tests of `tests/test_webhook_sender.py` had been
+    failing on this stage's branch unnoticed; a wide run now comes before any measurement). *After the fixes:* server
+    doors 39 of 39, none wrong; helper links 9 of 9, a page's links to the actions it hands to a hook 7 of 7, the six
+    pages that post through the shared part linked, 6 of 6 right, table calls 10 of 10, a library's name 72 of the 72
+    checked (the two wrong ones withdrawn: those calls are unresolved again), 74 calls followed into C's own packages,
+    all right; a login shown on 8 routes of D and 7 of B. On the seven projects of the map benchmark no link an
+    earlier version made changed: five are the same link for link, two gained 73 library labels on calls that were
+    unresolved. *Remix* was measured on E only after its reader was committed: doors 12 of 12, pages 6 of 6, posting
+    forms linked 5 of 5, 26 framework links all right, a login shown on 4 of 4, and one false alarm ("owner not
+    checked" on the sign-up page), fixed after a failing test (`flow_rules.SESSION_MAKER`: no signed-in person is
+    looked for below a function named for starting or ending a session); the other eleven projects read the same
+    before and after that fix. E is small, and the test app resembles it. *Findings on the five, before this stage and
+    after:* 8 new ones, all `LA-WALLET-DRAIN`, from the paid-call rule as it was, on doors the map did not have
+    before: 2 are right (a contact form and a profile change that send e-mail), 6 overstate (a payment provider's
+    calls that cost nothing are counted as spending money). One finding rose from medium to high because it now names
+    its route (`LT-SSRF` on a health check). No new `LW-AUTH-MISSING`. *Still wrong, and said:* the paid-call rule
+    decides that a login is there by names; a payment provider's free calls count as paid; a value the project's own
+    function hands back (`export const auth = initAuth()`) is not followed; the flow step does not read a tRPC
+    middleware. The tests of the fixes are in the files of the rules they are for, which now hold:
+    `tests/test_supabase.py` 16, `tests/test_server_actions.py` 33, `tests/test_sveltekit.py` 82,
+    `tests/test_js_values.py` 11, `tests/test_flow_authz.py` 674, `tests/test_flow_js.py` 325,
+    `tests/test_webhook_sender.py` 26.
+  - **Type checkers are asked about the calls Lantern could not place, only where asked for** (step 5; `lantern
+    analyze --typecheck`, or `LANTERN_TYPECHECK=1` as the person's standing word; nothing in a project switches it on;
+    `lantern/typecheck.py`, `lantern/typecheck_ts.js`). Off, the map is what it was. On, the written calls the
+    inventory left `unresolved` are asked of the TypeScript compiler (through its own library, in one program of
+    Lantern's; `tsserver` is never started) and of pyright (its language server, asked where each callee is defined).
+    An answer becomes a link into the project with `via="typecheck"`, `resolved` only where the name written at the
+    call names the function itself and `inferred` ("likely") where it was reached through a value's type; or a
+    built-in call; or a library call (never where Lantern's own reading said the function may be the project's own,
+    reason `library-or-repo`); or nothing (`declared`: only a declaration with no code was named; `left`: no answer).
+    **A type is not the code that runs** (Python, `_Beneath`): a method that only declares (`@abstractmethod`,
+    `@overload`, a body of `...` or `raise NotImplementedError`) is never linked; the methods that replace it in the
+    classes beneath are each `possible` (`via="override"`, at most `MOST_REPLACING` = 24), and a method with code of
+    its own that a class beneath replaces is linked beside them and the call counts as `possible`. What a checker may
+    not do: it is found outside the project (`LANTERN_NODE`, `LANTERN_TYPESCRIPT`, `LANTERN_PYRIGHT`, else the
+    folders PATH names in full, never the current folder); the
+    project's own `tsconfig.json`, pyright settings, plug-ins and Python are never used (pyright is shown a copy of
+    the Python files beside settings Lantern wrote, with an empty PATH); it runs in a folder of Lantern's own with a
+    bare environment, behind the sandbox's launcher on POSIX, under limits of time (`LANTERN_TYPECHECK_SECONDS`, 120
+    by default), files, answers and memory; and what comes back is taken by its shape. A checker that is missing, too
+    old (TypeScript before 5), stopped or cut short leaves the calls as they were and the run says why (`graph.json`
+    `meta.typecheck`, `run.json` `typecheck`, the log's `types` line, the Evidence page's tools and Limits). `lantern
+    verify` refuses a report made with the pass unless it is given `--typecheck` too; the connector starts no checker.
+    *Measured* on twelve public projects (the seven of the map benchmark and the five above) four times, each kept.
+    (1) Failed: pyright "could not be started" on five of the six Python projects; three seconds after its start it
+    looks for the process that started it, the launcher's walls refused the look and it left. Fixed after failing
+    tests (`"processId": None`). (2) Failed the 90% bar: 345 new links, all "likely" (328 Python, 17 TypeScript); of a
+    fixed-seed sample of 60 Python links read by hand 46 were right, 13 wrong and 1 depends on the system (12 led to a
+    method that only declares, 1 to one the project's default subclass replaces). Fixed by the rule above, tests
+    first. (3 and 4, the final code) App code, 18,008 written calls before and after: unresolved 3,088 → 1,664 (1,424
+    placed: likely +146, possible +33, library +360, built-in +885; resolved 5,381 and name-only 540 as they were).
+    Test code, 14,665 calls: unresolved 2,810 → 2,316 (494 placed: likely +146, possible +3, library +194, built-in
+    +151). A fresh fixed-seed sample of 60 of the 275 likely Python links: 60 right; all 17 TypeScript links right;
+    all 36 `possible` calls name real subclasses. No link was `resolved` by a checker (0 of 292), so the roadmap's
+    word for this step, "resolved", is not claimed: the links are "likely". Where a checker and Lantern both read a
+    call they agree on 10,018 and differ on 2 (in one an import inside the function shadows the file's own function
+    and the checker is right: Known gaps; the other depends on the system). Cost for one project: 0.22 to 1.11 seconds
+    without the pass and 0.94 to 41.0 with it; the checkers' memory peaked at 186.0 to 817.1 MB. The samples were read
+    by hand by the author and are not a recorded run. Tests: `tests/test_typecheck.py` (108: 98 with stand-ins for the
+    checkers, on every system; 10 that start the real ones where `LANTERN_TESTS_TYPECHECK` is set). CI installs
+    TypeScript 6.0.2 and pyright 1.1.414 from npm for its Linux, Windows and macOS test jobs (fixed versions, install
+    scripts off, nothing else installed with them, outside the checkout and off PATH) and sets
+    `LANTERN_TESTS_TYPECHECK=required`, under which a checker that is not found fails its tests; the run's last lines
+    name the rule and the two versions its tests started, and CI looks for both.
+  *Not covered:* a client handed in as a parameter; a table reached through `rpc()` or a view; row-level security
+  switched on in the dashboard (Lantern reads the files, and says so); an action exported through a wrapper Lantern
+  does not look through (a chain of helpers with a call in it, a named function handed to the helper); a value the map
+  cannot place (an object written out, what a function of the project hands back), where the login rule reads a call
+  by its name alone; drizzle-orm's condition written as a callback (`where: (t, { eq }) => …`) and its `sql` tag; `a
+  || b` handed to a call; which folders a workspace's list names (a package of the project counts where a folder above
+  it says the project is a workspace and the version asked for can be its own); a tRPC procedure kept under a name of
+  its own and put into a router later, a call from the server's own code (`createCaller`), a router loaded lazily, and
+  a request limit or a login check put on the one handler in place of the procedures; in a SvelteKit app, what
+  `svelte.config.js` moves or renames (`kit.files`, `kit.alias`: the config is code and is never run), a hook a
+  library made or an unnamed function inside `sequence(…)`, a verb exported by a name (`export const GET = handler`),
+  a form's address handed through two parts, written as `formaction={name}` or spread onto the form, a named action
+  called with `fetch`, and a hook's guard that names its addresses by a pattern, by a list of areas or with `base`
+  (those routes are reported as open); in a Remix app, a form sent by a hook (`fetcher.submit`, `useSubmit`), a
+  `middleware` export, a form address that climbs (`..`), a form with no address in a part several pages show, `.mdx`
+  routes, `ignoredRouteFiles`, `appDirectory` and a `routes()` function of the app's own, a function two route files
+  hand on (it is the first one's route), and remix-auth's `isAuthenticated`, which the names rule reads and the flow
+  step does not; for the type checkers, a JS/TS method that a class beneath replaces (the link goes to the declared
+  class's method, "likely"), classes that only fit a Protocol's shape (not drawn as `possible`), calls Lantern placed
+  by name only or labelled as a library's (not asked), JSX elements and calls in a `.svelte` file or a page's own
+  script (not asked), third-party Python libraries (the project's Python is never used, so pyright sees the project's
+  files and Python's own library only), and a person's Windows or macOS computer (the tests run there in CI; the
+  measurement was on Linux).
+  `docs/audit/CLAIMS.md` A20 to A27 and S34 to S38 have the full lists.
+
 - Fix this for me (optional): pick a coding agent you already use (Claude Code, Codex or Aider) in Advanced
   Settings, and a finding's Fix screen offers "Fix this for me with …". The agent works on a copy of your project;
   Lantern then analyzes the copy and tells you, in one line, whether the problem is gone and whether anything new

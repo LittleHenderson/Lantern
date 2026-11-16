@@ -16,8 +16,9 @@ from pathlib import Path
 
 from . import headers, ratelimit
 from .context import code_mentions, handles_passwords, password_hash_uses
-from .graph import Graph
-from .websec import call_adjacency, code_only, is_public_route, login_check, mentions_auth, mutating_route
+from .graph import Graph, action_name, route_words
+from .websec import (action_change, call_adjacency, code_only, is_public_route, login_check, mentions_auth,
+                     mutating_route)
 
 SENSITIVE_PATH = re.compile(r"(^|/)(login|log-in|signin|sign-in|signup|sign-up|register|auth|token|session|password|"
                             r"reset|forgot|otp|verify|magic-link|2fa|mfa|invite)(/|$|\b)", re.I)
@@ -36,6 +37,10 @@ SERVER_FETCH = re.compile(
 ALLOW_LIST = re.compile(r"allow_?list|allowed_?hosts|ALLOWED_HOSTS|allowedHosts|ALLOWED_DOMAINS|is_private|"
                         r"isPrivate|ssrf", re.I)
 UPLOAD = re.compile(r"\bUploadFile\b|request\.files|multer\(|formData\(\)|\.formData\(|FileField|busboy|formidable")
+# `request.formData()` is how the fields of every form arrive in a Next.js route, a SvelteKit or a Remix action. It is
+# an upload only where the code of that file takes a file out of the form.
+FORM_READ = re.compile(r"formData\(\)|\.formData\(")
+FILE_TAKEN = re.compile(r"\b(?:File|Blob)\b|\.arrayBuffer\(|\.stream\(\)")
 UPLOAD_LIMIT = re.compile(r"MAX_CONTENT_LENGTH|max_size|maxFileSize|fileSize|content_type|contentType|mimetype|"
                           r"fileFilter|DATA_UPLOAD_MAX|sizeLimit|bodyParser", re.I)
 # Framework settings written as a string key (`app.config["MAX_CONTENT_LENGTH"] = ...`), matched in the raw text
@@ -92,10 +97,11 @@ def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[
     own = [s for s in states if s[2] == "own"]
     maybe = [s for s in states if s[2] == "maybe"]
     rest = [s for s in states if s[2] != "yes"]
-    shown = [f"{d} ({n.file}:{n.start_line})" for n, d, _s, _w in (rest + yes)[:4]]     # the ones without first
+    shown = [f"{route_words(d)} ({n.file}:{n.start_line})" for n, d, _s, _w in (rest + yes)[:4]]   # those without first
     if len(yes) == len(states):
         return ("in place", f"{what} could be called as fast as an attacker likes; the code puts a request limit on "
-                + ("each of them." if len(states) > 1 else "it."), shown, [f"{d}: {w}" for _n, d, _s, w in yes[:4]])
+                + ("each of them." if len(states) > 1 else "it."), shown,
+                [f"{route_words(d)}: {w}" for _n, d, _s, w in yes[:4]])
     open_ = ("can be called as fast as an attacker likes: password guessing, sign-up spam, or running up your bill.")
     if yes or own or maybe:
         parts = []
@@ -107,7 +113,7 @@ def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[
             parts.append("A limit is set up for the whole app, but the code does not show that it covers "
                          + ("these routes" if len(states) > 1 else "this route")
                          + " or that it is tight enough for signing in; check the ones listed.")
-        found = list(dict.fromkeys([f"{d}: {w}" for _n, d, _s, w in yes[:2]] + [w for _n, _d, _s, w in maybe[:2]]
+        found = list(dict.fromkeys([f"{route_words(d)}: {w}" for _n, d, _s, w in yes[:2]] + [w for _n, _d, _s, w in maybe[:2]]
                                    + [w for _n, _d, _s, w in own[:2]]))
         return "check", f"{what} {open_} " + " ".join(parts), shown, found[:4]
     notes = list(dict.fromkeys(w for _n, _d, _s, w in states if w))
@@ -123,8 +129,12 @@ def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[
 def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     web = shape in ("full-stack web app", "web API", "frontend web app")
     # Routes in test code (a test's own server, the sample apps under tests/fixtures) are not the app's routes
+    # ... and neither is the handler every tRPC procedure stands behind (`POST /api/trpc/[trpc]`): each procedure
+    # is a route of its own (`entry["serves"]`, set by the JS/TS reader where it read the procedures), nor
+    # SvelteKit's `handle`, which runs before every route (`ANY /*`)
     routes = [(n, (n.entry or {}).get("detail") or "") for n in g.entry_points()
-              if (n.entry or {}).get("kind") == "route" and not (n.file and repo.is_test(n.file))]
+              if (n.entry or {}).get("kind") == "route" and not (n.file and repo.is_test(n.file))
+              and not (n.entry or {}).get("serves")]
     deps = _deps_text(repo)
     # In code, or on an import line (a JS import names its package in a string); not a word in a pattern list
     managed = MANAGED_AUTH.search(deps) or _code_grep(repo, MANAGED_AUTH, limit=1) or [
@@ -137,7 +147,14 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
 
     # 1. Rate limiting on sign-in and other abuse-prone routes
     sensitive = [(n, d) for n, d in routes if SENSITIVE_PATH.search(d.partition(" ")[2] or d)]
-    writes = [(n, d) for n, d in routes if d.split(" ")[0].upper() in ("POST", "PUT", "PATCH", "DELETE")]
+    # A Server Action has no verb to say that it changes data: its code is read for that (`websec.action_change`)
+    acts = [n for n, d in routes if action_name(d)]
+    changing = set()
+    if acts:
+        act_adj, act_texts = call_adjacency(g), {}
+        changing = {n.id for n in acts if action_change(g, n, act_adj, act_texts)}
+    writes = [(n, d) for n, d in routes
+              if d.split(" ")[0].upper() in ("POST", "PUT", "PATCH", "DELETE") or n.id in changing]
     if sensitive or writes:
         # A library that is installed protects nothing (until 2026-11-11 its name in the dependencies read "in
         # place"): the limit has to be on the route, or on the app where the code shows it covers the route.
@@ -215,7 +232,7 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     # (routes the frontend calls) count too. A user lookup by a request value is a weak sign: at most "check".
     no_auth = [f for f in (sec or {}).get("findings", []) if f.get("rule") == "LW-AUTH-MISSING" and f.get("status") != "accepted"
                and not f.get("in_tests")]
-    need = [(n, d) for n, d in writes if not is_public_route(d) and mutating_route(d)]
+    need = [(n, d) for n, d in writes if not is_public_route(d) and (mutating_route(d) or n.id in changing)]
     if need or no_auth:
         adj = call_adjacency(g)
         signed, weak, bare = [], [], []
@@ -238,12 +255,14 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                 weak.append((n, d, sign[1]))
             else:
                 signed.append((n, d, sign[1]))
-        where = [f"{d} ({n.file}:{n.start_line})" for n, d, _ in bare]
-        weak_where = [f"{d} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak]
+        where = [f"{route_words(d)} ({n.file}:{n.start_line})" for n, d, _ in bare]
+        weak_where = [f"{route_words(d)} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak]
+        # a Server Action has no verb and path to show, and its finding's snippet is a line of its code
+        actions = {(n.file, n.start_line): f"the Server Action {d[7:]}" for n, d in routes if d.startswith("ACTION ")}
         for f in no_auth:   # routes the app calls that the list above does not already name
             loc = f"{f['file']}:{f['line']}"
             if not any(loc in w for w in where + weak_where):
-                where.append(f"{f.get('snippet') or 'route'} ({loc})")
+                where.append(f"{actions.get((f['file'], f['line'])) or f.get('snippet') or 'route'} ({loc})")
         app_wide = _global_auth_signs(repo)
         if not app_wide and managed:
             app_wide = [("an auth library is installed", 0, "")]
@@ -255,7 +274,7 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
         only_lookup = (f"{len(weak)} route(s) that change data only look up a user by a value from the request and "
                        "test the result. That finds the record's owner, not who is calling (the shape behind most "
                        "\"anyone can edit anyone's data\" bugs), so the signed-in user must be checked too.") if weak else ""
-        found_ok = [f"{d}: {sign}" for _, d, sign in signed[:4]]
+        found_ok = [f"{route_words(d)}: {sign}" for _, d, sign in signed[:4]]
         if no_auth or (bare and not app_wide):
             item("route-auth", "Login check on routes that change data", "add",
                  " ".join(x for x in (none_found, only_lookup) if x), (where + weak_where)[:6], how, found_ok)
@@ -273,10 +292,18 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
             item("route-auth", "Login check on routes that change data", "in place",
                  f"All {len(need)} route(s) that change data show a login check in the handler or in what it calls "
                  "(the check looks for common login patterns, not your permission rules).", [],
-                 how, [f"{d}: {sign}" for _, d, sign in signed[:6]])
+                 how, [f"{route_words(d)}: {sign}" for _, d, sign in signed[:6]])
 
     # 6. File uploads
-    up = _code_grep(repo, UPLOAD, limit=10)
+    up, takes = [], {}
+    for f, ln, text in _code_grep(repo, UPLOAD, limit=60):
+        if FORM_READ.search(text) and not UPLOAD.search(FORM_READ.sub("", text)):
+            if f not in takes:
+                takes[f] = bool(FILE_TAKEN.search(code_only(repo.text(f), js=not f.endswith(".py"))))
+            if not takes[f]:
+                continue
+        up.append((f, ln, text))
+    up = up[:10]
     if up:
         lim = _code_grep(repo, UPLOAD_LIMIT, limit=1) or repo.grep(UPLOAD_LIMIT_KEY, limit=1)
         item("upload-checks", "Upload size and type checks", "in place" if lim else "add",
@@ -302,6 +329,9 @@ def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
     for f in repo.project_files:   # Next.js middleware file
         if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and mentions_auth(code_only(repo.text(f), js=True), js=True):
             out.append((f, 1, "middleware file"))
+        elif re.search(r"(?:^|/)src/hooks\.server\.[tj]s$", f) and \
+                mentions_auth(code_only(repo.text(f), js=True), js=True):
+            out.append((f, 1, "SvelteKit hook"))     # `handle` runs before every route of the app
     return out
 
 

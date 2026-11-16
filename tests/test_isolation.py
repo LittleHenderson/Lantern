@@ -30,7 +30,8 @@ GIT_PLANTED = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.https://rewritt
 ISOLATION_VARS = ("LANTERN_OFFLINE", "LANTERN_NO_REAL_PROVIDERS", "LANTERN_HOME", "LANTERN_CONFIG_DIR",
                   "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "APPDATA", "LOCALAPPDATA",
                   "GIT_CONFIG_NOSYSTEM", "PIP_CONFIG_FILE", "NPM_CONFIG_USERCONFIG",
-                  ng.LOG_ENV, ng.ALLOW_ENV, ng.DENY_ENV, "LANTERN_TESTS_NETLESS", "LANTERN_TESTS_COMPLETE")
+                  ng.LOG_ENV, ng.ALLOW_ENV, ng.DENY_ENV, "LANTERN_TESTS_NETLESS", "LANTERN_TESTS_COMPLETE",
+                  "LANTERN_TESTS_TYPECHECK")
 
 
 def developer_env(tmp: Path, forwarder: int) -> dict:
@@ -378,13 +379,23 @@ def test_a_run_names_the_rules_it_ran_under_and_ci_looks_for_them(tmp_path):
     assert code == 1 and second.search(out) and not first.search(out), out[-3000:]
     code, out = _missing_library_run(tmp_path / "none", "", complete=False)
     assert code == 0 and "rules of this run" not in out, out[-3000:]      # a developer's own run: no rule, no line
+    # Since 2026-11-15 the first pass has a third rule: the real type checkers must be found (tests/test_typecheck.py).
+    # It is named like the others; `1`, a developer's own word for "start them where they are", is no rule.
+    code, out = _missing_library_run(tmp_path / "checkers", "", complete=True, LANTERN_TESTS_TYPECHECK="required")
+    assert code == 0 and "; LANTERN_TESTS_TYPECHECK=required (" in out and not first.search(out), out[-3000:]
+    code, out = _missing_library_run(tmp_path / "asked", "", complete=False, LANTERN_TESTS_TYPECHECK="1")
+    assert code == 0 and "rules of this run" not in out, out[-3000:]
     if ng.has_route_out():
         # the dangerous shape: the rule arrives where there is a way out, and the run does not start
         code, out = _missing_library_run(tmp_path / "out", "", complete=True, LANTERN_TESTS_NETLESS="required")
         assert code == 4 and "LANTERN_TESTS_NETLESS=required" in out and "passed" not in out, out[-3000:]
     else:
-        # inside the no-network runner (CI's first pass): both rules, in the words CI looks for
+        # inside the no-network runner (CI's first pass): the three rules, in the words CI looks for; two of them
+        # are not the three
         code, out = _missing_library_run(tmp_path / "both", "", complete=True, LANTERN_TESTS_NETLESS="required")
+        assert code == 0 and "LANTERN_TESTS_NETLESS=required (" in out and not first.search(out), out[-3000:]
+        code, out = _missing_library_run(tmp_path / "three", "", complete=True, LANTERN_TESTS_NETLESS="required",
+                                         LANTERN_TESTS_TYPECHECK="required")
         assert code == 0 and first.search(out), out[-3000:]
 
 
@@ -401,7 +412,11 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     Docker's container had one) and the one test that needs it was skipped with that reason. Since 2026-11-14 a
     macOS job runs the tests whose answer the system itself gives (it ran none before), chosen by name, and the test
     jobs build one version of gitleaks for the tests of how Lantern starts it: it is named on the first pass's sudo
-    line like a rule, and that step looks in the run's own words for the program its tests started."""
+    line like a rule, and that step looks in the run's own words for the program its tests started. Since 2026-11-15
+    the Linux, Windows and macOS jobs install the two type checkers the type-aware pass asks (TypeScript and pyright,
+    one fixed version each, from npm with install scripts off, outside the checkout and off PATH) and run
+    tests/test_typecheck.py under LANTERN_TESTS_TYPECHECK=required, where a checker that is not found fails its
+    tests: until then the real checkers were started only on the computer the pass was written on."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -460,8 +475,27 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     mac = ci[ci.index("\n  macos:"): ci.index("\n  browser:")]
     its = [line.strip() for line in mac.splitlines() if re.search(r"\bpython -m pytest\b", line)]
     assert "runs-on: macos-latest" in mac and len(its) == 1 and ("ci.yml", its[0]) in runs and " -k " in its[0], mac
+    # The type checkers: the same two versions in the three jobs, install scripts off, each version read back from
+    # what was installed before it is named; named by the variables Lantern itself reads and by the tests' rule.
+    # Nothing comes with them: neither package needs another, and the one pyright would take if it could (a file
+    # watcher for macOS, asked for by a range of versions) is left out, so the two fixed versions are all there is.
+    install = ('npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit '
+               '--no-fund typescript@6.0.2 pyright@1.1.414')
+    assert ci.count(install) == 3 and ci.count("typescript@") == 3 and ci.count("pyright@") == 3, ci.count(install)
+    for line in ('test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"',
+                 'test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"',
+                 'echo "LANTERN_TYPESCRIPT=$at/typescript" >> "$GITHUB_ENV"',
+                 'echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"',
+                 'echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"'):
+        assert ci.count(line) == 3, line
+    for name in ("LANTERN_TESTS_TYPECHECK", "LANTERN_TYPESCRIPT", "LANTERN_PYRIGHT"):
+        assert f'"{name}=${name}"' in handed[0] and name not in handed[1], (name, handed)
+    assert ("grep -q '^programs these tests started: .*pyright 1\\.1\\.414 (node at .*typescript 6\\.0\\.2 (node at ' "
+            "pytest.log ||") in ci
+    assert "tests/test_typecheck.py" in its[0] and " or test_typecheck" in its[0], its[0]      # macOS: the whole file
     assert [what for what, _ in _rules_gates()] == [
-        "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required",
+        "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required"
+        ".*LANTERN_TESTS_TYPECHECK=required",
         "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips",
         "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips"]
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

@@ -41,9 +41,11 @@ def building():
                 _held[1] = None
 
 
-def build_graph(repo: str | Path) -> Graph:
+def build_graph(repo: str | Path, typecheck: bool | None = None) -> Graph:
+    """`typecheck`: ask the type checkers this computer has about the calls Lantern's own reading left unresolved
+    (`lantern/typecheck.py`). None leaves it to LANTERN_TYPECHECK; it is off unless one of the two says so."""
     with building():
-        return _build_graph(repo)
+        return _build_graph(repo, typecheck)
 
 
 def _python(g: Graph, repo) -> dict:
@@ -65,7 +67,7 @@ def _part(g: Graph, repo, reader: str, prefix: str, add) -> dict:
         return {"files": len(files), "lines": sum(n.end_line or 0 for n in files)} if files else {}
 
 
-def _build_graph(repo: str | Path) -> Graph:
+def _build_graph(repo: str | Path, typecheck: bool | None = None) -> Graph:
     g = Graph(str(Path(repo).resolve()))
     py = _part(g, repo, "python", "py:", _python)
     py = {"files": py.get("files", 0), "lines": py.get("lines", 0)}
@@ -129,6 +131,9 @@ def _build_graph(repo: str | Path) -> Graph:
     bridge.link(g)
     from . import rn
     rn.add_entries(g, repo)        # React Native / Expo screens and links, from the JS map
+    from . import typecheck as types
+    if types.asked(typecheck):     # opt-in: where a call is still unresolved, what a type checker says of it
+        types.run(g, Path(repo))
     lanes.assign(g)
     calls.finish(g)   # one record per call site (Python and JS/TS), summarised in g.meta["calls"]
     return g

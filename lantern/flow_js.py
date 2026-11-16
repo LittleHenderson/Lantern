@@ -36,15 +36,28 @@ def build_all(repo, max_file: int, stats: dict):
     """Every JavaScript/TypeScript file of the project (and each page's own script) as a `Mod`."""
     from tree_sitter import Parser
 
-    from .js_frontend import HTML_EXTS, LANGS, TEST_RE, discover, inline_script
+    from .js_frontend import HTML_EXTS, LANGS, SVELTE_EXT, TEST_RE, SpecResolver, discover, inline_script, \
+        module_names, svelte_parts
     from .python_frontend import project_bytes
     parsers: dict = {}
     root = repo.resolve()
+    found = []
     for p in discover(repo):
         try:
-            rel = p.relative_to(repo).as_posix()
+            found.append((p, p.relative_to(repo).as_posix()))
         except ValueError:
-            rel = p.resolve().relative_to(root).as_posix()
+            found.append((p, p.resolve().relative_to(root).as_posix()))
+    # an import that names a package of the project itself (a monorepo's `@team/store`) is a file of the project,
+    # as the map reads it: written here the way a path is (`./packages/store/src`)
+    resolver = SpecResolver(root, module_names(rel for _, rel in found))
+
+    def own(spec: str, rel: str) -> str | None:
+        hit = resolver.own_path(spec, root / rel)
+        if hit is None:
+            return None
+        return "./" + (hit[:-6] if hit.endswith("/index") else hit)
+
+    for p, rel in found:
         if TEST_RE.search(rel):
             continue
         try:
@@ -60,11 +73,14 @@ def build_all(repo, max_file: int, stats: dict):
             if src is None:
                 continue
         ext = ".js" if html else p.suffix
+        if ext == SVELTE_EXT:     # a Svelte component: its script, with the file's own line numbers
+            src, _markup, ts, _own = svelte_parts(src)
+            ext = ".ts" if ts else ".js"
         if ext not in parsers:
             parsers[ext] = Parser(LANGS[ext])
         try:
             tree = parsers[ext].parse(src)
-            mod = _Reader(rel, src).module(tree.root_node)
+            mod = _Reader(rel, src, own).module(tree.root_node)
         except RecursionError:
             stats["skipped_files"] += 1
             continue
@@ -84,10 +100,11 @@ def _unescape(m: re.Match) -> str:
 
 
 class _Reader:
-    def __init__(self, rel: str, src: bytes):
+    def __init__(self, rel: str, src: bytes, own=None):
         self.mod = Mod(rel, "js")
         self.src = src
         self.depth = 0
+        self.own = own      # (specifier, this file) -> the path of a package of the project itself, or None
 
     # ---- small helpers
     def text(self, n) -> str:
@@ -188,7 +205,13 @@ class _Reader:
                         if spec.startswith("."):
                             mod.picked[local] = key
                     continue
-                out.append(N("assign", self.line(d), items=[self.target(name_n)], a=self.expr(val)))
+                value = self.expr(val)
+                if name_n is not None and name_n.type == "object_pattern":
+                    # `const { getSession, commitSession } = createCookieSessionStorage(…)`: each name is that part
+                    # of the value, also for the functions of the file that read it
+                    for key, local in self.pattern_names(name_n):
+                        mod.consts.setdefault(local, []).append(N("attr", self.line(d), a=value, name=key))
+                out.append(N("assign", self.line(d), items=[self.target(name_n)], a=value))
             return out
         if t == "expression_statement":
             e = self.unwrap(s.named_children[0]) if s.named_child_count else None
@@ -288,11 +311,16 @@ class _Reader:
             return spec
         return ".".join([spec] + list(reversed(tail)))
 
-    @staticmethod
-    def spec(s: str) -> str:
+    def spec(self, s: str) -> str:
         if s.startswith("node:"):
             s = s[5:]
-        return s if not s.startswith(("/", "@/", "~/", "#")) else "./" + s.lstrip("/@~#")
+        if s.startswith("$lib/"):       # SvelteKit's name for the project's own `src/lib`
+            return "./lib/" + s[5:]
+        if s.startswith(("/", "@/", "~/", "#")):
+            return "./" + s.lstrip("/@~#")
+        if self.own is not None and s and not s.startswith("."):
+            return self.own(s, self.mod.file) or s
+        return s
 
     def imports(self, s) -> None:
         src = s.child_by_field_name("source")

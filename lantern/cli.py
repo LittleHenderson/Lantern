@@ -88,7 +88,8 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
     out = _out(repo, a.out)
     try:
         res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None, sandbox=a.sandbox,
-                      test_cwd=test_cwd, test_minutes=a.test_minutes, test_memory=a.test_memory)
+                      test_cwd=test_cwd, test_minutes=a.test_minutes, test_memory=a.test_memory,
+                      typecheck=True if a.typecheck else None)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -147,8 +148,15 @@ def cmd_verify(a, trace_cmd: list[str]) -> int:
         print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
         return 2
     repo = Path(a.path).resolve()
+    from . import typecheck as types
+    # the person's word, by the flag or by LANTERN_TYPECHECK in their own shell; never the report's
     r = evidence.verify(repo, want, old, trace_cmd, a.no_scan, a.offline,
-                        beside=Path(a.report).resolve().parent if a.report else None)
+                        beside=Path(a.report).resolve().parent if a.report else None,
+                        typecheck=bool(a.typecheck) or types.asked())
+    if r.get("refused") and r.get("typecheck"):
+        print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} --typecheck",
+              file=sys.stderr)
+        return 2
     if r.get("refused"):
         print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
               + " ".join(r["trace_command"]), file=sys.stderr)
@@ -239,6 +247,33 @@ def _write_named(repo: Path, dest: Path, text: str) -> None:
         results.write(dest, text, where="the project folder")
     else:
         dest.write_text(text, encoding="utf-8")
+
+
+def cmd_github(a) -> int:
+    """`lantern github setup|summary|save` (lantern/onrepo.py): what Lantern leaves on the repository it checked."""
+    from . import onrepo, results
+    repo = Path(a.path).resolve()
+    try:
+        if a.gh == "setup":
+            for line in onrepo.setup(repo, ref=a.ref, readme=not a.no_readme, force=a.force):
+                print(line)
+            print("\nWhat is left, on GitHub:")
+            for i, step in enumerate(onrepo.setup_steps(), 1):
+                print(f"  {i}. {step}")
+            return 0
+        out = _out(repo, a.out)
+        if a.gh == "summary":
+            ev = onrepo.read(out)
+            print(onrepo.decision_of(ev) if a.decision_only else
+                  onrepo.summary(ev, short=a.short, run_url=a.run_url, report_url=a.report_url), end="\n" if
+                  a.decision_only else "")
+            return 0
+        for p in onrepo.save(repo, out, a.to, run_url=a.run_url, report_url=a.report_url):
+            print(f"wrote   {p}")
+        return 0
+    except (results.Refused, ValueError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
 
 def cmd_trace(a, trace_cmd: list[str]) -> int:
@@ -568,6 +603,11 @@ def _main(argv: list[str]) -> int:
                          "use, in megabytes from 128 to 1048576 (default: 2048; LANTERN_TEST_MEMORY_MB sets it for "
                          "every run). Tests stopped for their memory are neither passed nor failed")
     sp.add_argument("--no-scan", action="store_true")
+    sp.add_argument("--typecheck", action="store_true",
+                    help="also ask the type checkers installed on this computer (the TypeScript compiler, pyright) "
+                         "where the calls go that Lantern's own reading left unresolved. They read the project and "
+                         "run nothing of it; a copy of them inside the project is never used. Off unless asked for "
+                         "(LANTERN_TYPECHECK=1 asks for it in every run)")
     sp.add_argument("--offline", action="store_true",
                     help="skip dependency audits (pip-audit, npm audit), the only steps that use the network")
     sp.add_argument("--privacy", choices=["full", "structure"], default="full",
@@ -631,11 +671,35 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--report", help="evidence.html (or .json) to read the digest and run options from")
     sp.add_argument("--no-scan", action="store_true", help="the report was made with --no-scan (read from --report)")
     sp.add_argument("--offline", action="store_true", help="skip the dependency audits (read from --report)")
+    sp.add_argument("--typecheck", action="store_true",
+                    help="the report was made with --typecheck: ask this computer's type checkers again "
+                         "(LANTERN_TYPECHECK=1 says the same). Never read from --report: a report does not start them")
 
     sp = sub.add_parser("mcp", help="serve Lantern to an AI assistant over MCP (stdio); --setup prints config")
 
     sp = sub.add_parser("packs", help="list the analysis packs (rule and framework pattern files) in use and check them")
     common(sp)
+
+    sp = sub.add_parser("github", help="leave Lantern's report on the GitHub repository it checked: setup, summary, save")
+    gsub = sp.add_subparsers(dest="gh", required=True)
+    gp = gsub.add_parser("setup", help="write the workflow that checks every push and pull request, the badge and its "
+                                       "line in README.md")
+    gp.add_argument("path", nargs="?", default=".")
+    gp.add_argument("--ref", help="the version of Lantern's GitHub Action to use (default: this Lantern's)")
+    gp.add_argument("--no-readme", action="store_true", help="leave README.md as it is")
+    gp.add_argument("--force", action="store_true", help="replace a workflow file of that name that is not Lantern's")
+    for name, what in (("summary", "print a finished check's result as Markdown (for a comment or a page)"),
+                       ("save", "write the report folder that is kept in the repository (.lantern/report)")):
+        gp = gsub.add_parser(name, help=what)
+        common(gp)
+        gp.add_argument("--run-url", help="link to the run that made the report (https://github.com/... only)")
+        gp.add_argument("--report-url", help="link to the full report's download (https://github.com/... only)")
+        if name == "summary":
+            gp.add_argument("--short", action="store_true", help="the shorter form for a pull request's comment")
+            gp.add_argument("--decision-only", action="store_true", help="print only Passed, Blocked, Incomplete "
+                                                                         "or none")
+        else:
+            gp.add_argument("--to", help=f"the folder inside the project (default {'.lantern/report'})")
 
     sp = sub.add_parser("export", help="export findings as SARIF for GitHub code scanning and other tools")
     common(sp)
@@ -716,6 +780,8 @@ def _main(argv: list[str]) -> int:
         return 0
     if a.cmd == "accept":
         return cmd_accept(a)
+    if a.cmd == "github":
+        return cmd_github(a)
     if a.cmd == "starter":
         return cmd_starter(a)
     if a.cmd == "evidence":

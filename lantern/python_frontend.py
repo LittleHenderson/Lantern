@@ -1920,6 +1920,8 @@ def build_graph(repo: str | Path, into: Graph | None = None) -> Graph:
                     g.unresolved[cs.text] = g.unresolved.get(cs.text, 0) + 1
                     if TEST_FILE_RE.search(m.rel):   # counted, and said apart, so test code cannot hide in the total
                         g.unresolved_tests[cs.text] = g.unresolved_tests.get(cs.text, 0) + 1
+                    if cs.kind == "call":
+                        g.unresolved_at[f"{m.rel}:{line}:{col}"] = (cs.text, bool(TEST_FILE_RE.search(m.rel)))
                 continue
             for tgt, conf, via in targets:
                 if tgt.startswith("ext:"):

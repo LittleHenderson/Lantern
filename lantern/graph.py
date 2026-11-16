@@ -18,6 +18,34 @@ MODULE, CLASS, CALLABLE, EXTERNAL = "module", "class", "callable", "external"
 # Edge kinds
 CALLS, MAY_CALL, CONTAINS, IMPLEMENTS = "calls", "may_call", "contains", "implements"
 
+# Ids of things outside the project's code: a library or a server elsewhere (`ext:`), a database table (`db:`)
+OUTSIDE = ("ext:", "db:")
+
+
+def outside(node_id: str) -> bool:
+    return node_id.startswith(OUTSIDE)
+
+
+# A Server Action's entry: `{"kind": "route", "detail": "ACTION <name>"}`. It has no verb and no path, so the map
+# writes it down with a word of its own, and that word is for the map: a sentence says "the Server Action <name>".
+ACTION = "ACTION "
+
+
+def action_name(detail) -> str | None:
+    """The name of the Server Action a route's detail names (`ACTION save` → `save`); None for any other detail."""
+    text = str(detail or "")
+    return text[len(ACTION):] or None if text.startswith(ACTION) else None
+
+
+def route_words(detail, first: bool = False) -> str:
+    """A route's detail as a sentence says it: `ACTION save` reads "the Server Action save" ("The …" with `first`,
+    where it begins the sentence); any other detail (`POST /api/notes`, a phone app's words) is itself."""
+    name = action_name(detail)
+    if name is None:
+        return str(detail or "")
+    return f"{'The' if first else 'the'} Server Action {name}"
+
+
 # Confidence levels, strongest first. Order matters: merges keep the strongest.
 OBSERVED, RESOLVED, INFERRED, POSSIBLE = "observed", "resolved", "inferred", "possible"
 CONFIDENCE_RANK = {OBSERVED: 0, RESOLVED: 1, INFERRED: 2, POSSIBLE: 3}
@@ -96,6 +124,11 @@ class Graph:
         self.unresolved_tests: dict[str, int] = {}   # the part of `unresolved` that sits in test files (Python)
         self.builtin_calls = 0   # built-in calls (Python `len`, `print`, `x.append` on a list; JS DOM and `fetch` results): counted, not drawn
         self.sites: list[dict] = []   # the call-site inventory (calls.py): saved to calls.json, summarised in meta
+        # For the opt-in type-aware pass (typecheck.py), never saved: the place of each call counted in `unresolved`
+        # -> (its text there, whether `unresolved_tests` counts it too), and where each import the JS/TS reader
+        # followed led (file -> {specifier: file})
+        self.unresolved_at: dict[str, tuple[str, bool]] = {}
+        self.js_imports: dict[str, dict[str, str]] = {}
         self.meta: dict = {}
 
     # ---- nodes ----
@@ -109,6 +142,12 @@ class Graph:
     def external(self, name: str) -> Node:
         nid = f"ext:{name}"
         return self.add_node(Node(id=nid, kind=EXTERNAL, name=name.split(".")[-1], qualname=name))
+
+    def table(self, name: str, schema: str | None = None) -> Node:
+        """A database table the code reads or writes (`db:<table>`, `db:<schema>.<table>`): outside the code, in
+        the Data lane."""
+        full = f"{schema}.{name}" if schema else name
+        return self.add_node(Node(id=f"db:{full}", kind=EXTERNAL, name=name, qualname=full))
 
     # ---- edges ----
     def add_edge(self, src: str, dst: str, kind: str = CALLS, confidence: str = RESOLVED,
@@ -215,7 +254,7 @@ class Graph:
                "known_external": 0, "builtin": self.builtin_calls}
         for e in self.call_edges():
             n = max(1, len(e.lines))
-            if e.dst.startswith("ext:"):
+            if outside(e.dst):
                 out["known_external"] += n
             elif e.via in ("unique-method-name", "method-name"):
                 out["name_only_guess"] += n
@@ -248,7 +287,7 @@ class Graph:
         for e in self.call_edges():
             conf[e.confidence] = conf.get(e.confidence, 0) + 1
             by_name += e.via in ("unique-method-name", "method-name")
-            if not e.dst.startswith("ext:"):
+            if not outside(e.dst):
                 internal_calls += 1
         return {
             "nodes": kinds,
