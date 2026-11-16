@@ -1589,6 +1589,58 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- what each route shows about its caller, written down
+PHONE_DOOR = ("INTENT ", "LINK ")       # what a phone app is started with: who may start it is not a login's business
+
+
+def route_logins(g: Graph, lines_for, flows=None, findings=(), is_test=None) -> list[dict]:
+    """What every route shows about asking who is calling, one record a route (roadmap of 2026-11-14, stage 2): the
+    reading the missing-login rule and the protections card make (`login_check`), written into `security.json` so
+    that two checks of one project can be compared route by route (`lantern/diff.py`). `login` is `shown` (the
+    handler, what it is built on or what it calls shows a check of the caller, and `why` says which), `lookup` (the
+    handler only looks a user up by a value of the request, which finds a record and not the caller) or `none`.
+    One story with the findings: a route the flow step read a login from (`flows.logins`) is `shown` whatever its
+    names, and a route an open `LW-AUTH-MISSING` finding stands on is `none` whatever the names around it say.
+    `public`: the path is one made to be open (a sign-in, a webhook). `changes`: its verb changes data, or it is a
+    Server Action whose code does. Not listed: a route in test code (`is_test`), the one door other routes stand
+    behind (`entry["serves"]`), and what a phone app is started with (`PHONE_DOOR`). `lines_for(file)` hands a
+    file's lines. A heuristic like the two rules it is shared with: it reads names and shapes, not meaning."""
+    from .graph import action_name
+    shown = set(getattr(flows, "logins", None) or ())
+    caught = set(getattr(flows, "caught", None) or ())
+    soft = getattr(flows, "soft", None)
+    said_open = {(f.get("file"), f.get("line")) for f in findings
+                 if f.get("rule") == "LW-AUTH-MISSING" and f.get("status") != "accepted"}
+    routes = [n for n in g.entry_points() if (n.entry or {}).get("kind") == "route" and not (n.entry or {}).get("serves")
+              and not ((n.entry or {}).get("detail") or "").startswith(PHONE_DOOR)
+              and not (n.file and is_test is not None and is_test(n.file))]
+    if not routes:
+        return []
+    adj = call_adjacency(g)
+    texts: dict[str, str] = {}
+    out = []
+    for n in sorted(routes, key=lambda n: (n.file or "", n.start_line or 0, n.id)):
+        detail = (n.entry or {}).get("detail") or ""
+        text = None
+        if n.file:
+            if n.file not in texts:
+                texts[n.file] = "\n".join(lines_for(n.file))
+            text = texts[n.file]
+        sign = login_check(g, n, adj, text, doubt=soft if n.id in caught else None)
+        if n.id in shown:
+            if sign is None or sign[0] != "strong":
+                sign = ("strong", "the route's own code turns away a caller who is not signed in")
+        elif (n.file, n.start_line) in said_open:
+            sign = None if sign is None or sign[0] == "strong" else sign
+        changes = mutating_route(detail)
+        if not changes and action_name(detail):
+            changes = bool(action_change(g, n, adj, texts))
+        out.append({"node": n.id, "detail": detail, "file": n.file, "line": n.start_line,
+                    "login": "none" if sign is None else "lookup" if sign[0] == "weak" else "shown",
+                    "why": sign[1] if sign else None, "public": is_public_route(detail), "changes": bool(changes)})
+    return out
+
+
 # ------------------------------------------------------------- a secret written in the code (LW-SECRET-INLINE)
 # The text that signs sessions and login tokens, the password of an account the app connects with, a database address
 # that carries its password: written out in JS/TS, Python or a JSON settings file. Read from the text with patterns

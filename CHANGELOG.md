@@ -9,6 +9,54 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- A paid call is read from the code and not from what is written about it (`lantern/aiapp.py`: `read_as_code`,
+  `named`). Until now every line that did not begin as a comment was read as code, so a remark at a line's end, the
+  later lines of a block comment or of a docstring, and a text kept over several lines (a help text, a tiny app in a
+  test) each "made" a call into a model, a payment or an email service: the function was marked as one that spends
+  money, and a route that reaches it could be listed as one anyone can make spend it. Found on the first real pull
+  request that got the "what this change does" comment: it said the changed code leads to a payment, for a remark in
+  one of Lantern's own files (Lantern's check of itself listed 30 such calls in its own code; 27 were only written
+  about, the other 3 are in a sample app). Now: remarks are none in Python, Ruby, Go and the languages that write
+  them `//` and `/* */`; a text over several lines is none in Python, Go and the languages with text blocks in three
+  double quotes; a Python docstring is none for a vector store either (a vector store is still read out of the text
+  of a query handed to a call). The same calls written as code are found as before, also after a remark, after a `#`
+  or `//` inside a text and after a pattern that holds a backtick. Not judged: a JavaScript template that runs over
+  several lines (Known gaps). Tests: `tests/test_aiapp.py` (4 more).
+  - The change receipt: only a call that is paid for is "a call that costs money" (a vector store was one too), and
+    what a started program gave back or raised (`subprocess.CompletedProcess`, `subprocess.TimeoutExpired` and
+    their like) is no longer listed under "the shell". Tests: `tests/test_diff.py` (2 more).
+
+- What a change does (`lantern diff`, `docs/diff.md`; roadmap of 2026-11-14, stage 2). Two versions of a project are
+  checked and what the two checks found is compared, as a change receipt (`change.json`, `change.md`, `change.html`
+  in `.lantern/change/`): pages, routes and commands added, removed or moved; a login check that got weaker or was
+  taken off; a request the page still makes that no route answers any more; findings that are new, fixed, reached by
+  a page or route only now, ranked higher, or accepted in the change (a line that was only given a `# nosec` comment
+  is listed as accepted, with the comment's reason, never as fixed); calls that cost money that a route reaches now;
+  the functions that changed with what leads to them and what they lead to; and the release decision before and
+  after. Only differences are listed, two versions that differ in comments and spacing give "nothing changed", and
+  no model writes or ranks any line (`lantern/diff.py`: a function of two results folders). A check now says which
+  Lantern made it (`run.json` `lantern`): a receipt whose two checks were made by different versions, or by one
+  that does not say, says that a difference may be the Lantern's and not the change's.
+  - `lantern diff [PATH] [BASE..HEAD]`: with no versions, the last commit and the files as they are now; `BASE`,
+    `BASE..HEAD`, `BASE...HEAD` (from where the two parted, as a pull request shows it). An earlier version is
+    copied out of the repository into a folder of Lantern's own and checked there (`gitfacts.resolve`,
+    `gitfacts.copy`): the project's folder is not touched, and the settings, hooks, filters and attributes that
+    come with a repository decide nothing about the copy.
+  - The app (`lantern serve`): one new button on a project's screen, **What changed**, compares the last commit
+    with the files as they are now and opens the receipt (`POST /api/projects/<id>/change`,
+    `/p/<id>/change.html`: built from the data each time, no script in it). The terminal takes
+    `diff [BASE..HEAD]`.
+  - The GitHub Action: on a pull request the comment and the run's page begin with what the pull request changes
+    (the code before it is the first parent of GitHub's merge commit; the pull request's own check is not made a
+    second time). New inputs: `change` (default on) and `code-scanning` (default off: also hand the findings to
+    GitHub's code scanning, which needs `security-events: write`). The findings are in the full report as
+    `lantern.sarif` either way.
+  - `security.json` has a new field, `route_logins`: what each route shows about asking who is calling
+    (`shown`, `lookup` or `none`, with the sign that was read), the reading the missing-login rule already made,
+    written down so that two checks can be compared route by route. Results of an older Lantern are still read; a
+    receipt made from them says that the login record is missing.
+  - Result files that are damaged, or are no plain file, are refused by `lantern diff` with a sentence.
+
 - Lantern leaves its report on the GitHub repository it checked (`docs/github.md`), in three ways: one comment with
   the result (Passed, Blocked or Incomplete) on every pull request, edited on each push; one pull request on the main
   branch that saves the report in `.lantern/report/` (README in words, the commit-pinned Evidence Report, the digest

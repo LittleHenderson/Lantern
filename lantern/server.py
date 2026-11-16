@@ -527,7 +527,7 @@ class App:
         return make_provider(f"{s['provider']}/{s['model']}", base_url=s.get("base_url") or None, api_key=key)
 
 
-RESULT_FILE = re.compile(r"/p/(\w+)/(report\.html|evidence\.html|badge\.svg|evidence\.json)")
+RESULT_FILE = re.compile(r"/p/(\w+)/(report\.html|evidence\.html|badge\.svg|evidence\.json|change\.html)")
 
 
 def _print_of(text: str) -> str:
@@ -555,7 +555,7 @@ def write_starter_file(repo: Path, out: Path, name: str) -> str:
     return name
 
 
-TERMINAL_ALLOWED = ["analyze", "trace", "explain", "report", "verify", "accept", "packs", "export", "learn"]
+TERMINAL_ALLOWED = ["analyze", "trace", "explain", "report", "verify", "accept", "packs", "export", "learn", "diff"]
 TERMINAL_HELP = """Lantern commands only. The app runs each one the way its buttons do; results go to this project's .lantern/.
   analyze [--offline] [--no-scan] [--privacy full|structure]   read the project again and rebuild every result
   trace [--anyway] [--] TEST COMMAND            run your tests in the sandbox (e.g. trace python -m pytest -q);
@@ -567,6 +567,8 @@ TERMINAL_HELP = """Lantern commands only. The app runs each one the way its butt
   packs                                         list the analysis packs in use
   export [--sarif FILE]                         write findings as SARIF (default .lantern/findings.sarif)
   learn [--check]                               show the guide's progress for a starter app
+  diff [BASE..HEAD] [--offline]                 what changed: your last commit compared with your files as they are
+                                                now (or two versions: diff main..my-branch, diff main...my-branch)
 Anything else (shell commands, python, rm, curl) is refused: this drawer never runs a shell or your code."""
 
 
@@ -607,6 +609,9 @@ def _terminal_parser(verb: str):
         ap.add_argument("--sarif", default=".lantern/findings.sarif")
     elif verb == "learn":
         ap.add_argument("--check", action="store_true")
+    elif verb == "diff":
+        ap.add_argument("range", nargs="?")
+        ap.add_argument("--offline", action="store_true")
     return ap
 
 
@@ -617,6 +622,48 @@ def _inside(repo: Path, value: str, what: str) -> Path:
     if target != root and root not in target.parents:
         raise TerminalRefused(f"{what} must be inside the project: {value}")
     return target
+
+
+MOST_RANGE = 300        # characters in the two versions a person names for "What changed"
+
+
+def change_range(value) -> str | None:
+    """The two versions a person named for "What changed" (`BASE`, `BASE..HEAD`, `BASE...HEAD`), as the comparison
+    takes them, or None for none (the last commit and the files as they are now). ValueError with a sentence for
+    anything that is not such a name: the text reaches no shell, and each side must be written the way Lantern
+    takes a commit's name (`gitfacts.named`: a branch, a tag, HEAD or a commit's number, with `~1` or `^`)."""
+    from . import diff, gitfacts
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or len(value) > MOST_RANGE or not value.isprintable():
+        raise ValueError("the two versions are one line of text, such as main..my-branch")
+    before, after, _ = diff.sides(value)
+    if not all(gitfacts.named(name) for name in (before, after) if name is not None):
+        raise ValueError("write the two versions as BASE..HEAD, BASE...HEAD or BASE, each a branch, a tag, HEAD or a "
+                         "commit's number (with ~1 or ^ after it for the commit before)")
+    return value.strip()
+
+
+def change_job(app, p: dict, repo: Path, out: Path, spec: str | None = None, offline: bool | None = None) -> dict:
+    """Start "What changed" for a project (the button, `POST /api/projects/<id>/change`, the terminal's `diff`):
+    two versions of the project are checked and compared (`pipeline.change`), by default the last commit and the
+    files as they are now. Everything is written to `change/` in the project's results folder, so the project's own
+    report and results stay as they were. The job's result: `{"compared": True, "line", "same", "counts",
+    "release"}`, or `{"compared": False, "why"}` with Lantern's sentence where there is nothing to compare (no
+    repository, no such commit, git not installed, a place Lantern does not write to)."""
+    from . import diff, gitfacts
+    privacy = app.store.settings().get("privacy", "full")
+
+    def work(log):
+        try:
+            got = pipeline.change(repo, spec, out=out / "change", offline=offline, log=log, privacy=privacy)
+        except (gitfacts.NoCommit, diff.NotResults, results.Refused) as e:
+            log(f"change  not compared: {e}")
+            return {"compared": False, "why": str(e)}
+        r = got["receipt"]
+        return {"compared": True, "line": got["line"], "same": r["same"] is True, "counts": r["counts"],
+                "release": r["release"]["words"]}
+    return app.jobs.start(p["id"], "change", work)
 
 
 def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
@@ -667,6 +714,12 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
         privacy = a.privacy or privacy_default
         return {"job": app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(
             repo, out, privacy, log=log, offline=a.offline or None, no_scan=a.no_scan))}
+    if verb == "diff":
+        try:
+            spec = change_range(a.range)
+        except ValueError as e:
+            raise TerminalRefused(f"diff: {e}") from None
+        return {"job": change_job(app, p, repo, out, spec, offline=a.offline or None)}
     if verb == "explain":
         if not (out / "graph.json").exists():
             raise TerminalRefused("explain: analyze the project first")
@@ -908,6 +961,31 @@ def _load(p: Path):
         return None
 
 
+def _change_page(out: Path, lanes=None) -> tuple[int, str, str, dict]:
+    """What changed, as a page (`change.html`): built from the receipt's data (`change/change.json`, read the
+    strict way: a plain file of the shape Lantern writes) by Lantern's own template, which holds no script at all.
+    The `change.html` that lies beside the data is never sent: the results folder may have come with the project.
+    The page's policy lets nothing load and no script run, and lets only this app show it in a frame."""
+    from . import diff
+    words = "text/html; charset=utf-8"
+    quiet = {"Content-Security-Policy": _csp(None)}
+    if lanes is not None:
+        return (403, "<p>This file covers every layer of the app, and you can see only some of them. "
+                "Ask the workspace owner if you need it.</p>", words, quiet)
+    data = out / "change" / "change.json"
+    try:
+        receipt = diff.read(data)
+    except diff.NotResults:
+        if not os.path.lexists(data):
+            return 404, "<p>No change was compared yet.</p>", words, quiet
+        return 409, "<p>The data of this change report can't be read. Compare again.</p>", words, quiet
+    try:
+        return 200, diff.page(receipt), words, {"Content-Security-Policy": diff.policy(frame="'self'")}
+    except Exception as exc:  # noqa: BLE001: data of the right outline whose parts have another shape
+        return (409, f"<p>The data of this change report can't be read ({html.escape(type(exc).__name__)}). "
+                "Compare again.</p>", words, quiet)
+
+
 def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> tuple[int, str, str, dict]:
     """(status, body, content type, headers) for a result file: `report.html`, `evidence.html`, `badge.svg`, or a
     JSON file. Result folders can be planted (a cloned repo's `.lantern/`, or anything the cloud worker copied out),
@@ -920,6 +998,8 @@ def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> t
     score and its critical and high counts) are refused."""
     from .evidence import badge_svg, render_html
     from .report import read_bundle, render
+    if name == "change.html":
+        return _change_page(out, lanes)
     f = out / name.replace("badge.svg", "readiness.json")
     if not f.exists():
         return 404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)}
@@ -1318,6 +1398,10 @@ class Handler(BaseHTTPRequestHandler):
             privacy = app.store.settings().get("privacy", "full")
             job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
             return self._json(job, 202)
+        if action == "change":
+            # "What changed": the last commit compared with the files as they are now, or the two versions named
+            spec = change_range(b.get("range"))         # ValueError: answered with 400 and the sentence
+            return self._json(change_job(app, p, repo, out, spec), 202)
         if action == "cmd":
             # The terminal drawer: Lantern commands only, run through the same code paths as the buttons.
             try:

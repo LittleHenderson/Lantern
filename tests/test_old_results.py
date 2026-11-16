@@ -110,3 +110,21 @@ def test_graph_round_trip_keeps_old_edges(project):
     (project / "again.json").write_text(json.dumps(g.to_dict()), encoding="utf-8")
     again = Graph.load(project / "again.json")
     assert set(again.nodes) == set(g.nodes) and len(again.edges) == len(g.edges)
+
+
+def test_a_change_is_compared_with_what_an_older_lantern_found_and_the_receipt_says_so(project, tmp_path):
+    """`lantern diff` can be handed an earlier check as one side. Against results an older Lantern wrote it compares
+    what both hold, and the receipt says what such a comparison cannot know: the older check names no Lantern (so a
+    difference may be the Lantern's and not the code's) and holds no login record for its routes."""
+    from lantern import diff, pipeline
+    now = tmp_path / "now"
+    pipeline.analyze(project, now, offline=True, log=lambda *_: None)
+    old, new = diff.load(project / ".lantern", label="an older check"), diff.load(now, label="this check")
+    r = diff.compare(old, new)
+    assert r["base"]["lantern"] is None and r["head"]["lantern"]
+    assert any("before the change does not say which version of Lantern made it" in s for s in r["limits"])
+    assert any("does not write down what each route shows about a login" in s for s in r["limits"])
+    assert r["doors"]["login_changed"] == [] and r["counts"]["logins_weaker"] == 0      # nothing is said about logins
+    assert diff.markdown(r).startswith(diff.MARK) and "<script" not in diff.page(r)
+    assert diff.read(diff.write(tmp_path / "change", r)["json"])["limits"] == r["limits"]
+    assert diff.compare(old, old)["same"] is True and diff.compare(new, old)["head"]["lantern"] is None
