@@ -82,7 +82,7 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | `POST /api/projects/<id>/trace` | `{"command": "python -m pytest -q", "confirm": true, "minutes"?: 1…240, "memory_mb"?: 128…1048576, "reach"?: "<the sheet's sentence>"}` | job (202). `minutes` and `memory_mb` (since 2026-11-13) are how long the tests may take and how much memory they and everything they start may have in use; a value that is no whole number in its range → 400 (never quietly another number); one that is given is remembered for the next run (settings `test_minutes`, `test_memory_mb`), one left out means the last one set, else the installation's, else 10 minutes and 2048 MB. Only test runners (`sandbox.check_command`; anything else → 400). The first run of a command for a project needs `confirm: true` (409 otherwise); later runs of the same command do not. Where `testcmd`'s `reach.ask` is not empty (since 2026-11-15) the tests start only when `reach` is that sentence, letter for letter, or the person agreed to it for this command before: 409 `{"error", "reach": {"ask", "words"}}` otherwise, with the sentence for the kind of tests the command is (the sheet shows it with its tick box); an agreement is kept per project, command and sentence, so a system whose sandbox holds less than before asks again. Runs in `lantern/sandbox.py` and re-analyzes; the job result is `{"returncode", "observed", "recall", "backend", "language", "traced", "timed_out", "time_limit", "over_memory", "memory_limit", "blocked": [{"kind": "write\|network\|read", "what"}], "ran", "unavailable", "not_run_for", "libraries", "off_network", "cancelled", "not_ended", "note", "score_before", "score_after", "summary"}`. `blocked[].kind` (since 2026-11-13 also `read`: the tests reached for one of the person's own folders, which the sandbox closes to a Python or JavaScript run on Linux). `libraries` (since 2026-11-13): what the tests ran on, `{"state": "fetched\|installed\|none", "store", "count", "exact"}` (fetched for this run from the store named, with how many libraries and whether every version was the project's own choice; the ones installed on this computer, when the check was offline; or none, when the project names none), null when there is no such record; the libraries themselves are in `run.json`. `off_network` (since 2026-11-14): true when this run's own walls kept the tests from the network, false when they did not (tests that are not Python on macOS and Windows, where Lantern's guard is inside Python only; the run's log says why), null for a run that does not say (one before that date, or one that did not run); the page says "with the network off" only for true, and for false that the tests were not kept from the network by this run. `ran` false + `unavailable` (a sentence, always Lantern's own words): the sandbox could not be set up on this computer, or (`not_run_for: "libraries"`, since 2026-11-13) the libraries the project names could not be had for the tests, so the tests were **not run**; the job still ends `done`, because everything that only reads the code was checked: `returncode` is null and `observed` 0, the score's "Tests pass" check is `skip` (not `fail`), and the Evidence Report names no test command. `cancelled`: the person stopped the tests (below); the job ended there, **no result file was written** (the project shows what its last finished check found, `score_after` equals `score_before`, `summary` is null). `returncode` null with `timed_out`: stopped at the time limit (`time_limit`, the seconds the tests had); `returncode` null with `over_memory`: stopped because the tests, with what they started, had more memory in use than `memory_limit` megabytes. Either way the tests did not finish, which is no pass and no failure: the check goes on, "Tests pass" is `skip` with `required: true` (its points stay in the sum and earn none; until 2026-11-13 a run stopped by the clock read `fail` there) and the release decision is Incomplete, with the way to give the tests more time or memory. Whatever way a test run ends, every process it started is ended too; `not_ended` lists, in Lantern's own words, anything that could not be (normally `[]`; the page then says so and never says beside it that everything was ended) |
 | `POST /api/jobs/<id>/stop` | `{}` | Ends a running test run: the tests and every process they started. Returns the job (`stopping: true`); the job then ends `done` with `result.cancelled` true and no result file changed (`pipeline.Stopped`). 404 for an unknown job, 400 for a job that cannot be stopped part-way (`can_stop` false), 403 without the app's token. Asking again, or after the job has ended, changes nothing |
 | `GET /api/agents` | | `{"agents": [{"id": "claude"\|"codex"\|"aider", "name", "found": bool}], "chosen": id or ""}`: the coding agents Lantern can run for "Fix this for me", and whether each one's program is on this computer |
-| `POST /api/projects/<id>/agentfix` | `{"finding": id}` | job (202), only when an installed agent is chosen in Settings (400 otherwise, and for a finding that is not open). Copies the project to `LANTERN_HOME/fixes/`, runs the agent there as a fixed argument list (never a shell line) with no `LANTERN*` variables, analyzes the copy offline and compares it with the project's results. Result: `{"fix": id or null, "status": "fixed"\|"fixed_with_new"\|"not_fixed"\|"no_change", "verdict", "agent", "returncode", "files": [{"path", "change": "added"\|"changed"\|"deleted", "diff"}], "new": [{"rank", "title", "file", "line"}], "fixed": N}`. The project is not touched |
+| `POST /api/projects/<id>/agentfix` | `{"finding": id}` | job (202), only when an installed agent is chosen in Settings (400 otherwise, and for a finding that is not open). Copies the project to `LANTERN_HOME/fixes/`, runs the agent there as a fixed argument list (never a shell line) with no `LANTERN*` variables, analyzes the copy offline and compares it with the project's results. Result: `{"fix": id or null, "status": "fixed"\|"fixed_with_new"\|"not_fixed"\|"no_change", "verdict", "agent", "returncode", "files": [{"path", "change": "added"\|"changed"\|"deleted", "diff"}], "new": [{"rank", "title", "file", "line"}], "fixed": N, "contract": {"verdict", "words", "broken", "not_shown", "items": [{"id", "state", "facts"}]}}`. The verdict is the fix contract's (below, "The fix contract"; since 2026-11-16): `not_fixed` also for a change after which the finding no longer shows and was only hidden, or whose scanner read less; the tests are not run here, so `contract.not_shown` holds `tests`. The project is not touched |
 | `POST /api/projects/<id>/agentapply` | `{"fix": id}` | job (202): copies only the fix's changed files into the project, refusing if any of them changed since the copy was made, deletes the copy, and analyzes the project again |
 | `POST /api/projects/<id>/agentdiscard` | `{"fix": id}` | `{"ok": true}`: deletes the copy. An id that is not a fix → 400 |
 | `POST /api/projects/<id>/starter` | `{"name": "Dockerfile"}` | `{"ok", "wrote"}`; never overwrites |
@@ -1000,6 +1000,43 @@ back the strict way (a plain file, `schema` 1, every part there; `diff.NotResult
 Everything in `change.md` that comes from a project is written so that it stays text on GitHub (`onrepo.md`,
 `onrepo.code`: no HTML, link, picture, heading or table of its own, and no `@name`, `#12` or address that GitHub
 would turn into a notice to a person or a link). Everything in `change.html` is escaped.
+
+### The fix contract (`lantern fix`, the connector's recheck, "Fix this for me")
+
+Not a result file of a check: the answer of `fixcheck.judge` about two checks, the one made before a fix and the
+one made after it (`docs/fix.md`; since stage 3 of the 2026-11-14 roadmap).
+
+`{"schema": 1, "verdict": "passed" | "refused" | "incomplete", "words": one sentence, "finding": {id, rule, title,
+file, line, rank, …}, "items": [{"id", "state": "held" | "broken" | "not-shown", "need": what this part needs, as a
+sentence, "facts": [what Lantern read there, as sentences]}], "broken": [ids], "not_shown": [ids]}`
+
+`items` always holds the seven parts in this order: `gone`, `no-suppression`, `still-read`, `links`, `calls`,
+`nothing-new`, `tests`. `passed` only when every part held; `refused` when one is broken; `incomplete` when none is
+broken and one is not shown. A part's `facts` are at most 12 sentences (the rest counted in the last one), each
+printable, with everything that came from the project cut to a length; a UI shows them as text.
+
+Where it comes back:
+
+* `lantern fix check … --format json`: `{"finding": id, "verdict", "contract": the answer above, "compared_with":
+  {"what": "brief" | "first-check" | null, "kept_at", "words"}, "candidate": bool, "files": [paths the candidate
+  changes] or null, "tests_ran": bool, "suggestion": {"written": FILE or null, "why": sentence or null} or null}`.
+  The command ends with 0 (passed), 1 (refused), 3 (incomplete) or 2 (nothing could be checked).
+* `lantern fix brief … --format json` and the connector's `lantern_fix_brief`: `{"project", "finding": the finding
+  as `lantern_findings` gives it, "path": the steps from the page or route to the line, "flow": {"steps", "class"}
+  or null, "contract": [{"id", "need"}], "kept_at"}`; the connector adds `"then": {"tool": "lantern_recheck",
+  "finding"}`, `"tests"` (a sentence: the connector runs none) and `"cannot_close": true`.
+* The connector's `lantern_recheck`: `{"project", "finding", "status": "fixed" | "refused" | "not-shown" | "open" |
+  "changed", "verdict", "was", "now", "contract", "compared_with": {"what", "kept_at"}, "fixed": [...], "new":
+  [...], "changed_still_open": [...]}`; with `refused` the finding is listed under `"refused"` and with `not-shown`
+  under `"not_shown"`, never under `"fixed"`.
+* `POST /api/projects/<id>/agentfix` (above): `contract` without `schema`, `finding` and each part's `need`.
+
+The check a fix is compared with is kept in `LANTERN_HOME/fix-briefs/<project>/<finding>/`: copies of that check's
+result files and `brief.json` `{"schema", "finding", "kept_at", "how": "brief" | "first-check", "files"}`.
+
+A pack's record in `security.json` `tools` carries `rules` (how many) and `rules_sha256` (16 hex characters of what
+the pack said: its name, version, requirements, rules and entry patterns) since the same date; a record without
+them was written by an older Lantern.
 
 ### Other files
 

@@ -9,6 +9,28 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The fix contract (roadmap stage 3; `docs/fix.md`, `lantern/fixcheck.py`): Lantern calls a finding fixed only when
+  the change shows seven things: the finding is gone and not moved, nothing was hushed with a `# nosec` comment or
+  an accepted-risk entry, every scanner still read what it read, no route or link between page and server broke, no
+  call was hidden from the map, nothing got worse elsewhere, and the tests are all there and passed. Each part
+  comes back as held, broken or not shown, with what Lantern read there. Nothing in it accepts or closes a finding.
+- New connector tool `lantern_fix_brief`: where one finding is, how it is reached, how the value gets there, and
+  the contract. `lantern_recheck` holds a fix to it. **Changed answers:** a change after which the finding only
+  stops showing is `refused` (a call put together at run time, code moved where Lantern does not read it) or
+  `not-shown` (the rules that found it were changed) where it was `fixed`; a recheck asked a second time is
+  compared with the check from before the fix and answers again, where it said "not an open finding"; a true fix
+  is `fixed` with the tests "not shown", because the connector starts no code of a project.
+- "Fix this for me" in the app is held to the same contract: a change that only hides the finding reads "Don't
+  apply this one", with the reason. Its result carries `contract`.
+- New commands `lantern fix brief [PATH] FINDING` and `lantern fix check [PATH] FINDING [-- TEST COMMAND]` (ends
+  with 0 passed, 1 refused, 3 incomplete, 2 nothing could be checked). With `--candidate DIR` a fix made in another
+  folder is checked on a throw-away copy and the project is left as it is; `--suggest FILE` then writes the change
+  as a patch, only when it passed. Lantern applies nothing and posts nothing.
+- The check a fix is compared with is kept in `LANTERN_HOME/fix-briefs/`, outside the project: a "fix" that was
+  refused cannot pass by being checked a second time.
+- An analysis pack's row in `security.json` says what the pack said (`rules`, `rules_sha256`), so a finding of a
+  pack that stops showing after the pack itself was changed is not read as fixed.
+- The message a finding card sends to an assistant ("Send to…") names `lantern_fix_brief`.
 - New heuristic `LW-SHARED-CONNECTION` (medium, labelled heuristic; `lantern/sharedconn.py`): a Python file
   that opens one SQLite connection with the library's own guard switched off (`check_same_thread=False`),
   keeps it for the whole program and uses it in a function with no lock held, so two requests answered on
