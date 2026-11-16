@@ -126,6 +126,35 @@ def _real_dir(p: Path) -> bool:
         return False
 
 
+LOOKS = 3    # how often a name from a folder's listing is looked at before it is given up on
+
+
+def _part(p: Path) -> bool | None:
+    """One name from the listing of a folder of git's. True: it is there under its own name, a plain file or a
+    folder, with no link and no Windows junction on the way to it. None: nothing is there under that name any more.
+    False: anything else, and whatever cannot be told. git's own programs make and remove files in a repository
+    for a moment after a command has come back (since git 2.47 the upkeep after a commit goes on in the background
+    and holds `objects/maintenance.lock`; a pack is written as `pack/tmp_pack_...` and then renamed), so a name can
+    go between the listing and the look, and between the two looks made here: it is then looked at again. Only
+    "nothing is there" counts as gone: a link to nothing is there, and so is a name the system refuses to show."""
+    for _ in range(LOOKS):
+        try:
+            mode = os.lstat(p).st_mode
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return False
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            return False
+        try:
+            return os.path.normcase(os.path.realpath(p, strict=True)) == os.path.normcase(str(p))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return False
+    return False
+
+
 def _borrows(objects: Path) -> bool:
     """Whether a repository's objects folder leads git anywhere else: a list of other folders of objects
     (`info/alternates`, in whatever form: git reads it and every list those folders have in turn), or something
@@ -134,6 +163,7 @@ def _borrows(objects: Path) -> bool:
     folder itself was looked at, and a folder that came with such a list had git read another repository of this
     computer: that repository's commit time, and "nothing changed" by its files, were told as facts about the
     folder. Not looked at: every single object's own file (a link there reaches one object whose name is known).
+    A name that was in the listing and under which nothing is there any more is no part of the folder (`_part`).
     True where the folder cannot be looked through."""
     try:
         info = objects / "info"
@@ -144,7 +174,7 @@ def _borrows(objects: Path) -> bool:
                 continue
             with os.scandir(folder) as inside:
                 names = [entry.name for entry in inside]
-            if not all(_real_dir(folder / name) or _own_file(folder / name) for name in names):
+            if any(_part(folder / name) is False for name in names):
                 return True
     except OSError:
         return True

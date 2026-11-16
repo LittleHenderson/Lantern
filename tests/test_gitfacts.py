@@ -13,6 +13,7 @@ The planted commands only write a marker file.
 """
 import ctypes
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -20,6 +21,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -849,6 +852,137 @@ def test_a_repository_that_keeps_its_own_objects_gets_the_answers_git_gives(tmp_
     git("checkout", "-q", "more.py", cwd=d)
     git("worktree", "add", "-q", str(tmp_path / "linked"), "-b", "side", cwd=d)
     assert evidence.git_info(tmp_path / "linked") == git_says(tmp_path / "linked")
+
+
+# ------------------------------------------------------------------- a folder git itself is still at work in
+# git's own programs go on in a repository for a moment after a command has come back: since git 2.47 the upkeep
+# after a commit runs in the background and holds `objects/maintenance.lock`, and a pack is written under a name of
+# the moment (`objects/pack/tmp_pack_…`) and renamed. A name can so be in the listing of the objects folder and gone
+# when it is looked at. The first version of the look above read such a name as "leads elsewhere": on CI (git 2.56)
+# a folder asked about right after its commit got no answer (`tests/test_remote.py`, 2026-11-16).
+
+class _Listed:
+    """What `os.scandir` gives for a folder, followed by names that were there when the folder was listed."""
+
+    def __init__(self, inside, more):
+        self._inside, self._all = inside, itertools.chain(inside, more)
+
+    def __iter__(self):
+        return self._all
+
+    def __next__(self):
+        return next(self._all)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._inside.close()
+        return False
+
+    def close(self):
+        self._inside.close()
+
+
+def _gone_since_listed(monkeypatch, names: dict) -> list:
+    """Have the listing of each of those folders name files more, of which nothing is there when they are looked at.
+    Returns the list the folders are written into as their listing is asked for, so a test can tell it was."""
+    real, asked = os.scandir, []
+
+    def scandir(path="."):
+        inside = real(path)
+        for folder, more in names.items():
+            try:
+                same = isinstance(path, (str, os.PathLike)) and os.path.samefile(path, folder)
+            except OSError:
+                same = False
+            if same:
+                asked.append(folder)
+                return _Listed(inside, [types.SimpleNamespace(name=name) for name in more])
+        return inside
+    monkeypatch.setattr(os, "scandir", scandir)
+    return asked
+
+
+def test_a_name_that_is_gone_when_it_is_looked_at_is_no_part_of_the_objects_folder(tmp_path, monkeypatch):
+    """git's upkeep right after a commit: its lock file was there when the folder was listed and is gone when it is
+    looked at, and so is a pack that was being written. Nothing leads anywhere: the answers are git's."""
+    d = make(tmp_path)
+    objects = d / ".git" / "objects"
+    asked = _gone_since_listed(monkeypatch, {objects: ["maintenance.lock", "tmp_objdir-incoming-a1B2c3"],
+                                             objects / "pack": ["tmp_pack_a1B2c3", "tmp_idx_a1B2c3"]})
+    got = evidence.git_info(d)
+    assert got == git_says(d) and got["dirty"] is False
+    assert set(asked) == {objects, objects / "pack"}, "the stand-in listing was not the one asked for"
+    (d / "sub" / "b.py").unlink()
+    assert gitfacts.deleted(d) == ["sub/b.py"] and gitfacts.links(d) == []
+    assert evidence.git_info(d) == git_says(d)
+
+
+STILL_THERE = ["a link to nothing among the folders of single objects", "a link to nothing among the packs",
+               "a link to itself"]
+
+
+@only_posix
+@pytest.mark.parametrize("what", STILL_THERE)
+def test_a_link_to_nothing_is_there_and_still_stops_git(what, tmp_path, monkeypatch):
+    """The twins of the test above. Gone means that nothing is there under the name; a link is there, wherever it
+    leads and whether or not anything is at the other end today."""
+    d = make(tmp_path)
+    objects = d / ".git" / "objects"
+    if what == STILL_THERE[0]:
+        os.symlink(tmp_path / "not-there", objects / "ab")
+    elif what == STILL_THERE[1]:
+        os.symlink(tmp_path / "not-there.pack", objects / "pack" / "pack-0123.pack")
+    else:
+        os.symlink("maintenance.lock", objects / "maintenance.lock")
+    got = evidence.git_info(d)
+    assert (got["dirty"], got["note"], got["committed_at"]) == (True, gitfacts.BORROWED, None)
+    monkeypatch.setattr(remote, "run_bounded", lambda *a, **k: pytest.fail("git was started"))
+    assert evidence.git_info(d) == got and gitfacts.deleted(d) is None and gitfacts.links(d) is None
+
+
+def test_a_name_that_cannot_be_looked_at_is_not_taken_for_gone(tmp_path, monkeypatch):
+    """Another twin: the system refuses the look. That is not "nothing is there", so git is not started."""
+    d = make(tmp_path)
+    asked = _gone_since_listed(monkeypatch, {d / ".git" / "objects": ["maintenance.lock"]})
+    real = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if isinstance(path, (str, os.PathLike)) and os.path.basename(os.fspath(path)) == "maintenance.lock":
+            raise PermissionError("the look was refused")
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, "lstat", lstat)
+    got = evidence.git_info(d)
+    assert asked and (got["dirty"], got["note"], got["committed_at"]) == (True, gitfacts.BORROWED, None)
+    assert gitfacts.deleted(d) is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (a removed file is gone at once)")
+def test_asked_while_files_come_and_go_in_the_objects_folder_every_answer_is_gits(tmp_path):
+    """The same with real files and no stand-in: while the folder is asked about, something else makes and removes
+    files in its objects folder, each under a name of its own, as git's own programs do. Every answer is git's. (On
+    the first version an answer was missing whenever a name went between the listing and the look; how often
+    depends on the computer, so the test with the stand-in listing is the one that pins the fault down.)"""
+    d = make(tmp_path)
+    (d / "sub" / "b.py").unlink()
+    objects, stop, rounds = d / ".git" / "objects", threading.Event(), [0]
+
+    def at_work():
+        while not stop.is_set():
+            rounds[0] += 1
+            for p in (objects / f"upkeep-{rounds[0]}.lock", objects / "pack" / f"tmp_pack_{rounds[0]}"):
+                p.write_bytes(b"")
+                p.unlink()
+    worker = threading.Thread(target=at_work, daemon=True)
+    worker.start()
+    try:
+        answers = [gitfacts.deleted(d) for _ in range(25)]
+    finally:
+        stop.set()
+        worker.join(30)
+    assert rounds[0] > 0 and not worker.is_alive()
+    assert answers == [["sub/b.py"]] * 25
 
 
 def test_a_clone_that_borrows_its_history_on_purpose_is_said_and_counts_as_changed(tmp_path, capsys):

@@ -74,6 +74,7 @@ file. New entries go under `## Unreleased`, on top.
   is shown as what the report says, word by word, and the person types it (`lantern verify` and the connector too).
   Git facts: git is not started where a repository's objects folder leads elsewhere; the files then count as
   changed and the note says why. **Changed:** a clone made with `git clone --shared` or `--reference` reads that way.
+  A file git itself removes while the folder is looked at (its upkeep right after a commit) is not taken for that.
   JavaScript libraries with no lock file: npm is handed a `package.json` Lantern wrote, names and versions for the
   store and nothing else. **Changed:** a library named there by a folder, a file, a link, a repository or an
   address means the tests are not run and the reason says so (with npm's lock file it is fetched as before).
