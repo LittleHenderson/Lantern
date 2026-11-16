@@ -103,10 +103,12 @@ class Identity:
         keys = ("remaining_requests", "limit_requests", "remaining_today")
         return {k: d.get(k) if isinstance(d.get(k), int) and not isinstance(d.get(k), bool) else None for k in keys}
 
-    def login_url(self, provider: str, cli: str) -> str:
-        """The gateway page that sends the person straight to GitHub or Google; the token is parked under `cli`."""
-        from urllib.parse import quote
-        return f"{self.base}/auth/{quote(provider)}/start?cli={quote(cli)}"
+    def login_url(self, provider: str, challenge: str, back: str, nonce: str) -> str:
+        """The gateway page that sends the person straight to GitHub or Google. `challenge`: the SHA-256 of a secret
+        the website keeps for this browser; `back`: where the gateway sends the browser afterwards (the website's
+        `/v1/signin/return`); `nonce`: the website's mark of this sign-in."""
+        from urllib.parse import quote, urlencode
+        return f"{self.base}/auth/{quote(provider)}/start?" + urlencode({"challenge": challenge, "return": back, "nonce": nonce})
 
     async def sign_out(self, token: str, everywhere: bool = False) -> int:
         """End this sign-in at the gateway (or every sign-in of the account) and forget cached answers."""
@@ -127,11 +129,17 @@ class Identity:
         except (ValueError, AttributeError, TypeError):
             return 0
 
-    async def claim(self, cli: str) -> str | None:
-        """The token parked for `cli` once the person has signed in (once, within ten minutes), else None."""
-        from urllib.parse import quote
-        r = await self._get(f"/auth/claim?cli={quote(cli)}")
-        if r.status_code == 404:
+    async def redeem(self, code: str, verifier: str) -> str | None:
+        """The token of a sign-in the website started: the one-time code the browser came back with and the secret
+        kept for that browser (`POST /v1/auth/redeem`). One try per code. None when the gateway has nothing to give
+        for the two (used, too late, not started with this secret)."""
+        try:
+            async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
+                r = await client.post(self.base + "/auth/redeem", json={"code": code, "verifier": verifier},
+                                      headers={"user-agent": "lantern-cloud"})
+        except httpx.HTTPError as e:
+            raise GatewayUnavailable(type(e).__name__) from None
+        if r.status_code in (400, 429):
             return None
         if r.status_code != 200:
             raise GatewayUnavailable(f"HTTP {r.status_code}")

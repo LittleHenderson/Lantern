@@ -35,12 +35,14 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from . import __version__, limits
+from .auth import REDEEM_TTL, challenge_of
 
 log = logging.getLogger("lantern.gateway")
 
@@ -84,6 +86,9 @@ class Settings:
     google_client_id: str = field(default_factory=lambda: os.environ.get("GOOGLE_CLIENT_ID", ""))
     google_client_secret: str = field(default_factory=lambda: os.environ.get("GOOGLE_CLIENT_SECRET", ""))
     auth_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_AUTH_SECRET", ""))
+    # Websites a finished sign-in may be sent back to, besides Lantern's own (auth.home_url): `https://host`, commas
+    # between. An app on the person's own computer needs no entry (auth.valid_return).
+    return_origins: str = field(default_factory=lambda: os.environ.get("LANTERN_RETURN_ORIGINS", ""))
     db_path: str = field(default_factory=lambda: os.environ.get("LANTERN_DB", "lantern_gateway.db"))
     # Per user. ~300 explanations is a few full runs on a typical app.
     free_requests: int = field(default_factory=lambda: _env_int("LANTERN_FREE_REQUESTS", 300))
@@ -155,34 +160,10 @@ USAGE_FEATURES = frozenset({
 # Anything else is not kept as written: the owner's page shows these, and anybody can send a report.
 USAGE_VERSION = re.compile(r"[0-9]{1,4}(\.[0-9]{1,4}){1,3}((a|b|rc|\.dev|\.post)[0-9]{1,4})?")
 USAGE_SYSTEMS = frozenset({"Linux", "Darwin", "Windows"})
-PARKED = 600             # seconds a token waits for the app that started the sign-in
-SEALED = "s1:"
 
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-def _pad(cli: str, n: int) -> bytes:
-    return hashlib.shake_256(b"lantern parked token\0" + cli.encode()).digest(n)
-
-
-def _seal(cli: str, token: str) -> str:
-    """A token as it waits in the database for the app that started the sign-in: readable only with that app's own
-    code (`cli`), of which the gateway keeps a hash and nothing else. The promise is hashes only, and a token nobody
-    collected would otherwise sit in the database file, and in every copy of it, in clear."""
-    raw = token.encode()
-    return SEALED + bytes(a ^ b for a, b in zip(raw, _pad(cli, len(raw)), strict=True)).hex()
-
-
-def _open(cli: str, sealed: str) -> str | None:
-    if not sealed.startswith(SEALED):
-        return None                       # a row the version before left in clear: never handed out
-    try:
-        raw = bytes.fromhex(sealed[len(SEALED):])
-        return bytes(a ^ b for a, b in zip(raw, _pad(cli, len(raw)), strict=True)).decode()
-    except ValueError:
-        return None
 
 
 def seconds_to_midnight_utc(now: dt.datetime | None = None) -> int:
@@ -236,8 +217,9 @@ class Store:
               day text, install text, feature text, count integer default 0, primary key (day, install, feature));
             create table if not exists accounts (
               account text primary key, token_hash text, label text, created text, last_signin text, signins integer default 0);
-            create table if not exists pending (
-              cli_hash text primary key, token text, created real);
+            create table if not exists handover (
+              code_hash text primary key, challenge text not null, account text not null, label text not null,
+              created real not null);
             create table if not exists sessions (
               token_hash text primary key, anchor_hash text, created text, last_used text);
             create index if not exists sessions_anchor on sessions (anchor_hash);
@@ -249,8 +231,9 @@ class Store:
         # anchor = 1: a counter row made by `sign_in` that no token is (its sessions point at it).
         if "anchor" not in cols:
             self.db.execute("alter table users add column anchor integer default 0")
-        # A parked token the version before left in clear, and any that waited too long, do not stay.
-        self.db.execute("delete from pending where token not like ? or created < ?", (SEALED + "%", time.time() - PARKED))
+        # Until 0.2.6 a token waited here under a code its caller chose. Nothing of that is kept or handed out.
+        self.db.execute("drop table if exists pending")
+        self.db.execute("delete from handover where created < ?", (time.time() - REDEEM_TTL,))
         self.db.commit()
         self.pruned_day = ""
 
@@ -353,23 +336,44 @@ class Store:
             self.db.commit()
         return n
 
-    def park(self, cli: str, token: str) -> None:
-        """Keep a new sign-in's token for the app that started it, sealed with the app's own code (`_seal`)."""
+    def signups_full(self, account: str, max_new_per_day: int) -> bool:
+        """Would a sign-in of this account be a new account past today's cap (`sign_in` raises SignupsPaused)? Asked
+        before a sign-in is handed to its app, so the person reads it on the gateway's own page."""
+        if max_new_per_day <= 0:
+            return False
+        today = dt.datetime.now(dt.UTC).date().isoformat()
         with self.lock:
-            self.db.execute("delete from pending where created < ?", (time.time() - PARKED,))
-            self.db.execute("insert or replace into pending (cli_hash, token, created) values (?, ?, ?)",
-                            (_hash(cli), _seal(cli, token), time.time()))
-            self.db.commit()
+            if self.db.execute("select 1 from accounts where account = ?", (account,)).fetchone():
+                return False
+            n = (self.db.execute("select count(*) from accounts where substr(created, 1, 10) = ?", (today,)).fetchone() or [0])[0]
+        return n >= max_new_per_day
 
-    def claim(self, cli: str) -> str | None:
-        """The token parked for this code: once, within ten minutes. Every question, whoever asks, also clears
-        away the tokens nobody collected in time."""
+    def hand_over(self, account: str, label: str, challenge: str) -> str:
+        """A finished sign-in waits for the app that started it: under a one-time code made here (the gateway keeps
+        its hash), with the fingerprint of the secret that app holds. No token exists yet (`redeem`)."""
+        code = secrets.token_urlsafe(32)
+        now = time.time()
         with self.lock:
-            self.db.execute("delete from pending where created < ?", (time.time() - PARKED,))
-            row = self.db.execute("select token from pending where cli_hash = ?", (_hash(cli),)).fetchone()
-            self.db.execute("delete from pending where cli_hash = ?", (_hash(cli),))
+            self.db.execute("delete from handover where created < ?", (now - REDEEM_TTL,))
+            self.db.execute("insert into handover (code_hash, challenge, account, label, created) values (?, ?, ?, ?, ?)",
+                            (_hash(code), challenge, account, label[:100], now))
             self.db.commit()
-        return _open(cli, row[0]) if row else None
+        return code
+
+    def redeem(self, code: str, verifier: str) -> tuple[str, str] | None:
+        """(account, label) of the finished sign-in this code stands for, when the caller shows the secret whose
+        fingerprint started it. One try: the code is gone afterwards, whatever the answer. Knowing the code is not
+        enough, and neither is having chosen the secret: the code went only where the finishing browser went."""
+        h, now = _hash(code), time.time()
+        with self.lock:
+            row = self.db.execute("select challenge, account, label from handover where code_hash = ? and created >= ?",
+                                  (h, now - REDEEM_TTL)).fetchone()
+            if self.db.execute("delete from handover where code_hash = ?", (h,)).rowcount:
+                self.db.commit()
+        if row is None or not hmac.compare_digest(str(row[0]), challenge_of(verifier)):
+            return None
+        return row[1], row[2]
+
 
     def user(self, token: str) -> dict | None:
         """The counter row behind a token: a sign-in's session leads to its account's anchor; a token minted by
@@ -449,7 +453,7 @@ class Store:
             out["models"] = q("delete from models where day < ?", (cut,)).rowcount
             out["usage"] = q("delete from usage where day < ?", (cut,)).rowcount
             out["installs"] = q("delete from installs where last_seen < ?", (cut,)).rowcount
-            q("delete from pending where created < ?", (time.time() - PARKED,))
+            q("delete from handover where created < ?", (time.time() - REDEEM_TTL,))
             self.db.commit()
             self.pruned_day = today
         return out
@@ -714,18 +718,38 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     def auth_providers():
         return {"providers": s.sign_in_providers(), "login_url": f"{s.public_url}/v1/login"}
 
+    HALF = "This sign-in link is not complete. Go back to Lantern and start again."
+
+    def hand_over(challenge: str | None, back: str | None, nonce: str | None) -> dict | None:
+        """What an app that collects its sign-in itself said at the start: {} when nothing, None when it is not all
+        three in the forms allowed (`auth.asked`)."""
+        return oauth.asked(challenge, back, nonce, oauth.return_origins(s.return_origins))
+
     @app.get("/v1/login")
-    def login(cli: str | None = None, provider: str | None = None):
-        return HTMLResponse(oauth.login_page(s.sign_in_providers(), oauth.valid_cli(cli), provider), headers=page_headers)
+    def login(cli: str | None = None, challenge: str | None = None,
+              back: str | None = Query(default=None, alias="return"), nonce: str | None = None):
+        hand = hand_over(challenge, back, nonce)
+        if hand is None:
+            return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
+        return HTMLResponse(oauth.login_page(s.sign_in_providers(), hand, oauth.valid_cli(cli)), headers=page_headers)
 
     @app.get("/v1/auth/{provider}/start")
-    def auth_start(provider: str, cli: str | None = None):
+    def auth_start(provider: str, cli: str | None = None, challenge: str | None = None,
+                   back: str | None = Query(default=None, alias="return"), nonce: str | None = None):
         if not s.oauth(provider) or not s.state_secret:
             raise HTTPException(404, "that sign-in is not configured")
+        hand = hand_over(challenge, back, nonce)
+        if hand is None:
+            return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
         cid, _ = s.oauth(provider)
-        state = oauth.sign_state(s.state_secret, provider, oauth.valid_cli(cli))
-        return RedirectResponse(oauth.authorize_url(provider, cid, f"{s.public_url}/v1/auth/{provider}/callback", state),
+        state, name, mine = oauth.begin(s.state_secret, provider, hand, old=bool(oauth.valid_cli(cli)))
+        resp = RedirectResponse(oauth.authorize_url(provider, cid, f"{s.public_url}/v1/auth/{provider}/callback", state),
                                 status_code=302, headers={"Cache-Control": "no-store"})
+        # Only the browser that starts a sign-in can finish it: it alone holds this (auth.same_browser).
+        resp.set_cookie(name, mine, max_age=oauth.STATE_TTL, path="/v1/auth", secure=s.public_url.startswith("https://"),
+                        httponly=True, samesite="lax")
+        return resp
+
 
     used: dict[str, float] = {}       # sign-in links already used: a hash of each, until the link would have run out
 
@@ -754,6 +778,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                 status_code=400, headers=page_headers)
         if error or not code:
             return HTMLResponse(oauth.error_page("Sign-in was cancelled or refused by the provider."), status_code=400, headers=page_headers)
+        if not oauth.same_browser(st, request.cookies):
+            # A link that was passed on to somebody else ends here: the provider is not asked and nothing is made. It
+            # does not use the link up either, so the browser that did start it can still finish.
+            return HTMLResponse(oauth.error_page("This sign-in was not started in this browser. Go back to Lantern and start again."),
+                                status_code=400, headers=page_headers)
+        back = oauth.valid_return(st.get("r"), oauth.return_origins(s.return_origins)) if st.get("h") else ""
+        if st.get("h") and not (back and oauth.CHALLENGE_RE.fullmatch(str(st["h"]))):
+            return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
         sender = who(request)
         if limiter.full("signin", sender, s.sender_signins_per_minute, 60) or \
                 limiter.full("signin-all", "", s.signins_per_minute_all, 60):
@@ -770,28 +802,65 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if signed is None:
             return HTMLResponse(oauth.error_page("The provider did not confirm the sign-in. Try again."), status_code=502, headers=page_headers)
         account, label = signed
-        try:
-            token = store.sign_in(account, label, s.signups_per_day)
-        except SignupsPaused:
+
+        def paused():
             log.warning("sign-ups paused: %s new accounts today (cap %s)", store.signups_today(), s.signups_per_day)
             return HTMLResponse(oauth.error_page("Lantern's free allowance has had as many new sign-ups today as it can take. "
                                                  "Existing accounts keep working; please try again tomorrow."),
                                 status_code=429, headers={**page_headers, "Retry-After": "86400"})
-        cli = st.get("c") or ""
-        if cli:
-            store.park(cli, token)
-        return HTMLResponse(oauth.done_page(token, label, bool(cli)), headers=page_headers)
+
+        if st.get("h"):
+            # The app that started this collects it itself (`/v1/auth/redeem`). No token is made until it has shown the
+            # secret whose fingerprint it gave at the start; this browser carries a one-time code back to it.
+            if store.signups_full(account, s.signups_per_day):
+                return paused()
+            once = store.hand_over(account, label, str(st["h"]))
+            resp = RedirectResponse(back + "?" + urlencode({"code": once, "state": str(st.get("s") or "")}), status_code=303,
+                                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        else:
+            try:
+                token = store.sign_in(account, label, s.signups_per_day)
+            except SignupsPaused:
+                return paused()
+            resp = HTMLResponse(oauth.done_page(token, label, old=bool(st.get("o"))), headers=page_headers)
+        resp.delete_cookie(oauth.COOKIE + str(st.get("n") or ""), path="/v1/auth")
+        return resp
+
+    @app.post("/v1/auth/redeem")
+    async def auth_redeem(request: Request):
+        """The app that started a sign-in collects it: the one-time code its own browser was sent back with, and the
+        secret whose fingerprint it gave at the start. One try per code, within two minutes of the sign-in. The token
+        is made here and nowhere before."""
+        body = _table(await request.body()) or {}     # limits.BodyCap has stopped anything over 4,000 bytes
+        code, verifier = body.get("code"), body.get("verifier")
+        if not (isinstance(code, str) and oauth.CODE_RE.fullmatch(code)
+                and isinstance(verifier, str) and oauth.VERIFIER_RE.fullmatch(verifier)):
+            raise HTTPException(400, "a code and a verifier are needed")
+        signed = store.redeem(code, verifier)
+        if signed is None:
+            raise HTTPException(400, "This sign-in was already collected, took too long, or was not started by this app. "
+                                     "Start again.")
+        try:
+            token = store.sign_in(signed[0], signed[1], s.signups_per_day)
+        except SignupsPaused:
+            raise HTTPException(429, "Lantern's free allowance has had as many new sign-ups today as it can take. "
+                                     "Existing accounts keep working; please try again tomorrow.",
+                                headers={"Retry-After": "86400"}) from None
+        return JSONResponse({"token": token, "limits": {"requests": s.free_requests, "tokens": s.free_tokens,
+                                                        "per_day": s.daily_requests}},
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/auth/claim")
-    def auth_claim(cli: str | None = None):
-        """The client collects the token parked for its cli code: once, within ten minutes of the sign-in."""
-        if not oauth.valid_cli(cli):
-            raise HTTPException(400, "bad cli code")
-        tok = store.claim(cli)
-        if tok is None:
-            return JSONResponse({"pending": True}, status_code=404, headers={"Cache-Control": "no-store"})
-        return JSONResponse({"token": tok, "limits": {"requests": s.free_requests, "tokens": s.free_tokens, "per_day": s.daily_requests}},
-                            headers={"Cache-Control": "no-store"})
+    def auth_claim():
+        """Until 0.2.6 an app collected its sign-in here with a code of its own choosing, and so could anybody who had
+        chosen the code. Nothing is kept for such a code any more. An app from before still asks; it is answered as it
+        always was while nothing was there (it goes on waiting, then tells the person how to paste the token), and the
+        answer says in words that nothing will come."""
+        return JSONResponse({"pending": True, "ended": True,
+                             "detail": "This way of picking a sign-in up has ended. Use the Copy button on the sign-in "
+                                       "page and paste the token into Lantern, or update Lantern."},
+                            status_code=404, headers={"Cache-Control": "no-store"})
+
 
     @app.get("/v1/admin/stats")
     def admin_stats(request: Request, authorization: str | None = Header(default=None), days: int = 30):

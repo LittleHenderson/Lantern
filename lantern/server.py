@@ -294,9 +294,66 @@ class Jobs:
 
 
 class App:
-    def __init__(self, store: Store, token: str, port: int):
+    def __init__(self, store: Store, token: str, port: int, own_address: str = "127.0.0.1"):
         self.store, self.token, self.port = store, token, port
         self.jobs = Jobs()
+        # Sign-ins this app started and has not collected yet: its mark of each -> the secret it kept, when, and how
+        # it ended. In memory only. `own_address`: this computer's own address the app listens on ("" when it listens
+        # on another one only: a sign-in cannot come back by itself then, and the person pastes the token).
+        self.own_address = own_address
+        self.signins: dict[str, dict] = {}
+        self.signins_lock = threading.Lock()
+
+    SIGNIN_MINUTES = 10
+
+    def sign_in_begin(self, provider: str) -> dict:
+        from .providers import sign_in_page, sign_in_start
+        if not self.own_address:
+            return {"url": sign_in_page(provider), "id": "", "provider": provider}
+        st = sign_in_start(provider, f"http://{self.own_address}:{self.port}/api/login/return")
+        now = time.time()
+        with self.signins_lock:
+            for k in [k for k, v in self.signins.items() if v["t"] < now - self.SIGNIN_MINUTES * 60]:
+                del self.signins[k]
+            while len(self.signins) >= 8:                     # the oldest gives way
+                del self.signins[min(self.signins, key=lambda k: self.signins[k]["t"])]
+            self.signins[st["nonce"]] = {"verifier": st["verifier"], "t": now, "done": False, "error": ""}
+        return {"url": st["url"], "id": st["nonce"], "provider": provider}
+
+    def sign_in_back(self, code: str, mark: str) -> tuple[bool, str]:
+        """The browser came back from the gateway with a one-time code and a mark. (signed in?, words for a
+        problem). Only a sign-in this app started and has not ended is collected, with the secret kept for it; a code
+        that belongs to no sign-in of this app is used up at the gateway, so that it is worth nothing to anyone who
+        reads it off this browser's address bar."""
+        from .providers import SIGN_IN_CODE, ProviderError, save_token, sign_in_redeem
+        if not SIGN_IN_CODE.fullmatch(code):
+            return False, ""
+        with self.signins_lock:
+            entry = self.signins.get(mark)
+            mine = bool(entry) and not entry["done"] and not entry["error"] \
+                and entry["t"] >= time.time() - self.SIGNIN_MINUTES * 60
+            verifier = entry["verifier"] if mine else secrets.token_urlsafe(48)
+            if mine:
+                entry["verifier"] = ""                          # one try, like the code
+        try:
+            tok = sign_in_redeem(code, verifier)
+        except ProviderError as e:
+            if mine:
+                entry["error"] = str(e)[:200]
+            return False, str(e)[:200] if mine else ""
+        if not mine:
+            return False, ""                                   # cannot happen with a secret nobody was given
+        save_token(tok)
+        entry["done"] = True
+        usage.record("settings_save")
+        return True, ""
+
+    def sign_in_state(self, mark: str) -> dict:
+        with self.signins_lock:
+            entry = self.signins.get(mark)
+            if not entry:
+                return {"done": False, "error": "This sign-in is no longer waiting. Press the button again."}
+            return {"done": entry["done"], **({"error": entry["error"]} if entry["error"] else {})}
 
     def out(self, p: dict) -> Path:
         return pipeline.out_dir(Path(p["path"]))
@@ -868,6 +925,13 @@ class Handler(BaseHTTPRequestHandler):
             from .guide import page as guide_page
             html, nonce = guide_page(__version__, "/")
             return self._send(200, html, "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
+        if u.path == "/api/login/return":
+            # The gateway sends the browser here when the person has signed in. No session is asked for: the tab is the
+            # browser's own, opened from the gateway, and what it brings is checked against a sign-in this app started.
+            from .providers import sign_in_back_page
+            ok, words = self.app.sign_in_back((q.get("code") or [""])[0], (q.get("state") or [""])[0])
+            return self._send(200 if ok else 400, sign_in_back_page(ok, words), "text/html; charset=utf-8",
+                              {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
         if u.path == "/":
             given = (q.get("token") or [""])[0]
             if given and _same(given, self.app.token):
@@ -953,19 +1017,8 @@ class Handler(BaseHTTPRequestHandler):
                                "setup": {"claude_code": f"claude mcp add lantern -- {cmd} mcp",
                                          "json": {"mcpServers": {"lantern": {"command": cmd, "args": ["mcp"]}}}}})
         if path == "/api/login/poll":
-            from .providers import ProviderError, save_token, sign_in_claim
-            cli = (q.get("cli") or [""])[0]
-            if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", cli):
-                return self._err(400, "bad cli code")
-            try:
-                tok = sign_in_claim(cli)
-            except ProviderError as e:
-                return self._json({"done": False, "error": str(e)[:200]})
-            if not tok:
-                return self._json({"done": False})
-            save_token(tok)
-            usage.record("settings_save")
-            return self._json({"done": True})
+            # the sign-in itself is collected when the browser comes back (`/api/login/return`): this only says how it went
+            return self._json(app.sign_in_state((q.get("id") or [""])[0]))
         if path == "/api/allowance":
             from .providers import ProviderError, allowance_status, gateway_url, load_token
             if not (load_token() and gateway_url()):
@@ -1078,11 +1131,10 @@ class Handler(BaseHTTPRequestHandler):
                            b.get("focus") if isinstance(b.get("focus"), dict) else None)
             return self._json(res)
         if path == "/api/login/start":
-            from .providers import sign_in_start
             provider = str(b.get("provider") or "")
             if provider not in ("github", "google"):
                 raise ValueError("provider is github or google")
-            return self._json(sign_in_start(provider))
+            return self._json(app.sign_in_begin(provider))
         if path == "/api/packs":
             # Settings → Analysis packs: turn one pack on or off for every project. Reports made before the change
             # are marked stale ("Re-check to apply"); nothing is re-analyzed by itself.
@@ -1366,7 +1418,11 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
         print(f"could not find a free port near {port}")
         return 1
     token = secrets.token_urlsafe(24)
-    app = App(store, token, port)
+    # Where the gateway can send this computer's browser back to after a sign-in: the address Lantern listens on, when
+    # it is this computer's own, written as a number.
+    bound = str(httpd.server_address[0])
+    own = "127.0.0.1" if bound in ("127.0.0.1", "0.0.0.0") else "[::1]" if bound in ("::1", "::") else ""  # nosec B104
+    app = App(store, token, port, own)
     Handler.app = app
     if host not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: listening beyond this computer. Anyone who has the link below can use Lantern as you.")

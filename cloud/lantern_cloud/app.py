@@ -16,12 +16,14 @@ Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import gzip
 import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -45,7 +47,8 @@ from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN
 log = logging.getLogger("lantern_cloud")
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
-SIGNIN_COOKIE = "lsi"          # the one-time code a sign-in in progress is parked under, for this browser only
+SIGNIN_COOKIE = "lsi"          # a sign-in in progress, for this browser only: its mark and the secret kept for it
+SIGNIN_CODE = re.compile(r"[A-Za-z0-9_-]{43,128}")     # the one-time code the gateway sends the browser back with
 SESSION_DAYS = 30
 # What /r/{id}/<name> serves, and the result file behind each. Every page is rebuilt from our templates
 # (`lantern.server.result_page`); nothing in the run's folder is sent as a page.
@@ -114,6 +117,14 @@ def sweep(store, results_dir: str, days: int, cleanup: Cleanup | None = None) ->
     return gone
 
 
+SIGNED_IN_PAGE = _note_page("You're signed in", "Lantern is open in another tab? Go back to it: it has noticed, and you "
+                            "can close this one. Or go on here: <a href=\"/\" style=\"color:#0B5F5A\">open Lantern</a>.")
+SIGNIN_NOT_HERE = _note_page("Sign-in problem", "This sign-in was not started in this browser, or it took too long. "
+                             "<a href=\"/\" style=\"color:#0B5F5A\">Open Lantern</a> and sign in again.")
+SIGNIN_FAILED = _note_page("Sign-in problem", "That sign-in did not work. <a href=\"/\" style=\"color:#0B5F5A\">Open "
+                           "Lantern</a> and sign in again.")
+SIGNIN_LATER = _note_page("Sign-in problem", "Sign-in is unavailable right now. <a href=\"/\" style=\"color:#0B5F5A\">Open "
+                          "Lantern</a> and try again in a minute.")
 EXPIRED_PAGE = _note_page("This link has expired", "Report links work for an hour. Open the run again from "
                           "<a href=\"/\" style=\"color:#0B5F5A\">My runs</a>.")
 
@@ -940,8 +951,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.post("/v1/signin/start")
     async def signin_start(payload: dict, request: Request):
-        """Begin a sign-in: a fresh one-time code, kept in an HttpOnly cookie for this browser only, and the page to
-        open. The person signs in on GitHub or Google through the gateway, which parks the token under the code."""
+        """Begin a sign-in: a fresh secret and a mark of this sign-in, kept in an HttpOnly cookie for this browser only,
+        and the page to open. The gateway is shown the secret's SHA-256 and nothing else of it. When the person has
+        signed in on GitHub or Google, the gateway sends this browser to `/v1/signin/return` with a one-time code,
+        which is worth nothing without the secret."""
         site_only(request)
         provider = payload.get("provider")
         try:
@@ -950,33 +963,61 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
         if not ok:
             raise HTTPException(400, "Choose GitHub or Google.")
-        cli = secrets.token_urlsafe(36)
-        resp = JSONResponse({"url": ident.login_url(provider, cli)}, headers={"Cache-Control": "no-store"})
-        resp.set_cookie(SIGNIN_COOKIE, cli, max_age=600, path="/v1/signin", secure=secure, httponly=True, samesite="strict")
+        verifier, nonce = secrets.token_urlsafe(48), secrets.token_urlsafe(24)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        resp = JSONResponse({"url": ident.login_url(provider, challenge, f"{s.public_url}/v1/signin/return", nonce)},
+                            headers={"Cache-Control": "no-store"})
+        # Lax, not Strict: the browser comes back from the gateway, which is another site, and must bring this along.
+        resp.set_cookie(SIGNIN_COOKIE, f"{nonce}.{verifier}", max_age=600, path="/v1/signin", secure=secure, httponly=True,
+                        samesite="lax")
+        return resp
+
+    @app.get("/v1/signin/return")
+    async def signin_return(request: Request, code: str | None = None, state: str | None = None):
+        """The gateway sends the browser here when the person has signed in. Only the browser that started this
+        sign-in holds the secret its code is worth anything with; the token goes into an HttpOnly cookie, never into a
+        page. A code that belongs to no sign-in of this browser (somebody else's link led it here) signs nobody in and
+        is used up at the gateway, so that it is worth nothing to anyone who reads it off the address bar."""
+        def page(body: str, status: int) -> Response:
+            resp = Response(body, status, media_type="text/html; charset=utf-8", headers=_page_headers(None))
+            if status != 503:
+                resp.delete_cookie(SIGNIN_COOKIE, path="/v1/signin")
+            return resp
+
+        code = code if code and SIGNIN_CODE.fullmatch(code) else ""
+        nonce, _, verifier = (request.cookies.get(SIGNIN_COOKIE) or "").partition(".")
+        mine = bool(code and nonce and verifier) and hmac.compare_digest(nonce.encode(), (state or "").encode())
+        try:
+            token = await ident.redeem(code, verifier if mine else secrets.token_urlsafe(48)) if code else None
+            who = await ident.whoami(token) if token and mine else None
+        except GatewayUnavailable:
+            return page(SIGNIN_LATER, 503)
+        if not mine:
+            return page(SIGNIN_NOT_HERE, 400)
+        if who is None:
+            return page(SIGNIN_FAILED, 400)
+        store.touch_user(who["account"], who["label"])
+        resp = page(SIGNED_IN_PAGE, 200)
+        resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, path="/", secure=secure, httponly=True,
+                        samesite="strict")
         return resp
 
     @app.post("/v1/signin/poll")
     async def signin_poll(request: Request):
-        """Collect the token once the person has signed in; it goes into an HttpOnly cookie, never to the page."""
+        """Has the sign-in this browser started finished? It is collected when the browser comes back
+        (`/v1/signin/return`); this only says so, for the page that is waiting."""
         site_only(request)
-        cli = request.cookies.get(SIGNIN_COOKIE) or ""
-        if not (32 <= len(cli) <= 128):
-            raise HTTPException(400, "No sign-in in progress here. Start again.")
+        token = request.cookies.get(SESSION_COOKIE) or ""
         try:
-            token = await ident.claim(cli)
             who = await ident.whoami(token) if token else None
         except GatewayUnavailable:
             raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
-        if not token:
-            return JSONResponse({"signed_in": False}, headers={"Cache-Control": "no-store"})
-        if who is None:
-            raise HTTPException(401, "That sign-in did not work. Try again.")
-        store.touch_user(who["account"], who["label"])
-        resp = JSONResponse({"signed_in": True, "label": who["label"]}, headers={"Cache-Control": "no-store"})
-        resp.delete_cookie(SIGNIN_COOKIE, path="/v1/signin")
-        resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, path="/", secure=secure, httponly=True,
-                        samesite="strict")
-        return resp
+        if who is not None:
+            return JSONResponse({"signed_in": True, "label": who["label"]}, headers={"Cache-Control": "no-store"})
+        if not request.cookies.get(SIGNIN_COOKIE):
+            raise HTTPException(400, "No sign-in in progress here. Start again.")
+        return JSONResponse({"signed_in": False}, headers={"Cache-Control": "no-store"})
+
 
     @app.post("/v1/signout")
     async def signout(request: Request, payload: dict | None = None):

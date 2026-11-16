@@ -780,7 +780,7 @@ def test_the_limits_are_the_numbers_the_documents_give(monkeypatch):
     assert (s.installs_per_day, s.sender_installs_per_day, s.sender_pings_per_hour) == (1000, 50, 300)
     assert (s.admin_wrong_per_minute, s.admin_wrong_per_minute_all) == (5, 30)
     assert (s.sender_signins_per_minute, s.signins_per_minute_all) == (10, 120)
-    assert (s.address_header, s.max_body_bytes, gateway_app.limits.SMALL_BODY, gateway_app.PARKED) == ("fly-client-ip", 250_000, 4000, 600)
+    assert (s.address_header, s.max_body_bytes, gateway_app.limits.SMALL_BODY, gateway_app.REDEEM_TTL) == ("fly-client-ip", 250_000, 4000, 120)
     readme = (Path(__file__).resolve().parents[1] / "gateway" / "README.md").read_text(encoding="utf-8")
     for words in ("| `LANTERN_INSTALLS_PER_DAY` | 1000 |", "| `LANTERN_SENDER_INSTALLS_PER_DAY` | 50 |",
                   "| `LANTERN_SENDER_PINGS_PER_HOUR` | 300 |", "| `LANTERN_ADDRESS_HEADER` | fly-client-ip |",

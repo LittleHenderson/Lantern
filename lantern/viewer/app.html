@@ -1523,12 +1523,13 @@ function renderSettings(el) {
       const st = await api('/api/login/start', { method: 'POST', body: { provider: b.dataset.signin } });
       window.open(st.url, '_blank', 'noopener');
       msg.innerHTML = `Finish signing in in the new tab. If it did not open: <a href="${esc(st.url)}" target="_blank" rel="noopener">open the sign-in page</a>.`;
+      if (!st.id) { msg.innerHTML += ' Then press its Copy button and paste the token into Lantern with <code>lantern login --token</code>: this Lantern does not listen on this computer\'s own address, so the sign-in cannot come back by itself.'; return; }
       const until = Date.now() + 5 * 60 * 1000;
       while (Date.now() < until) {
         await new Promise(r => setTimeout(r, 2000));
-        const r = await api('/api/login/poll?cli=' + encodeURIComponent(st.cli));
-        if (r.error) { msg.textContent = 'Could not reach the gateway: ' + r.error; return; }
+        const r = await api('/api/login/poll?id=' + encodeURIComponent(st.id));
         if (r.done) { msg.textContent = 'Signed in. The free allowance is ready.'; await refresh(); return; }
+        if (r.error) { msg.textContent = 'Sign-in did not finish: ' + r.error; return; }
       }
       msg.textContent = 'That took too long. Click the button again to retry.';
     } catch (err) { msg.textContent = 'Sign-in failed: ' + (err.message || err); }

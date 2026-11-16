@@ -1,19 +1,29 @@
-"""Sign in with GitHub or Google to get a free-allowance token: one token per account, issued by the gateway.
+"""Sign in with GitHub or Google to get a free-allowance token: one token per sign-in, issued by the gateway.
 
-Flow (the CLI and the app use the same one):
-  1. The client makes a random `cli` code (32+ URL-safe characters) and opens
-     `/v1/login?provider=github&cli=<code>` in a browser (or `/v1/auth/github/start?cli=…` directly).
-  2. The gateway redirects to the provider with a signed `state` (HMAC over the time and the cli code).
+Flow (the terminal, the app and the website use the same one):
+  1. The app makes a secret it keeps to itself (the "verifier", 43+ URL-safe characters) and opens
+     `/v1/login?challenge=<SHA-256 of the secret, base64url>&return=<where to send the browser back>&nonce=<its own
+     mark>` in a browser (or `/v1/auth/github/start?…` directly). The return address is on the person's own computer
+     (`http://127.0.0.1:<port>/…`) or a website this gateway names (`return_origins`).
+  2. The gateway redirects to the provider with a signed `state` (HMAC over the time and what the app said) and
+     gives the browser a cookie. Only the browser that holds the cookie can finish this sign-in.
   3. The provider calls back with a `code`; the gateway exchanges it server-side (the client secret never leaves
-     this server), reads the account id, and issues a token for that sign-in.
-  4. The callback page hands over the token once (a Copy button; the token is not drawn on screen) and, when a cli code was given, parks it so the client can collect it
-     with `/v1/auth/claim?cli=<code>` (one time, within 10 minutes).
+     this server) and reads the account id.
+  4. The gateway sends that same browser back to the return address with a one-time code. The app, which the browser
+     has now reached, collects its token with `POST /v1/auth/redeem {code, verifier}`: once, within two minutes.
+     The token is made at that moment. Nobody who merely started a sign-in, or chose a value in it, can collect
+     what another person finished: the code goes only where the finishing browser goes, and it is worth nothing
+     without the secret.
+  Without a challenge the sign-in ends on a page whose button copies the token (it is not drawn on screen), for the
+  person to paste into Lantern. Until 0.2.6 an app collected its token with a code of its own choosing
+  (`/v1/auth/claim?cli=`); nothing is kept for such a code any more.
 
 Stored per account: the provider's stable id (`github:<id>`, `google:<sub>`), a label (the GitHub login, or
 `google:` plus the last 6 characters of the subject id — never the email), the token hashes and counters. Each
 sign-in gets its own token and the account's other sign-ins keep working (`Store.sign_in`, up to `MAX_SESSIONS`);
 every token counts against the account's one counter row, so a new sign-in is never a fresh allowance.
 """
+
 
 from __future__ import annotations
 
@@ -47,17 +57,96 @@ PROVIDERS = {
     },
 }
 STATE_TTL = 600          # seconds a sign-in may take
-CLAIM_TTL = 600          # seconds a parked token waits for its client
-CLI_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+REDEEM_TTL = 120         # seconds a finished sign-in waits for the app that started it (its code is in an address bar)
+CLI_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")            # what an app from before 0.2.7 sends: recognised, never used
+CHALLENGE_RE = re.compile(r"[A-Za-z0-9_-]{43}")          # SHA-256 of the app's secret, base64url without padding
+VERIFIER_RE = re.compile(r"[A-Za-z0-9._~-]{43,128}")     # the secret itself, shown only when the app collects
+NONCE_RE = re.compile(r"[A-Za-z0-9_-]{16,64}")           # the app's own mark, handed back with the code
+CODE_RE = re.compile(r"[A-Za-z0-9_-]{43,128}")           # the one-time code the finishing browser carries back
+# Where a finished sign-in may be sent back to. On the person's own computer: the address written as a number (a name
+# such as localhost is whatever a hosts file says) with a port an ordinary program may open. Or a website by https.
+LOOPBACK_RE = re.compile(r"http://(?:127\.0\.0\.1|\[::1\]):([0-9]{4,5})(/[A-Za-z0-9._~/-]*)")
+WEBSITE_RE = re.compile(r"(https://[a-z0-9.-]+(?::[0-9]{1,5})?)(/[A-Za-z0-9._~/-]*)")
+COOKIE = "ls_"           # + the state's random part: the cookie of the browser that started that sign-in
 
 
-def sign_state(secret: str, provider: str, cli: str) -> str:
-    """A sign-in link's `state`: when it was made, for which provider and which app, and a random part, so that no
-    two links are the same text (a link is good once, and two people starting in the same second must not share one)."""
-    payload = json.dumps({"t": int(time.time()), "p": provider, "c": cli, "n": secrets.token_urlsafe(9)},
-                         separators=(",", ":")).encode()
+def challenge_of(verifier: str) -> str:
+    """The fingerprint an app shows of its secret when it starts a sign-in (RFC 7636, S256)."""
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+
+
+def fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:32]
+
+
+def return_origins(named: str = "") -> frozenset[str]:
+    """The websites a finished sign-in may be sent back to: Lantern's own (`home_url`) and those the gateway's
+    setting names (`LANTERN_RETURN_ORIGINS`, separated by commas), each as `https://host[:port]`."""
+    origin = r"https://[a-z0-9.-]+(?::[0-9]{1,5})?"
+    own = re.match(origin, home_url().lower())            # Lantern's own website, whichever page of it the logo opens
+    out = {own.group(0)} if own else set()
+    out.update(u.strip().rstrip("/") for u in named.split(",") if re.fullmatch(origin, u.strip().rstrip("/")))
+    return frozenset(out)
+
+
+def valid_return(address: str | None, origins: frozenset[str]) -> str:
+    """The address as given when a finished sign-in may be sent there, else "". No query, no fragment, no name and
+    password, no `.` or `..` or empty step in the path: the gateway adds `?code=…&state=…` and nothing else."""
+    a = address or ""
+    if len(a) > 200:
+        return ""
+    m = LOOPBACK_RE.fullmatch(a)
+    if m:
+        ok = 1024 <= int(m.group(1)) <= 65535
+    else:
+        m = WEBSITE_RE.fullmatch(a)
+        ok = bool(m) and m.group(1) in origins
+    steps = m.group(2).split("/")[1:] if ok else []
+    if not ok or any(x in (".", "..") for x in steps) or "" in steps[:-1]:
+        return ""
+    return a
+
+
+def asked(challenge: str | None, back: str | None, nonce: str | None, origins: frozenset[str]) -> dict | None:
+    """What an app that collects its sign-in itself says at the start, all three or none: `{}` when none was given
+    (the sign-in ends on the page with the Copy button), None when what was given is not all three in the forms
+    allowed (the start is refused: half a hand-over is not guessed at)."""
+    if challenge is None and back is None and nonce is None:
+        return {}
+    back = valid_return(back, origins)
+    if not (CHALLENGE_RE.fullmatch(challenge or "") and NONCE_RE.fullmatch(nonce or "") and back):
+        return None
+    return {"challenge": challenge, "return": back, "nonce": nonce}
+
+
+def sign_state(secret: str, provider: str, tid: str = "", browser: str = "", hand: dict | None = None,
+               old: bool = False) -> str:
+    """A sign-in link's `state`: when it was made, for which provider, a random part (so that no two links are the
+    same text: a link is good once, and two people starting in the same second must not share one), the fingerprint
+    of what the starting browser holds in its cookie, and, for an app that collects its sign-in itself, what it said
+    at the start (`asked`). `old`: an app from before 0.2.7 started this; the last page tells the person so."""
+    d = {"t": int(time.time()), "p": provider, "n": tid or secrets.token_urlsafe(9), "b": browser}
+    if hand:
+        d.update(h=hand["challenge"], r=hand["return"], s=hand["nonce"])
+    elif old:
+        d["o"] = 1
+    payload = json.dumps(d, separators=(",", ":")).encode()
     mac = hmac.new(secret.encode(), payload, hashlib.sha256).digest()[:16]
     return base64.urlsafe_b64encode(payload + mac).decode().rstrip("=")
+
+
+def begin(secret: str, provider: str, hand: dict | None = None, old: bool = False) -> tuple[str, str, str]:
+    """A sign-in this browser starts now: (state, the cookie's name, the cookie's value). The value is a secret of
+    this one sign-in; the state carries its fingerprint, so the link alone does not finish it (`same_browser`)."""
+    tid, mine = secrets.token_urlsafe(9), secrets.token_urlsafe(32)
+    return sign_state(secret, provider, tid, fingerprint(mine), hand, old), COOKIE + tid, mine
+
+
+def same_browser(st: dict, cookies) -> bool:
+    """Is this the browser that started the sign-in this state belongs to? A link that was passed on to somebody
+    else arrives without the cookie."""
+    mine = cookies.get(COOKIE + str(st.get("n") or "")) or ""
+    return bool(mine) and hmac.compare_digest(fingerprint(mine), str(st.get("b") or "-"))
 
 
 def read_state(secret: str, state: str) -> dict | None:
@@ -127,18 +216,20 @@ async def _exchange(provider: str, client_id: str, client_secret: str, code: str
     return f"google:{sub}", f"google:…{sub[-6:]}"
 
 
-def login_page(configured: list[str], cli: str, provider: str | None) -> str:
-    """The page a person lands on: one button per configured provider. The cli code rides along."""
-    cli_q = f"&cli={urllib.parse.quote(cli)}" if cli else ""
+def login_page(configured: list[str], hand: dict | None = None, cli: str = "") -> str:
+    """The page a person lands on: one button per configured provider. What the app said at the start (`asked`)
+    rides along; an app from before 0.2.7 is recognised by its `cli` code, which is passed on and never used."""
+    more = {k: hand[k] for k in ("challenge", "return", "nonce")} if hand else {"cli": cli} if cli else {}
+    q = html.escape("&" + urllib.parse.urlencode(more), quote=True) if more else ""
     buttons = "".join(
-        f'<a class="btn" href="/v1/auth/{k}/start?x=1{cli_q}">Sign in with {PROVIDERS[k]["name"]}</a>'
+        f'<a class="btn" href="/v1/auth/{k}/start?x=1{q}">Sign in with {PROVIDERS[k]["name"]}</a>'
         for k in configured)
     body = buttons or "<p>No sign-in method is configured on this gateway yet.</p>"
     return _page("Sign in to Lantern", f"""<h1>Get a free allowance</h1>
 <p>Sign in once. Lantern gives each account one token for about 300 explanations with Claude Haiku. The gateway keeps a
 hash of the token and usage counts; no code, prompts or email addresses are stored.</p>
 <div class="row">{body}</div>
-<p class="small">{'Your terminal or app will pick the token up by itself after you sign in.' if cli else 'The next page has a button that copies your token; paste it into <code>lantern login --token …</code>.'}</p>""")
+<p class="small">{'Lantern will pick the sign-in up by itself after you sign in.' if hand else 'The next page has a button that copies your token; paste it into <code>lantern login --token …</code>.'}</p>""")
 
 
 # The one script a gateway page runs: the Copy button on the "You're in" page. The page's Content-Security-Policy allows
@@ -153,18 +244,13 @@ COPY_JS = ("var b=document.getElementById('copy'),t=document.getElementById('tok
 COPY_JS_HASH = "'sha256-" + base64.b64encode(hashlib.sha256(COPY_JS.encode()).digest()).decode() + "'"
 
 
-def done_page(token: str, label: str, parked: bool) -> str:
+def done_page(token: str, label: str, old: bool = False) -> str:
+    """The last page of a sign-in no app collects by itself: the person carries the token over by hand. It is never
+    drawn on screen (a token on screen ends up in screenshots): one Lantern button copies it. Only when copying fails,
+    or scripts are off, does the page print it. `old`: an app from before 0.2.7 started this and is still waiting."""
     who = html.escape(' as ' + label.split(':', 1)[1]) if label.startswith('github:') and ':' in label else ''
-    if parked:
-        # The website, app or terminal that opened this tab collects the token by itself, so the page never shows it:
-        # a token on screen ends up in screenshots. If the pick-up failed, signing in again gives a fresh one.
-        return _page("Signed in", f"""<h1>You're in{who}</h1>
-<p>Go back to Lantern: it has picked up your sign-in. You can close this tab.</p>
-<p class="small">Lantern still says you are signed out after a few minutes? Sign in again from Lantern; that gives you
-a fresh token and keeps your usage count.</p>""")
-    # Nothing came to collect the token, so the person carries it over by hand. It is never drawn on screen (a token on
-    # screen ends up in screenshots): one Lantern button copies it. Only when copying fails, or scripts are off, does
-    # the page print it.
+    older = ('<p class="small">Is Lantern still waiting for you? This copy of Lantern is older than this sign-in page: '
+             'paste the token into its Settings, and update Lantern when you can.</p>') if old else ""
     t = html.escape(token, quote=True)
     pre = f'<pre class="tok">{t}</pre>'
     return _page("Signed in", f"""<h1>You're in{who}</h1>
@@ -174,7 +260,7 @@ a fresh token and keeps your usage count.</p>""")
 <div class="row"><button type="button" class="btn" id="copy" hidden>{MARK}<span>Copy my Lantern token</span></button></div>
 <div id="fb" hidden>{pre}</div>
 <noscript>{pre}</noscript>
-<p class="small">Keep it like a password: never paste it into a chat or a screenshot. Signing in again later gives a new
+{older}<p class="small">Keep it like a password: never paste it into a chat or a screenshot. Signing in again later gives a new
 token and keeps your usage count.</p>
 <script>{COPY_JS}</script>""")
 
@@ -239,4 +325,4 @@ code{{font:12.5px "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;backgro
 
 
 def valid_cli(cli: str | None) -> str:
-    return cli if cli and CLI_RE.match(cli) else ""
+    return cli if cli and CLI_RE.fullmatch(cli) else ""

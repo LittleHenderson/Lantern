@@ -514,7 +514,7 @@ def cmd_learn(a) -> int:
 
 
 def cmd_login(a) -> int:
-    from .providers import ProviderError, save_token, sign_in_claim, sign_in_providers, sign_in_start
+    from .providers import ProviderError, save_token, sign_in_here, sign_in_page, sign_in_providers
     if a.token:
         print(f"saved   {save_token(a.token)}  (the default model now uses the free allowance)")
         return 0
@@ -526,30 +526,30 @@ def cmd_login(a) -> int:
             print(f"  lantern login --{p}")
         print("Or save a token you already have:  lantern login --token lt_...")
         return 0
-    start = sign_in_start(provider)
-    print(f"Sign in with {provider.capitalize()} in your browser:\n  {start['url']}")
-    if not a.no_browser:
-        import webbrowser
-        try:
-            webbrowser.open(start["url"])
-        except Exception:  # noqa: BLE001: no browser is fine, the link is printed
-            pass
-    print("waiting for the sign-in to finish (up to 5 minutes)...", flush=True)
-    import time as _time
-    deadline = _time.time() + 300
-    while _time.time() < deadline:
-        try:
-            tok = sign_in_claim(start["cli"])
-        except ProviderError as e:
+    def show(link: str) -> None:
+        print(f"Sign in with {provider.capitalize()} in a browser on this computer:\n  {link}")
+        print(f"No browser on this computer? Open this one anywhere, press its Copy button, then run "
+              f"`lantern login --token lt_...`:\n  {sign_in_page(provider)}")
+        if not a.no_browser:
+            import webbrowser
+            try:
+                webbrowser.open(link)
+            except Exception:  # noqa: BLE001: no browser is fine, the link is printed
+                pass
+        print("waiting for the sign-in to finish (up to 5 minutes)...", flush=True)
+
+    try:
+        tok = sign_in_here(provider, show)
+    except ProviderError as e:
+        if e.status == 408:
+            print("timed out. Run the command again, or paste the token from the browser page: lantern login --token lt_...",
+                  file=sys.stderr)
+        else:
             print(f"error: {e}", file=sys.stderr)
-            return 2
-        if tok:
-            print(f"saved   {save_token(tok)}  (the default model now uses the free allowance)")
-            return 0
-        _time.sleep(2)
-    print("timed out. Run the command again, or paste the token from the browser page: lantern login --token lt_...",
-          file=sys.stderr)
-    return 2
+        return 2
+    print(f"saved   {save_token(tok)}  (the default model now uses the free allowance)")
+    return 0
+
 
 
 def main(argv: list[str] | None = None) -> int:

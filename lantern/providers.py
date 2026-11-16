@@ -360,31 +360,120 @@ def save_token(token: str) -> Path:
     return p
 
 
-def sign_in_start(provider: str, url: str | None = None) -> dict:
-    """Start a browser sign-in: returns the page to open and the one-time `cli` code the token is parked under."""
+SIGN_IN_CODE = re.compile(r"[A-Za-z0-9_-]{43,128}")     # the one-time code the gateway sends the browser back with
+
+
+def sign_in_page(provider: str, url: str | None = None) -> str:
+    """The gateway's sign-in page for a sign-in nothing collects: it ends on a page whose button copies the token,
+    for the person to paste (`lantern login --token`, or Settings)."""
+    return f"{url or gateway_url()}/login?provider={urllib.parse.quote(provider)}"
+
+
+def sign_in_start(provider: str, back: str, url: str | None = None) -> dict:
+    """Start a browser sign-in this program collects itself: the page to open (`url`), a secret to keep (`verifier`:
+    it goes nowhere but to the gateway, when the sign-in is collected) and a mark of this sign-in (`nonce`). The page
+    is given only the secret's SHA-256, and `back`: the address on this computer the gateway sends the browser to when
+    the person has signed in, with a one-time code and the mark (`sign_in_redeem`). Whoever did not start a sign-in
+    has no secret for it, and whoever did not finish it in their own browser never sees its code."""
+    import base64
+    import hashlib
     import secrets
-    url = url or gateway_url()
-    cli = secrets.token_urlsafe(36)
-    return {"cli": cli, "url": f"{url}/login?provider={urllib.parse.quote(provider)}&cli={urllib.parse.quote(cli)}",
-            "provider": provider}
+    verifier, nonce = secrets.token_urlsafe(48), secrets.token_urlsafe(24)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    q = urllib.parse.urlencode({"provider": provider, "challenge": challenge, "return": back, "nonce": nonce})
+    return {"url": f"{url or gateway_url()}/login?{q}", "verifier": verifier, "nonce": nonce, "provider": provider}
 
 
-def sign_in_claim(cli: str, url: str | None = None) -> str | None:
-    """The token parked for `cli`, once it exists (None while the person is still signing in)."""
+def sign_in_redeem(code: str, verifier: str, url: str | None = None) -> str:
+    """The token of a sign-in this program started: the code its browser came back with and the secret it kept. One
+    try per code. ProviderError in the gateway's own words when there is nothing to collect."""
     url = url or gateway_url()
-    req = urllib.request.Request(f"{url}/auth/claim?cli={urllib.parse.quote(cli)}")
+    req = urllib.request.Request(f"{url}/auth/redeem", data=json.dumps({"code": code, "verifier": verifier}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
     if urllib.parse.urlsplit(req.full_url).scheme not in ("http", "https"):
         raise ProviderError("refusing non-HTTP URL")
     check_destination(req.full_url)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310: scheme checked above
-            return str(json.loads(resp.read()).get("token") or "") or None
+            tok = json.loads(resp.read()).get("token")
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise ProviderError(f"HTTP {e.code} from gateway", status=e.code) from None
+        try:
+            said = json.loads(e.read()).get("detail")
+        except (ValueError, AttributeError, OSError):
+            said = None
+        raise ProviderError(str(said)[:300] if isinstance(said, str) and said else f"HTTP {e.code} from gateway",
+                            status=e.code) from None
     except urllib.error.URLError as e:
         raise ProviderError(f"cannot reach gateway: {e.reason}") from None
+    except (ValueError, AttributeError):
+        tok = None
+    if not isinstance(tok, str) or not tok:
+        raise ProviderError("the gateway answered without a token")
+    return tok
+
+
+SIGN_IN_BACK = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lantern</title><body style="font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px">
+<h1 style="font-size:20px">{title}</h1><p>{words}</p></body>"""
+
+
+def sign_in_back_page(ok: bool, words: str = "") -> str:
+    """What the browser shows when the gateway has sent it back to this computer. Fixed words, or escaped ones."""
+    import html
+    if ok:
+        return SIGN_IN_BACK.format(title="You're signed in", words="Go back to Lantern. You can close this tab.")
+    return SIGN_IN_BACK.format(title="Sign-in problem", words=html.escape(
+        words or "This sign-in was not started from this Lantern. Go back to Lantern and start it again."))
+
+
+def sign_in_here(provider: str, show=None, seconds: int = 300, url: str | None = None) -> str:
+    """The terminal's sign-in (`lantern login --github`): listen on this computer for the browser to come back, hand
+    `show` the page to open, and collect the token. The listener answers one address and only a caller that brings
+    this sign-in's own mark; anything else is told it is not for it. ProviderError when nobody came in time or the
+    gateway had nothing to give."""
+    import hmac
+    import http.server
+    got: dict = {}
+    start: dict = {}
+
+    class Back(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urllib.parse.urlsplit(self.path)
+            q = dict(urllib.parse.parse_qsl(u.query))
+            code = q.get("code", "")
+            mine = (self.headers.get("Host") == f"127.0.0.1:{self.server.server_address[1]}" and u.path == "/signin"
+                    and hmac.compare_digest(q.get("state", "").encode(), start["nonce"].encode())
+                    and SIGN_IN_CODE.fullmatch(code) is not None and "code" not in got)
+            if mine:
+                got["code"] = code
+            body = sign_in_back_page(bool(mine)).encode()
+            self.send_response(200 if mine else 400)
+            for k, v in (("Content-Type", "text/html; charset=utf-8"), ("Content-Length", str(len(body))),
+                         ("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer"),
+                         ("X-Content-Type-Options", "nosniff"),
+                         ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")):
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # nothing of a sign-in is written to the terminal
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Back)
+    try:
+        httpd.timeout = 1
+        start.update(sign_in_start(provider, f"http://127.0.0.1:{httpd.server_address[1]}/signin", url))
+        if show:
+            show(start["url"])
+        deadline = time.time() + seconds
+        while "code" not in got and time.time() < deadline:
+            httpd.handle_request()
+    finally:
+        httpd.server_close()
+    if "code" not in got:
+        raise ProviderError("nobody finished the sign-in in time", status=408)
+    return sign_in_redeem(got["code"], start["verifier"], url)
+
 
 
 def sign_in_providers(url: str | None = None) -> list[str]:
