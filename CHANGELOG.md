@@ -9,6 +9,14 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- New heuristic `LW-SHARED-CONNECTION` (medium, labelled heuristic; `lantern/sharedconn.py`): a Python file
+  that opens one SQLite connection with the library's own guard switched off (`check_same_thread=False`),
+  keeps it for the whole program and uses it in a function with no lock held, so two requests answered on
+  two threads at the same moment can be on the one connection together. Quiet under a lock, in the function
+  that opens the connection, at the top of the file, for a bare `close()`, and where every use is on the
+  event loop's one thread. It says "check": Lantern does not know how the program is run. Measured on 27
+  folders (benchmark projects, sample apps): none of them opens a connection that way, so there is no
+  finding and no precision is claimed. Tests: `tests/test_sharedconn.py` (5).
 - A paid call is read from the code and not from what is written about it (`lantern/aiapp.py`: `read_as_code`,
   `named`). Until now every line that did not begin as a comment was read as code, so a remark at a line's end, the
   later lines of a block comment or of a docstring, and a text kept over several lines (a help text, a tiny app in a

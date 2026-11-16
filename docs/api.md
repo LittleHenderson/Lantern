@@ -675,6 +675,16 @@ counted or held between the look and the work (the look's own condition included
 the look, where the function names a lock or a transaction, and where the count shares no name with the look or
 with the line that gave the look its value. The finding stands on the look's line; `more_info` names the lines of
 the work and of the count and the name the two share. Its `scenario` is the story kind `counted-later`.
+`LW-SHARED-CONNECTION` (567; `lantern/sharedconn.py`): a Python file that opens one SQLite connection with the
+library's own guard switched off (`sqlite3.connect(..., check_same_thread=False)`), keeps it on `self`, on its
+class or under a name at the top of the file, and uses it in a function with no lock held. Two requests that
+are answered on two threads at the same moment can then be on the one connection together. Rank `medium`,
+`tool_confidence` `LOW`. Quiet where a use stands under a lock (`with <lock>:`, a decorator with a lock's name,
+an `acquire()` in the function), in the function that opens the connection and at the top of the file, for a
+bare `close()`, in a function the file only calls from such places, and where every use that is left is in
+`async def` functions or in functions only they call (the event loop's one thread). One finding for each
+connection, on the first such line; `more_info` names the line that opens the connection, the other functions
+with their lines, and how many uses stand under a lock. Its `scenario` is the story kind `shared-connection`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":

@@ -2287,6 +2287,8 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += localweb.loopback_cookies(repo) + localweb.keeps_pages(repo)
     from . import countlater        # a limit that is looked at before the work and counted after it
     findings += countlater.counted_later(g)
+    from . import sharedconn        # one database connection for every thread, used with no lock held
+    findings += sharedconn.shared_connections(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
