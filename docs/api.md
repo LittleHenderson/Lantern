@@ -1012,10 +1012,15 @@ analyse a repository from the website without installing anything. Plan and late
 **Sign-in.** Two ways, same accounts:
 
 * *The website* (`/`, same origin as the API, so no CORS is offered): `POST /v1/signin/start {provider}` makes a
-  one-time code, keeps it in an HttpOnly cookie `lsi` (path `/v1/signin`, 10 min, SameSite=Strict) and answers the
-  gateway page to open (`<gateway>/v1/auth/<provider>/start?cli=<code>`, which goes straight to GitHub or Google).
-  The page then calls `POST /v1/signin/poll` every 1.5 s; the server collects the token from the gateway's
-  `/v1/auth/claim` and puts it in an HttpOnly cookie `lt` (path `/`, 30 days, SameSite=Strict, Secure on https).
+  secret and a mark, keeps both in an HttpOnly cookie `lsi` (path `/v1/signin`, 10 min, SameSite=Lax: the browser
+  must send it when the gateway sends it back here) and answers the gateway page to open
+  (`<gateway>/v1/auth/<provider>/start?challenge=<SHA-256 of the secret>&return=<this site>/v1/signin/return&nonce=<mark>`,
+  which goes straight to GitHub or Google). The gateway sends the browser that finished the sign-in to
+  `GET /v1/signin/return?code=<one-time code>&state=<mark>`; when the mark is this browser's own, the server
+  collects the token from the gateway's `POST /v1/auth/redeem` with the code and the secret and puts it in an
+  HttpOnly cookie `lt` (path `/`, 30 days, SameSite=Strict, Secure on https); a code with any other mark signs
+  nobody in and is used up. The tab the person started in asks `POST /v1/signin/poll` every 1.5 s, which only says
+  whether this browser is signed in yet.
   The page's script never sees the token. A request authenticated by the cookie that changes something (anything
   but GET) must also carry `X-Lantern-Site: 1`, which another site's page cannot send here; without it: 403.
 * *Apps and scripts*: sign in at the gateway (`lantern login`) and send `Authorization: Bearer lt_...`.
@@ -1038,7 +1043,8 @@ account, sharing one allowance). Nothing about the token is stored on disk.
 | `GET /react.production.min.js` · `/react-dom.production.min.js` · `/intro-runtime.js` · `/intro.js` | none | The home page's intro: React 18.3.1 (vendored) and the landing page's intro files (copies of `site/intro/`, a test keeps them equal), loaded under the page's nonce |
 | `GET /v1/signin/providers` | none | `{providers: ["github", "google"]}` as switched on at the gateway; 503 when it does not answer |
 | `POST /v1/signin/start` `{provider}` | `X-Lantern-Site` | `{url}` to open; sets `lsi`. 400 for a provider that is not switched on |
-| `POST /v1/signin/poll` | `X-Lantern-Site` + `lsi` | `{signed_in: false}` while waiting; `{signed_in: true, label}` + `lt` cookie once; 400 with no sign-in in progress |
+| `GET /v1/signin/return?code=&state=` | `lsi` | The page the gateway sends the browser back to. With this browser's own mark: collects the token (gateway `POST /v1/auth/redeem`), sets `lt`, clears `lsi`, and shows "You're signed in" (200). Any other mark, or no `lsi`: the code is used up, nobody is signed in (400). The gateway not answering: 503 |
+| `POST /v1/signin/poll` | `X-Lantern-Site` | `{signed_in: false}` while a sign-in of this browser is going (`lsi`); `{signed_in: true, label}` once `lt` is a sign-in; 400 with neither |
 | `POST /v1/signout` | `X-Lantern-Site` | Ends this browser's sign-in at the gateway (`POST /v1/auth/signout`) and clears `lt`; `{"everywhere": true}` ends every sign-in of the account (website, app, CLI) → `{signed_in: false, ended}`; 503 when the gateway is unreachable and `everywhere` was asked |
 | `GET /v1/me` | Bearer or `lt` | `{account: "github"\|"google"\|"token", label, runs_today, runs_active, limits, connect_url}` (`connect_url`: the GitHub App's install page when Connect GitHub is on, else null) |
 | `GET /v1/samples` | none | `{samples: [{id, title, stack, level, summary}]}`: Lantern's built-in starter apps (`lantern.learn.catalog`), each with planted problems, for people with no repository to hand |

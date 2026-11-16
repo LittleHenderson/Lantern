@@ -14,6 +14,7 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 import httpx
@@ -27,7 +28,12 @@ from lantern_gateway import app as gateway_app  # noqa: E402
 from lantern_gateway.app import Settings, Store, create_app  # noqa: E402
 
 ADMIN = "admin-" + "k" * 24
-CLI = "c" * 40
+CLI = "c" * 40                                           # what an app from before gateway 0.2.7 sends
+# what an app says today when it starts a sign-in it will collect: where its browser comes back to, a mark, and the
+# fingerprint of a secret it keeps
+RETURN = "http://127.0.0.1:8765/api/login/return"
+NONCE = "n" * 24
+SECRET = "v" * 64
 # where the clock of the limits stands in these tests: 40 s into its minute, 2,800 s into its hour, 6,400 s into its day
 START = 1_000_000_000.0
 PIECE = 65536
@@ -67,7 +73,8 @@ class Gateway:
                           github_client_secret="gh-secret", **over)
         self.app = create_app(self.s, transport=stand_ins(self.calls, github))
         self.app.state.limiter.clock = lambda: START        # stands still until `later` moves it
-        self.client = TestClient(self.app, follow_redirects=False, raise_server_exceptions=False)
+        # one browser, at the gateway's own address (it keeps the cookie a sign-in is started with)
+        self.client = TestClient(self.app, follow_redirects=False, raise_server_exceptions=False, base_url="https://gw.test")
 
     def ping(self, install: str = "a" * 32, sender: str = "203.0.113.5", **over):
         body = {"install": install, "day": today(), "version": "0.10.0", "os": "Linux", "features": {"analyze": 2}, **over}
@@ -80,11 +87,17 @@ class Gateway:
         """What the owner's page shows of the app."""
         return self.stats().json()["app"]
 
-    def link(self, cli: str = CLI) -> str:
-        """A sign-in link's `state`, as GitHub would hand it back."""
-        r = self.client.get("/v1/auth/github/start", params={"cli": cli})
+    def link(self, secret: str = "") -> str:
+        """A sign-in link's `state`, as GitHub would hand it back. With `secret`, the sign-in of an app that will
+        collect it; without, one that ends on the page with the Copy button."""
+        ask = {"challenge": gateway_app.challenge_of(secret), "return": RETURN, "nonce": NONCE} if secret else {}
+        r = self.client.get("/v1/auth/github/start", params=ask)
         assert r.status_code == 302
         return dict(x.split("=", 1) for x in r.headers["location"].split("?", 1)[1].split("&"))["state"]
+
+    def collect(self, sent_back, secret: str = SECRET):
+        """What the app does when its browser comes back: the one-time code it was sent with, and the secret it kept."""
+        return self.client.post("/v1/auth/redeem", json={"code": once(sent_back), "verifier": secret})
 
     def back(self, state: str, code: str = "good", sender: str = "203.0.113.5"):
         return self.client.get("/v1/auth/github/callback", params={"code": code, "state": state},
@@ -103,6 +116,14 @@ class Gateway:
         """Move the clock the limits count by."""
         now = self.app.state.limiter.clock() + seconds
         self.app.state.limiter.clock = lambda: now
+
+
+def once(sent_back) -> str:
+    """The one-time code in the address a finished sign-in sends the browser to."""
+    assert sent_back.status_code == 303, sent_back.text[-300:]
+    where = urllib.parse.urlsplit(sent_back.headers["location"])
+    assert where._replace(query="").geturl() == RETURN
+    return urllib.parse.parse_qs(where.query)["code"][0]
 
 
 @pytest.fixture
@@ -590,65 +611,81 @@ def test_the_owners_page_has_words_for_too_many_wrong_secrets(gw):
 
 # ------------------------------------------------------------------ signing in
 
-def test_a_sign_in_token_waiting_for_the_app_is_not_in_the_database_in_clear(gw):
-    r = gw.back(gw.link())
-    assert r.status_code == 200
-    row = sqlite3.connect(gw.s.db_path).execute("select token from pending").fetchone()
-    assert row is not None and not row[0].startswith("lt_")
-    assert b"lt_" not in Path(gw.s.db_path).read_bytes()
-    tok = gw.client.get("/v1/auth/claim", params={"cli": CLI}).json()["token"]          # the twin: the app collects it
-    assert tok.startswith("lt_") and tok not in row[0]
+def test_a_finished_sign_in_that_waits_for_its_app_leaves_no_token_in_the_database(gw):
+    r = gw.back(gw.link(SECRET))
+    code = once(r)
+    row = sqlite3.connect(gw.s.db_path).execute("select code_hash, challenge, account from handover").fetchone()
+    assert row is not None and code not in row and row[2] == "github:42"
+    kept = Path(gw.s.db_path).read_bytes()
+    assert b"lt_" not in kept and code.encode() not in kept and SECRET.encode() not in kept
+    assert sqlite3.connect(gw.s.db_path).execute("select count(*) from sessions").fetchone()[0] == 0   # no token yet
+    got = gw.collect(r)                                                       # the twin: the app collects it
+    tok = got.json()["token"]
+    assert got.status_code == 200 and tok.startswith("lt_") and got.headers["cache-control"] == "no-store"
     assert gw.client.get("/v1/allowance", headers={"authorization": f"Bearer {tok}"}).status_code == 200
-    assert gw.client.get("/v1/auth/claim", params={"cli": CLI}).status_code == 404       # once
-    assert sqlite3.connect(gw.s.db_path).execute("select count(*) from pending").fetchone()[0] == 0
+    assert gw.collect(r).status_code == 400                                   # once
+    assert sqlite3.connect(gw.s.db_path).execute("select count(*) from handover").fetchone()[0] == 0
 
 
-def test_the_waiting_token_can_be_opened_only_with_the_apps_own_code(tmp_path):
+def test_what_waits_for_the_app_is_opened_only_with_the_secret_the_app_kept(tmp_path):
     store = Store(str(tmp_path / "s.db"))
-    store.park(CLI, "lt_" + "t" * 43)
-    store.park("d" * 40, "lt_" + "t" * 43)
-    rows = [r[0] for r in store.db.execute("select token from pending order by cli_hash")]
-    assert len(set(rows)) == 2                                    # the same token under two codes: two different texts
-    assert store.claim("e" * 40) is None
-    assert store.claim("d" * 40) == "lt_" + "t" * 43
-    assert store.claim(CLI) == "lt_" + "t" * 43
+    mark = gateway_app.challenge_of(SECRET)
+    one, two = (store.hand_over("github:42", "github:octocat", mark) for _ in range(2))
+    assert one != two and min(len(one), len(two)) >= 43      # the same sign-in twice: two codes, neither to be guessed
+    assert store.redeem(one, "w" * 64) is None               # a secret that is not the one it was started with
+    assert store.redeem(one, SECRET) is None                 # and that try was the code's only one
+    assert store.redeem("x" * 43, SECRET) is None            # the right secret with a code of the caller's choosing
+    assert store.redeem(two, SECRET) == ("github:42", "github:octocat")
+    assert store.redeem(two, SECRET) is None
 
 
-def test_a_token_left_in_clear_by_the_version_before_is_not_handed_out_and_does_not_stay(tmp_path):
+def test_a_token_left_waiting_by_the_version_before_is_not_handed_out_and_does_not_stay(tmp_path):
     g = Gateway(tmp_path)
     db = sqlite3.connect(g.s.db_path)
     clear = "lt_" + "o" * 43
+    db.execute("create table pending (cli_hash text primary key, token text not null, created real not null)")
     db.execute("insert into pending (cli_hash, token, created) values (?, ?, strftime('%s','now'))",
                (gateway_app._hash(CLI), clear))
     db.commit()
     db.close()
+    assert clear.encode() in Path(g.s.db_path).read_bytes()
     again = Gateway(tmp_path)                                     # the gateway starts again, as after a deploy
-    assert sqlite3.connect(g.s.db_path).execute("select count(*) from pending").fetchone()[0] == 0
-    assert again.client.get("/v1/auth/claim", params={"cli": CLI}).status_code == 404
+    names = {r[0] for r in sqlite3.connect(g.s.db_path).execute("select name from sqlite_master where type = 'table'")}
+    assert "pending" not in names and "handover" in names
+    assert clear.encode() not in Path(g.s.db_path).read_bytes()   # written over, not only let go
+    r = again.client.get("/v1/auth/claim", params={"cli": CLI})
+    assert r.status_code == 404 and r.json()["ended"] is True and "lt_" not in r.text
 
 
-def test_a_token_nobody_collected_is_gone_after_ten_minutes(gw, monkeypatch):
+def test_a_sign_in_nobody_collected_is_gone_after_two_minutes(gw, monkeypatch):
     now = [gateway_app.time.time()]
     monkeypatch.setattr(gateway_app.time, "time", lambda: now[0])
-    gw.back(gw.link())
-    waiting = lambda: sqlite3.connect(gw.s.db_path).execute("select count(*) from pending").fetchone()[0]  # noqa: E731
+    r = gw.back(gw.link(SECRET))
+    waiting = lambda: sqlite3.connect(gw.s.db_path).execute("select count(*) from handover").fetchone()[0]  # noqa: E731
     assert waiting() == 1
-    now[0] += 600                                               # ten minutes to the second: still there
-    assert gw.client.get("/v1/auth/claim", params={"cli": "z" * 40}).status_code == 404    # somebody else's question
-    assert waiting() == 1
-    now[0] += 0.5
-    assert gw.client.get("/v1/auth/claim", params={"cli": "z" * 40}).status_code == 404
+    now[0] += 120.5
+    assert gw.collect(r).status_code == 400                     # the app that started it, half a second late
     assert waiting() == 0
-    assert gw.client.get("/v1/auth/claim", params={"cli": CLI}).status_code == 404
+    assert sqlite3.connect(gw.s.db_path).execute("select count(*) from sessions").fetchone()[0] == 0
 
 
-def test_the_twin_a_token_is_collected_within_the_ten_minutes(gw, monkeypatch):
+def test_one_that_ran_out_is_cleared_away_when_the_next_person_signs_in(gw, monkeypatch):
     now = [gateway_app.time.time()]
     monkeypatch.setattr(gateway_app.time, "time", lambda: now[0])
-    gw.back(gw.link())
-    now[0] += 599
-    r = gw.client.get("/v1/auth/claim", params={"cli": CLI})
-    assert r.status_code == 200 and r.json()["token"].startswith("lt_")
+    gw.back(gw.link(SECRET))
+    now[0] += 121
+    r = gw.back(gw.link(SECRET))                                # nobody asked for the first; the second is there alone
+    assert sqlite3.connect(gw.s.db_path).execute("select count(*) from handover").fetchone()[0] == 1
+    assert gw.collect(r).status_code == 200
+
+
+def test_the_twin_a_sign_in_is_collected_within_the_two_minutes(gw, monkeypatch):
+    now = [gateway_app.time.time()]
+    monkeypatch.setattr(gateway_app.time, "time", lambda: now[0])
+    r = gw.back(gw.link(SECRET))
+    now[0] += 119
+    got = gw.collect(r)
+    assert got.status_code == 200 and got.json()["token"].startswith("lt_")
 
 
 def test_a_sign_in_link_works_once_and_github_is_not_asked_again(gw):
@@ -659,8 +696,9 @@ def test_a_sign_in_link_works_once_and_github_is_not_asked_again(gw):
         r = gw.back(state, code)
         assert r.status_code == 400 and "already used" in r.text
     assert gw.asked_github() == asked
-    assert gw.back(gw.link("d" * 40)).status_code == 200          # the twin: a new link signs the same person in again
-    assert gw.client.get("/v1/auth/claim", params={"cli": "d" * 40}).json()["token"].startswith("lt_")
+    again = gw.back(gw.link(SECRET))                              # the twin: a new link signs the same person in again
+    assert gw.collect(again).json()["token"].startswith("lt_")
+    assert gw.back(gw.link()).status_code == 200                  # and so does one that ends on the Copy page
 
 
 def test_a_link_with_a_wrong_code_is_used_up_too(gw):
@@ -681,7 +719,7 @@ def test_one_sender_may_make_the_gateway_ask_the_provider_only_so_often(gw):
     assert gw.asked_github() == asked
     assert gw.back(gw.link(), sender="203.0.113.8").status_code == 200       # the twin: another person signs in
     gw.later(60)
-    assert gw.back(gw.link("d" * 40), sender="203.0.113.7").status_code == 200
+    assert gw.back(gw.link(), sender="203.0.113.7").status_code == 200
 
 
 def test_sign_ins_for_everyone_together_are_bounded_too(tmp_path):
@@ -694,7 +732,7 @@ def test_sign_ins_for_everyone_together_are_bounded_too(tmp_path):
 
 
 def test_two_people_who_start_in_the_same_second_do_not_share_a_link(gw):
-    one, two = gw.link(""), gw.link("")                    # no app's code: a person in a browser
+    one, two = gw.link(), gw.link()                        # no app waits: a person in a browser
     assert one != two
     assert gw.back(one, sender="203.0.113.1").status_code == 200
     assert gw.back(two, sender="203.0.113.2").status_code == 200
@@ -711,7 +749,12 @@ def test_a_provider_that_cannot_be_reached_or_answers_oddly_is_said_on_a_page(tm
 
 def test_the_twin_starting_a_sign_in_and_asking_for_its_token_are_never_limited(gw):
     h = {"Fly-Client-IP": "203.0.113.7"}
-    assert {gw.client.get("/v1/auth/github/start", params={"cli": CLI}, headers=h).status_code for _ in range(200)} == {302}
+    ask = {"challenge": gateway_app.challenge_of(SECRET), "return": RETURN, "nonce": NONCE}
+    for start in ({}, ask, {"cli": CLI}):
+        gw.client.cookies.clear()                              # 200 browsers, not one with 200 sign-ins begun
+        assert {gw.client.get("/v1/auth/github/start", params=start, headers=h).status_code for _ in range(200)} == {302}
+    wrong = {"code": "x" * 43, "verifier": SECRET}
+    assert {gw.client.post("/v1/auth/redeem", json=wrong, headers=h).status_code for _ in range(400)} == {400}
     assert {gw.client.get("/v1/auth/claim", params={"cli": CLI}, headers=h).status_code for _ in range(400)} == {404}
     assert gw.asked_github() == 0
 
@@ -762,6 +805,7 @@ def test_the_twin_what_is_open_to_anybody_still_answers_without_a_token(gw):
     assert c.get("/v1/login").status_code == 200
     assert c.get("/v1/admin").status_code == 200
     assert c.get("/v1/auth/github/start").status_code == 302
+    assert c.post("/v1/auth/redeem", json={"code": "x" * 43, "verifier": SECRET}).status_code == 400
     assert c.get("/v1/auth/claim", params={"cli": CLI}).status_code == 404
     assert c.post("/v1/usage", json={"install": "b" * 32, "features": {"serve": 1}}).status_code == 200
     assert c.get("/v1/allowance").status_code == 401
@@ -786,7 +830,7 @@ def test_the_limits_are_the_numbers_the_documents_give(monkeypatch):
                   "| `LANTERN_SENDER_PINGS_PER_HOUR` | 300 |", "| `LANTERN_ADDRESS_HEADER` | fly-client-ip |",
                   "five wrong secrets in a minute from one sender, or 30 from everyone together",
                   "at most 10 times a minute for one sender and 120 times a minute for everyone together",
-                  "4,000 bytes everywhere else", "waits up to ten minutes"):
+                  "4,000 bytes everywhere else", "waits up\n  to two minutes", "| `LANTERN_RETURN_ORIGINS` | (none) |"):
         assert words in readme, words
 
 

@@ -19,6 +19,26 @@ file. New entries go under `## Unreleased`, on top.
   (`lantern/onrepo.py`); every value from the results is written as text (no link, image, HTML or mention can be
   made through a finding's title). Lantern's own pull requests get the comment (`.github/workflows/lantern-report.yml`).
 
+- Signing in: the app that starts a sign-in is the one that collects it (gateway 0.2.7, `lantern login`, the app's
+  Settings, the website). The terminal, the app and the website each keep a secret and give the gateway its
+  fingerprint and the address their browser comes back to: one on this computer (`http://127.0.0.1:<port>/…`) or a
+  website the gateway names. A sign-in is finished only in the browser that started it; that browser is sent back
+  with a one-time code, and the app collects its token with the code and the secret (`POST /v1/auth/redeem`), once,
+  within two minutes. No token exists before that moment, and none waits in the gateway's database.
+  - `lantern login --github` / `--google` listens on 127.0.0.1 until the browser comes back (five minutes at most,
+    then it says how to paste a token). The buttons in the app's Settings work the same way through
+    `/api/login/return`; an app that listens on another address than this computer's own asks for a paste.
+  - The website signs in through `GET /v1/signin/return`; `POST /v1/signin/poll` only says whether this browser is
+    signed in yet.
+  - What changes for people: once the gateway runs 0.2.7, a Lantern from before this change (0.11.0 and older) no
+    longer picks its sign-in up by itself. The gateway's page says to press Copy and paste the token into Lantern.
+    `GET /v1/auth/claim` answers that this way of picking a sign-in up has ended.
+  - For whoever runs a gateway: deploy the gateway and the website one after the other, the gateway first
+    (`docs/deploy.md`). A website at another address than `LANTERN_HOME_URL` is named in the new setting
+    `LANTERN_RETURN_ORIGINS`. What an earlier version kept for its pick-up is deleted and written over at start-up.
+  - Tests: `tests/test_signin.py` (65), `tests/test_gateway_limits.py` (118), `tests/test_cloud_site.py` (22). Left,
+    and written in `docs/audit/THREAT_MODEL.md`: with nothing listening at the return address the one-time code
+    stays in the browser's address bar for two minutes, worth nothing without the app's secret.
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside

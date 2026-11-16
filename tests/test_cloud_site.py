@@ -208,8 +208,11 @@ def test_another_browser_cannot_collect_someone_elses_sign_in(env):
     assert r.status_code == 400 and "lt" not in set_cookies(r) and c.get("/v1/me").status_code == 401
     assert gw.redeem(theirs, "v" * 64) is None                                 # used up
     for bad in ({}, {"code": "short", "state": nonce}, {"state": nonce}, {"code": "c" * 43}):
-        assert c.get("/v1/signin/return", params=bad).status_code == 400
-
+        r = c.get("/v1/signin/return", params=bad)
+        assert r.status_code == 400 and "lsi" not in set_cookies(r)
+    # none of that disturbed this browser's own sign-in, which finishes as it would have
+    r = c.get("/v1/signin/return", params={"code": gw.hand_over("github:7", "github:octo", challenge), "state": nonce})
+    assert r.status_code == 200 and set_cookies(r)["lt"]["value"].startswith("lt_") and c.get("/v1/me").status_code == 200
 
 
 def test_cookie_requests_that_change_something_need_the_sites_header(env):

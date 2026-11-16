@@ -978,15 +978,15 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         sign-in holds the secret its code is worth anything with; the token goes into an HttpOnly cookie, never into a
         page. A code that belongs to no sign-in of this browser (somebody else's link led it here) signs nobody in and
         is used up at the gateway, so that it is worth nothing to anyone who reads it off the address bar."""
-        def page(body: str, status: int) -> Response:
-            resp = Response(body, status, media_type="text/html; charset=utf-8", headers=_page_headers(None))
-            if status != 503:
-                resp.delete_cookie(SIGNIN_COOKIE, path="/v1/signin")
-            return resp
-
         code = code if code and SIGNIN_CODE.fullmatch(code) else ""
         nonce, _, verifier = (request.cookies.get(SIGNIN_COOKIE) or "").partition(".")
         mine = bool(code and nonce and verifier) and hmac.compare_digest(nonce.encode(), (state or "").encode())
+
+        def page(body: str, status: int) -> Response:
+            resp = Response(body, status, media_type="text/html; charset=utf-8", headers=_page_headers(None))
+            if mine and status != 503:      # a code that is not this browser's leaves its own sign-in as it stands
+                resp.delete_cookie(SIGNIN_COOKIE, path="/v1/signin")
+            return resp
         try:
             token = await ident.redeem(code, verifier if mine else secrets.token_urlsafe(48)) if code else None
             who = await ident.whoami(token) if token and mine else None

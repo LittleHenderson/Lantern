@@ -232,6 +232,7 @@ class Store:
         if "anchor" not in cols:
             self.db.execute("alter table users add column anchor integer default 0")
         # Until 0.2.6 a token waited here under a code its caller chose. Nothing of that is kept or handed out.
+        self.db.execute("pragma secure_delete = on")       # what is deleted is written over, not only let go
         self.db.execute("drop table if exists pending")
         self.db.execute("delete from handover where created < ?", (time.time() - REDEEM_TTL,))
         self.db.commit()
@@ -752,6 +753,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
 
     used: dict[str, float] = {}       # sign-in links already used: a hash of each, until the link would have run out
+    USED = "This sign-in link was already used. Go back and start again."
 
     def first_use(state: str) -> bool:
         """A sign-in link is good once. Without this, one link could be sent back any number of times for ten
@@ -778,6 +780,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                 status_code=400, headers=page_headers)
         if error or not code:
             return HTMLResponse(oauth.error_page("Sign-in was cancelled or refused by the provider."), status_code=400, headers=page_headers)
+        if used.get(_hash(state or ""), 0) > time.time():
+            return HTMLResponse(oauth.error_page(USED), status_code=400, headers=page_headers)
         if not oauth.same_browser(st, request.cookies):
             # A link that was passed on to somebody else ends here: the provider is not asked and nothing is made. It
             # does not use the link up either, so the browser that did start it can still finish.
@@ -793,8 +797,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             return HTMLResponse(oauth.error_page("Too many sign-ins in the last minute. Wait a minute, then load this page again."),
                                 status_code=429, headers={**page_headers, **slow_down(limiter.wait(60))})
         if not first_use(state or ""):
-            return HTMLResponse(oauth.error_page("This sign-in link was already used. Go back and start again."),
-                                status_code=400, headers=page_headers)
+            return HTMLResponse(oauth.error_page(USED), status_code=400, headers=page_headers)
         limiter.take("signin", sender, s.sender_signins_per_minute, 60)
         limiter.take("signin-all", "", s.signins_per_minute_all, 60)
         cid, sec = s.oauth(provider)
@@ -852,8 +855,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.get("/v1/auth/claim")
     def auth_claim():
-        """Until 0.2.6 an app collected its sign-in here with a code of its own choosing, and so could anybody who had
-        chosen the code. Nothing is kept for such a code any more. An app from before still asks; it is answered as it
+        """Until 0.2.6 an app collected its sign-in here with a code of its own choosing. Nothing is kept for such a
+        code any more (an app collects with `/v1/auth/redeem`). An app from before still asks; it is answered as it
         always was while nothing was there (it goes on waiting, then tells the person how to paste the token), and the
         answer says in words that nothing will come."""
         return JSONResponse({"pending": True, "ended": True,

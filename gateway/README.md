@@ -42,6 +42,7 @@ The user runs `lantern login --token lt_...`. Next step for a public launch: iss
 | `LANTERN_DAILY_REQUESTS` | 120 | Per user per UTC day |
 | `LANTERN_GLOBAL_DAILY_USD` | 10 | Total spend per UTC day; the allowance pauses for everyone when reached |
 | `LANTERN_SIGNUPS_PER_DAY` | 200 | New accounts per UTC day, everyone together; past it a first sign-in gets a 429 page ("try again tomorrow"), existing accounts keep working. 0 = no cap |
+| `LANTERN_RETURN_ORIGINS` | (none) | Websites, besides the one `LANTERN_HOME_URL` names, that a finished sign-in may send the browser back to: `https://host[:port]`, separated by commas. An address on the person's own computer (`http://127.0.0.1:<port>/…`) is always allowed; anything else is refused at the start of the sign-in |
 | `LANTERN_INSTALLS_PER_DAY` | 1000 | New installs the opt-in usage reports may add per UTC day, everyone together; past it a report from an install the gateway does not know yet is answered 429 until 00:00 UTC (the app keeps its counts and tries again), installs it knows keep being counted. 0 = no cap |
 | `LANTERN_SENDER_INSTALLS_PER_DAY` | 50 | New installs one sender may add in a day. 0 = no limit |
 | `LANTERN_SENDER_PINGS_PER_HOUR` | 300 | Usage reports one sender may send in an hour. 0 = no limit |
@@ -113,10 +114,16 @@ for the secret) and the app's usage reports. What such a caller can make the gat
   at most 10 times a minute for one sender and 120 times a minute for everyone together; past that a page says "Too
   many sign-ins in the last minute. Wait a minute, then load this page again." and the link is not used up. A
   provider that cannot be reached, or that answers with something that is no answer, gets a page too (502).
-* **The token that waits for the app.** After a sign-in the new token waits up to ten minutes for the app that
-  started it. It waits sealed with that app's own code, of which the gateway keeps only a hash, so the database file
-  and its copies hold no token in clear. A row an earlier version left in clear is deleted when the gateway starts
-  and is never handed out: a person who was in the middle of signing in at that moment signs in again.
+* **A finished sign-in that waits for its app.** When the terminal, the app or the website started the sign-in, no
+  token is made at its end. The gateway sends the browser that finished it back to where the app listens (an address
+  on the person's own computer, or a website named in the table above) with a one-time code, and the sign-in waits up
+  to two minutes for the app to collect it with `POST /v1/auth/redeem`: the code, and the secret whose fingerprint
+  the app gave at the start. One try per code, and the token is made at that moment. Until then the database holds
+  the account's id and label, a hash of the code and the fingerprint: no token, no code, no secret. A sign-in is
+  finished only in the browser that started it (a cookie, ten minutes). A sign-in no app started ends on a page whose
+  button copies the token. The pick-up of versions before 0.2.7 (`/v1/auth/claim`) hands nothing out, and what it
+  kept is deleted and written over when the gateway starts: a Lantern from before this change shows its person
+  that page with the Copy button, and a line that says to paste the token into Lantern.
 
 Who a sender is: the address the proxy in front of the gateway wrote in `LANTERN_ADDRESS_HEADER`, else the address
 of the connection. An IPv6 address counts as its /64 network. The counts are kept in memory only, under a keyed
@@ -126,19 +133,21 @@ the gateway starts (the cap on new installs for everyone is read from the databa
 What these limits cannot do. A caller with many addresses is many senders, which is why each limit that matters
 has a count for everyone together beside it. Such a caller can use those counts up: the owner then waits out the
 minute for their page (nobody gets in meanwhile), and people signing in see the "too many sign-ins" page until the
-minute ends. `/v1/auth/<provider>/start` and `/v1/auth/claim` are not limited (neither asks a provider, and the app
-asks the second every few seconds while a person signs in). The per-sender counts are as good as the header:
+minute ends. `/v1/auth/<provider>/start`, `/v1/auth/redeem` and `/v1/auth/claim` are not limited (none asks a
+provider; a wrong try at the second ends at most the one sign-in whose code it names, and a code is 43 random
+characters that only the finishing browser was given). The per-sender counts are as good as the header:
 whether a caller can write its own `Fly-Client-IP` through Fly's proxy was not tried, and Fly's documentation as
 read on 2026-11-10 does not say. With `LANTERN_ADDRESS_HEADER` set to nothing behind a proxy, every caller that
-comes through the proxy is one sender. The server's own log lines hold the address a request asked for, which for a
-sign-in includes the app's code for the minutes it is good.
+comes through the proxy is one sender. The server's own log lines hold the address a request asked for, which for
+the start of a sign-in includes the fingerprint, the return address and the mark the app gave; none of them opens
+anything. The one-time code and the app's secret come in the body of a request, which is not written down.
 
 ## What it stores
 
 Token hashes, request and token counts, daily spend, and the usage counts above (install id, version, OS,
 feature counts per day). Never request or response bodies; nothing about anyone's code; no address of a caller.
-Upstream error bodies are never passed back to clients. A sign-in's token that waits for the app is stored sealed
-(above) for ten minutes at most.
+Upstream error bodies are never passed back to clients. A finished sign-in that waits for its app (above) is kept
+for two minutes at most and holds no token.
 
 Kept for 90 days (`LANTERN_RETENTION_DAYS`): a token hash and its account mapping are deleted 90 days after the
 token's last request or sign-in (a hash replaced by a re-sign-in, 90 days after that sign-in), and per-day rows
