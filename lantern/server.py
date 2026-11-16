@@ -857,13 +857,14 @@ def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> t
 
     `lanes` (a team workspace's per-layer permissions, see `scope.py`) limits the map to those layers: the report
     is built from the scoped bundle, so a hidden layer never reaches the browser, and the files that describe the
-    whole app (the evidence report and the raw JSON) are refused."""
+    whole app (the evidence report, the raw JSON and, since 2026-11-15, the badge, which shows the whole app's
+    score and its critical and high counts) are refused."""
     from .evidence import badge_svg, render_html
     from .report import read_bundle, render
     f = out / name.replace("badge.svg", "readiness.json")
     if not f.exists():
         return 404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)}
-    if lanes is not None and name not in ("report.html", "badge.svg"):
+    if lanes is not None and name != "report.html":
         return (403, "<p>This file covers every layer of the app, and you can see only some of them. "
                 "Ask the workspace owner if you need it.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
     try:

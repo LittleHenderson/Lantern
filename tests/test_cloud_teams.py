@@ -228,6 +228,15 @@ def test_a_member_can_be_shown_only_some_layers(team):
     mine = cloud.post(f"/v1/runs/{rid}/view", headers=bearer(ana)).json()
     assert "shop.app.backup" in cloud.get(mine["report"].replace("http://testserver", "")).text
     assert cloud.get(links["evidence"].replace("http://testserver", "")).status_code == 403
+    # the badge shows the whole app's score and its critical and high counts: refused for ben, there for ana
+    badge = cloud.get(links["badge"].replace("http://testserver", ""))
+    assert badge.status_code == 403 and "<svg" not in badge.text and "only some" in badge.text
+    assert "<svg" in cloud.get(mine["badge"].replace("http://testserver", "")).text
+    # and the report page ben got holds no score, no release decision and nothing a scanner said
+    from test_scope import read_bundle_from
+    seen = read_bundle_from(page.text)
+    assert seen.get("readiness") is None and seen["scope"]["lanes"] == ["browser", "frontend"]
+    assert all(set(t) <= {"tool", "version", "state", "status"} for t in seen["security"]["tools"])
     # the link can't be edited to open more layers
     exp, _, who, sig = k.split(".")
     cloud.cookies.clear()          # ana's link above left her browser's cookie in this shared test client

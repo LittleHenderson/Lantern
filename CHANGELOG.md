@@ -112,6 +112,14 @@ file. New entries go under `## Unreleased`, on top.
   parts (`<expiry>.<layers>.<who>.<HMAC>`), and links made before the update stop opening: open the run again
   from My runs. An open stream of a run's progress is looked at again while it is open.
   Tests: `tests/test_cloud_signin_ended.py` (12), `tests/test_cloud_view_rights.py` (11).
+- A report cut to some layers of an app (a workspace's per-layer permissions, `lantern/scope.py`) holds what its
+  reader may see and nothing worked out from the rest. **Changed:** such a report has no readiness score with
+  its checks, no release decision and no protections (`readiness` is null), and of each scanner only which one
+  ran and how it ended (`tool`, `version`, `state`; a scanner's own sentence, its errors and its counts are
+  about every layer). The badge, which shows the whole app's score and its critical and high counts, answers 403
+  for such a reader, as the evidence report and the raw files already did. The report's Readiness and
+  Protections pages say why, and the website leaves those tabs out for them. With every layer nothing changes.
+  Tests written first: `tests/test_scope.py` (34), `tests/test_cloud_teams.py`.
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside

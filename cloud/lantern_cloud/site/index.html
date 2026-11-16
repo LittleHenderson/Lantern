@@ -785,7 +785,7 @@ function subBar(r, tabs) {
   const tab = t => `<button data-t="${t}" role="tab" aria-selected="${S.tab === t}" class="${S.tab === t ? 'on' : ''}">${W[t]}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${esc(nf)}</span>` : ''}</button>`;
   return `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="${r.mine === false ? 'Back to the team' : 'Back to my runs'}">${icon('back')}<span>${r.mine === false ? 'Team' : 'My runs'}</span></button>${sm ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(repoName(r.link))}</span>
     ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100${releaseWord(s.release) ? ', release decision ' + releaseWord(s.release) : ''}">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}${releaseWord(s.release) ? ' · ' + releaseWord(s.release) : ''}</span>` : ''}
-    ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].filter(t => !(r.lanes && t === 'evidence')).map(tab).join('')}</div>` : ''}
+    ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].filter(t => !(r.lanes && WHOLE_APP_TABS.includes(t))).map(tab).join('')}</div>` : ''}
     <span class="spacer"></span>${tabs && r.mine === false ? `<span class="tag" title="Checked by ${esc(r.by || 'a teammate')}">${esc(teamName(r.workspace) || 'Team')}</span>` : ''}${tabs && r.mine !== false ? `${explainBtn(r)}<button class="btn sm" id="share" aria-label="${r.shared ? 'Shared: manage the link' : 'Share this report'}">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button>` : ''}${tabs ? `<a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#" aria-label="Open the report in a new tab">${icon('open')}<span>Open in new tab</span></a>` : ''}${tabs && r.mine !== false ? `<button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
 }
 async function renderRun(el, id) {
@@ -853,8 +853,11 @@ function follow(id) {
   es.onerror = () => { /* the browser reconnects by itself; a finished run answers with its end event */ };
 }
 function stopFollow() { if (S.stream) { S.stream.es.close(); S.stream = null; } }
+// What these tabs show describes the whole app, so somebody who may see only some layers (r.lanes) does not get them.
+const WHOLE_APP_TABS = ['prot', 'ready', 'evidence'];
 async function renderReport(el, r) {
   if (!['atlas', 'findings', 'prot', 'ready', 'evidence'].includes(S.tab)) S.tab = 'findings';
+  if (r.lanes && WHOLE_APP_TABS.includes(S.tab)) S.tab = 'findings';
   const old = S.frame && S.frame.rid === r.id ? S.frame.el : null;
   dock(false); el.innerHTML = `${subBar(r, true)}<div id="pbody"></div>`; dock(true);
   el.querySelector('#back').onclick = () => r.mine === false && r.workspace ? (location.hash = '#/team/' + encodeURIComponent(r.workspace)) : go('home');
