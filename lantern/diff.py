@@ -10,7 +10,9 @@ server answers, which finding a door reaches. `compare(base, head)` takes the re
 * `links`: a request a page still makes that a route answered before and no route answers now, with what became
   of that route (gone, another verb, another path), and a new request no route answers;
 * `findings`: new, fixed, changed and still open, reached from a door now and not before, ranked higher or lower,
-  accepted in this change;
+  accepted in this change (by `lantern accept` or by a `# nosec` comment with a reason; one that came with the
+  change and its acceptance at once is listed there too, marked `came`), open again after an acceptance was taken
+  away;
 * `paid`: a door that now reaches a call that costs money (a model, an email, a payment) and did not before;
 * `touches`: the functions whose code changed, the doors that reach them and what they reach outside the app
   (database tables, the shell, paid calls, other services);
@@ -36,9 +38,10 @@ import base64
 import hashlib
 import html
 import json
+import re
 from pathlib import Path
 
-from . import results
+from . import manifest, results
 from .graph import outside, route_words
 from .onrepo import code as _as_code
 from .onrepo import md as _as_text
@@ -51,6 +54,8 @@ MOST_SHOWN = 12         # rows of one kind the text for a pull request shows
 MOST_DEEP = 200000      # links followed from the changed functions before the walk stops and says so
 MARK = "<!-- lantern-change -->"       # the first line of the text for a pull request: how its comment is found again
 FILES = ("graph.json", "security.json", "readiness.json")
+FINDING_PARTS = ("new", "fixed", "still_open", "now_reached", "rank_changed", "accepted", "reopened")
+VERSION = re.compile(r"[0-9][0-9A-Za-z.+!-]{0,40}")     # a Lantern's version as a check says it; anything else is not repeated
 LOGIN_WORDS = {"shown": "a login check is shown", "lookup": "it only looks a user up by a value of the request",
                "none": "no login check found"}
 # What the changed code reaches outside the app, by the name the map gives it: the shell and a few words for the rest.
@@ -99,12 +104,26 @@ def load(out, label: str | None = None, commit: str | None = None, notes=()) -> 
     out = Path(out)
     side = {"out": str(out), "label": label, "commit": commit, "notes": [str(x) for x in notes]}
     for name in FILES:
-        got = results.table(out / name)
+        try:
+            got = results.table(out / name)
+        except results.Refused:             # a link, a pipe, a folder, too large: never read through
+            raise NotResults(f"{out} does not hold the results of a check: {name} is not a plain file Lantern "
+                             "reads. Run `lantern analyze` first.") from None
+        except (ValueError, RecursionError):    # cut off, or nested deeper than Python follows
+            got = ...
         if not isinstance(got, dict):
             raise NotResults(f"{out} does not hold the results of a check: {name} is "
                              f"{'missing' if got is None else 'not what Lantern writes'}. Run `lantern analyze` first.")
         side[name.split(".")[0]] = got
+    side["lantern"] = _made_by(out)
     return side
+
+
+def _made_by(out: Path) -> str | None:
+    """The version of the Lantern that made a check, where the check says it (`run.json` `lantern`, written since
+    2026-11-16). None where it does not, or where what stands there is no version."""
+    said = manifest.table(manifest.parse_json(results.plain(out / "run.json")[0] or "")).get("lantern")
+    return said if isinstance(said, str) and VERSION.fullmatch(said) else None
 
 
 def _nodes(side: dict) -> dict[str, dict]:
@@ -148,14 +167,20 @@ def _doors(side: dict, nodes: dict[str, dict]) -> dict[tuple[str, str], list[dic
         login = logins.get(n["id"])
         rec = {"kind": str(e["kind"]), "detail": detail, "words": route_words(detail), "node": n["id"],
                "file": n.get("file"), "line": n.get("start_line"),
-               "login": None if login is None else {"state": login.get("login"), "why": login.get("why"),
-                                                    "public": bool(login.get("public")),
-                                                    "changes": bool(login.get("changes"))},
+               "login": _login_record(login),
                "login_recorded": recorded and e["kind"] == "route"}
         out.setdefault((rec["kind"], detail), []).append(rec)
     for rows in out.values():
         rows.sort(key=lambda r: (r["file"] or "", r["line"] or 0, r["node"]))
     return out
+
+
+def _login_record(login: dict | None) -> dict | None:
+    """A route's row of `route_logins` as a receipt carries it; None where the check wrote none for the route."""
+    if not isinstance(login, dict):
+        return None
+    return {"state": login.get("login"), "why": login.get("why"), "public": bool(login.get("public")),
+            "changes": bool(login.get("changes"))}
 
 
 def _login_state(rec: dict) -> str | None:
@@ -306,27 +331,55 @@ def _rank_no(rank) -> int:
     return RANKS.index(rank) if rank in RANKS else len(RANKS)
 
 
+def _place(f: dict) -> tuple:
+    return f.get("rule"), f.get("file")
+
+
+def _accepted(f: dict) -> bool:
+    return f.get("status") == "accepted"
+
+
+def _how(f: dict) -> dict:
+    """How a finding was accepted: `nosec` (a comment on its line, with a reason) or `accepted` (`lantern accept`)."""
+    acc = f.get("accepted") if isinstance(f.get("accepted"), dict) else {}
+    return {"how": acc.get("how") or "accepted", "reason": acc.get("reason")}
+
+
 def _compare_findings(base: dict, head: dict, bn: dict, hn: dict) -> dict:
+    """A finding's id is made from its line's text, so an edited line has its finding under another id. One that is
+    gone while its rule shows again in the same file was therefore changed there, accepted there (a `# nosec`
+    comment is an edit of the line) or opened again, and is never called fixed: fixed is said only where the rule
+    no longer shows in that file at all."""
     was, now = _open(base), _open(head)
-    gone = [was[k] for k in was if k not in now and was[k].get("status") != "accepted"]
-    new = [now[k] for k in now if k not in was and now[k].get("status") != "accepted"]
-    # a finding that is gone while its rule shows again in the same file was changed or moved, not fixed
-    places = {(f.get("rule"), f.get("file")) for f in new}
-    old_places = {(f.get("rule"), f.get("file")) for f in gone}
-    fixed = [f for f in gone if (f.get("rule"), f.get("file")) not in places]
-    still = [f for f in new if (f.get("rule"), f.get("file")) in old_places]
-    new = [f for f in new if (f.get("rule"), f.get("file")) not in old_places]
-    reached, ranked, accepted, reopened = [], [], [], []
+    gone = [was[k] for k in was if k not in now]
+    came = [now[k] for k in now if k not in was]
+    gone_open = {_place(f) for f in gone if not _accepted(f)}
+    gone_accepted = {_place(f) for f in gone if _accepted(f)}
+    shows_again = {_place(f) for f in came}
+    fixed = [f for f in gone if not _accepted(f) and _place(f) not in shows_again]
+    new, still, reached, ranked, accepted, reopened = [], [], [], [], [], []
+    for f in came:
+        place = _place(f)
+        if _accepted(f):
+            if place in gone_open:                  # it was open, and the line now carries its acceptance
+                accepted.append(_brief(f, hn) | _how(f))
+            elif place not in gone_accepted:        # it came with this change, accepted from its first day
+                accepted.append(_brief(f, hn) | _how(f) | {"came": True})
+        elif place in gone_open:
+            still.append(f)
+        elif place in gone_accepted:                # the acceptance was taken off the line
+            reopened.append(_brief(f, hn))
+        else:
+            new.append(f)
     for k in sorted(set(was) & set(now)):
         a, b = was[k], now[k]
-        if a.get("status") != "accepted" and b.get("status") == "accepted":
-            acc = b.get("accepted") if isinstance(b.get("accepted"), dict) else {}
-            accepted.append(_brief(b, hn) | {"how": acc.get("how") or "accepted", "reason": acc.get("reason")})
+        if not _accepted(a) and _accepted(b):
+            accepted.append(_brief(b, hn) | _how(b))
             continue
-        if a.get("status") == "accepted" and b.get("status") != "accepted":
+        if _accepted(a) and not _accepted(b):
             reopened.append(_brief(b, hn))
             continue
-        if b.get("status") == "accepted":
+        if _accepted(b):
             continue
         if _reached(b) and not _reached(a):
             reached.append(_brief(b, hn) | {"rank_before": a.get("rank")})
@@ -404,9 +457,8 @@ def _compare_paid(base: dict, head: dict, bmap: _Map, hmap: _Map) -> list[dict]:
     for key in sorted(k for k in now if k not in was):
         d, calls = now[key]
         fn = hmap.nodes.get(key[2]) or {}
-        login = logins.get(d["node"])
         out.append(d | {"calls": calls[:5], "in": {"node": key[2], "file": fn.get("file"), "line": fn.get("start_line")},
-                        "login": None if login is None else login.get("login")})
+                        "login": _login_record(logins.get(d["node"]))})
     return out
 
 
@@ -477,17 +529,23 @@ def _compare_release(base: dict, head: dict, findings: dict) -> dict:
              for k in sorted(set(was["criteria"]) | set(now["criteria"]), key=str)
              if was["criteria"].get(k) != now["criteria"].get(k)]
     why = []
-    serious_new =[f for f in findings["new"] if f.get("rank") in SERIOUS]
+    serious_new = [f for f in findings["new"] if f.get("rank") in SERIOUS]
     serious_reached = [f for f in findings["now_reached"] if f.get("rank") in SERIOUS]
     serious_raised = [f for f in findings["rank_changed"] if f.get("raised") and f.get("rank") in SERIOUS
                       and f.get("rank_before") not in SERIOUS]
+    serious_again = [f for f in findings["reopened"] if f.get("rank") in SERIOUS]
     serious_fixed = [f for f in findings["fixed"] if f.get("rank") in SERIOUS]
-    for rows, one in ((serious_new, "new critical or high finding"),
-                      (serious_reached, "critical or high finding a door reaches now"),
-                      (serious_raised, "finding now ranked critical or high"),
-                      (serious_fixed, "critical or high finding fixed")):
+    serious_accepted = [f for f in findings["accepted"] if f.get("rank") in SERIOUS and not f.get("came")]
+    for rows, one, many in (
+            (serious_new, "new critical or high finding", "new critical or high findings"),
+            (serious_reached, "critical or high finding a door reaches now", "critical or high findings a door reaches now"),
+            (serious_raised, "finding now ranked critical or high", "findings now ranked critical or high"),
+            (serious_again, "critical or high finding open again", "critical or high findings open again"),
+            (serious_fixed, "critical or high finding fixed", "critical or high findings fixed"),
+            (serious_accepted, "critical or high finding accepted in this change",
+             "critical or high findings accepted in this change")):
         if rows:
-            why.append(_plural(len(rows), one))
+            why.append(_plural(len(rows), one, many))
     for m in moved:
         if m["id"] != "findings":
             why.append(f"{m['id']}: {m['before'] or 'not there'} → {m['after'] or 'not there'}")
@@ -499,8 +557,26 @@ def _compare_release(base: dict, head: dict, findings: dict) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------- the receipt
+def _named_alike(base: dict, head: dict) -> bool:
+    return base["security"].get("id_version") == head["security"].get("id_version")
+
+
 def _limits(base: dict, head: dict, touches: dict) -> list[str]:
     out = []
+    was, now = base.get("lantern"), head.get("lantern")
+    may = ("a difference listed here may come from what each version looks for and how it ranks, and not from the "
+           "change.")
+    if was and now and was != now:
+        out.append(f"The two checks were made by different versions of Lantern ({was} before the change, {now} "
+                   f"after): {may}")
+    elif not was or not now:
+        which = "Neither check says" if not was and not now else \
+            f"The check of the code {'after' if was else 'before'} the change does not say"
+        out.append(f"{which} which version of Lantern made it (results written before 2026-11-16 do not). If the two "
+                   f"were made by different versions, {may}")
+    if not _named_alike(base, head):
+        out.append("The two checks name their findings in different ways (they were made by different versions of "
+                   "Lantern), so findings are not compared: none is listed here as new, fixed or changed.")
     for name, side in (("before", base), ("after", head)):
         sec = side["security"]
         if not isinstance(sec.get("route_logins"), list):
@@ -552,7 +628,8 @@ def compare(base: dict, head: dict) -> dict:
     bmap, hmap = _Map(base, bn), _Map(head, hn)
     doors = _compare_doors(base, head, bn, hn)
     links = _compare_links(base, head, bn, hn)
-    findings = _compare_findings(base, head, bn, hn)
+    # a finding is the same on both sides by its id: where the two checks make ids in different ways, none is compared
+    findings = _compare_findings(base, head, bn, hn) if _named_alike(base, head) else {k: [] for k in FINDING_PARTS}
     paid = _compare_paid(base, head, bmap, hmap)
     touches = _compare_touch(base, head, bn, hn, bmap, hmap)
     release = _compare_release(base, head, findings)
@@ -572,7 +649,9 @@ def compare(base: dict, head: dict) -> dict:
               "links_broken": len(links["broken"]), "links_unanswered": len(links["unanswered"]),
               "findings_new": len(findings["new"]), "findings_fixed": len(findings["fixed"]),
               "findings_now_reached": len(findings["now_reached"]),
-              "findings_accepted": len(findings["accepted"]), "paid_new": len(paid),
+              "findings_raised": sum(1 for f in findings["rank_changed"] if f.get("raised")),
+              "findings_accepted": len(findings["accepted"]), "findings_reopened": len(findings["reopened"]),
+              "paid_new": len(paid),
               "functions_changed": len(touches["changed"]) + more.get("touches.changed", 0),
               "functions_added": len(touches["added"]) + more.get("touches.added", 0),
               "functions_removed": len(touches["removed"]) + more.get("touches.removed", 0)}
@@ -598,7 +677,7 @@ def _about(side: dict) -> dict:
     bound = rel.get("bound_to") if isinstance(rel.get("bound_to"), dict) else {}
     code = bound.get("code") if isinstance(bound.get("code"), dict) else {}
     return {"label": side.get("label"), "commit": side.get("commit") or bound.get("commit"),
-            "code_sha256": code.get("sha256"), "files": code.get("files"),
+            "lantern": side.get("lantern"), "code_sha256": code.get("sha256"), "files": code.get("files"),
             "uncommitted_changes": bound.get("uncommitted_changes") if not side.get("commit") else False}
 
 
@@ -687,14 +766,20 @@ def summary_line(receipt: dict) -> str:
         return "no change in doors, links, findings or the release decision"
     c = receipt["counts"]
     parts = []
-    for key, one in (("doors_added", "new door"), ("doors_removed", "door removed"),
+    for key, one in (("doors_added", "new door"), ("doors_removed", "door removed"), ("doors_moved", "door moved"),
                      ("logins_weaker", "login check weaker or gone"), ("links_broken", "broken link"),
                      ("findings_new", "new finding"), ("findings_now_reached", "finding reached now"),
-                     ("findings_fixed", "finding fixed"), ("paid_new", "new way to a paid call")):
+                     ("findings_raised", "finding ranked higher"), ("findings_reopened", "finding open again"),
+                     ("findings_accepted", "finding accepted"), ("findings_fixed", "finding fixed"),
+                     ("paid_new", "new way to a paid call")):
         if c.get(key):
-            parts.append(_plural(c[key], one, {"door removed": "doors removed", "finding fixed": "findings fixed",
+            parts.append(_plural(c[key], one, {"door removed": "doors removed", "door moved": "doors moved",
+                                               "finding fixed": "findings fixed",
                                                "login check weaker or gone": "login checks weaker or gone",
                                                "finding reached now": "findings reached now",
+                                               "finding ranked higher": "findings ranked higher",
+                                               "finding open again": "findings open again",
+                                               "finding accepted": "findings accepted",
                                                "new way to a paid call": "new ways to a paid call"}.get(one)))
     return f"release decision {receipt['release']['words']}" + (": " + ", ".join(parts) if parts else "")
 
@@ -752,7 +837,8 @@ def markdown(receipt: dict, short: bool = False) -> str:
         _rows(out, [f for f in fi["rank_changed"] if f.get("raised")], lambda f: (
             f"**Ranked higher** (was {_md(f.get('rank_before'))}) · {_finding_line(f)}"))
         _rows(out, fi["accepted"], lambda f: (
-            f"**Accepted in this change** ({'a `# nosec` comment' if f.get('how') == 'nosec' else 'lantern accept'}"
+            f"**Accepted in this change** ({'new here; ' if f.get('came') else ''}"
+            f"{'a `# nosec` comment' if f.get('how') == 'nosec' else 'lantern accept'}"
             + (f": “{_md(f.get('reason'))}”" if f.get("reason") else "") + f") · {_finding_line(f)}"))
         _rows(out, fi["reopened"], lambda f: f"Open again (it was accepted before) · {_finding_line(f)}")
         _rows(out, fi["still_open"], lambda f: f"Changed and still open · {_finding_line(f)}")
@@ -766,7 +852,7 @@ def markdown(receipt: dict, short: bool = False) -> str:
             f"{_door_line(p)} now reaches a paid call ("
             + ", ".join(sorted({_md(str(c.get('kind') or 'paid') + (' · ' + str(c['provider']) if c.get('provider') else ''))
                                 for c in p['calls']}))
-            + f", in {_md(_at(p['in']))})" + (f"; on the route: {_md(LOGIN_WORDS.get(p.get('login'), 'login not looked at'))}." if p.get("login") else ".")))
+            + f", in {_md(_at(p['in']))})" + (f"; on the route: {_md(_login_words(p['login']))}." if p.get("login") else ".")))
         out.append("")
     n_changed = r["counts"]["functions_changed"] + r["counts"]["functions_added"]
     if n_changed or touch["removed"]:
@@ -825,6 +911,16 @@ padding:2px 7px;border-radius:5px;background:var(--hover);color:var(--body);marg
 .what.good{background:var(--good-soft);color:var(--good-ink)} .sub{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
 .arrow{font:400 26px/1.3 var(--serif);color:var(--ink);margin:6px 0 2px} .arrow .to{color:var(--muted);padding:0 10px}
 """
+
+
+def policy(frame: str | None = None) -> str:
+    """The Content-Security-Policy of the receipt's page: nothing is loaded, no script runs, and the one style
+    sheet is the page's own, named by its hash. `frame`: who may show the page inside a frame (`'self'` where
+    `lantern serve` shows it in the app); only a response header can say that, so the page's own tag leaves it out."""
+    from .evidence import STYLE
+    digest = base64.b64encode(hashlib.sha256((STYLE + PAGE_STYLE).encode("utf-8")).digest()).decode("ascii")
+    said = f"default-src 'none'; style-src 'sha256-{digest}'; base-uri 'none'; form-action 'none'"
+    return said + (f"; frame-ancestors {frame}" if frame else "")
 
 
 def page(receipt: dict) -> str:
@@ -903,7 +999,8 @@ def page(receipt: dict) -> str:
     rows = [finding("new", "bad", f) for f in fi["new"]] + [rest("findings.new", fi["new"])]
     rows += [finding("reached now", "bad", f, " · in the code before, and no door reached it") for f in fi["now_reached"]]
     rows += [finding("ranked higher", "warn", f, f" · was {E(f.get('rank_before'))}") for f in fi["rank_changed"] if f.get("raised")]
-    rows += [finding("accepted here", "warn", f, " · " + E("a # nosec comment" if f.get("how") == "nosec" else "lantern accept")
+    rows += [finding("accepted here", "warn", f, " · " + ("new here · " if f.get("came") else "")
+                     + E("a # nosec comment" if f.get("how") == "nosec" else "lantern accept")
                      + (f": “{E(f.get('reason'))}”" if f.get("reason") else "")) for f in fi["accepted"]]
     rows += [finding("open again", "warn", f, " · it was accepted before") for f in fi["reopened"]]
     rows += [finding("still open", "", f, " · changed in this change") for f in fi["still_open"]]
@@ -915,7 +1012,7 @@ def page(receipt: dict) -> str:
         rows = [li("paid call", "warn", door(p) + " now reaches a call that costs money",
                    E(", ".join(sorted({str(c.get("kind") or "paid") + (" · " + str(c["provider"]) if c.get("provider") else "")
                                        for c in p["calls"]}))) + f" · in {E(_at(p['in']))}"
-                   + (f" · on the route: {E(LOGIN_WORDS.get(p.get('login'), 'login not looked at'))}" if p.get("login") else ""))
+                   + (f" · on the route: {E(_login_words(p['login']))}" if p.get("login") else ""))
                 for p in r["paid"]]
         sections.append("<section><h2>Calls that cost money</h2><ul class='rows'>" + "".join(rows) + "</ul></section>")
     c = r["counts"]
@@ -945,13 +1042,10 @@ def page(receipt: dict) -> str:
     sections.append("<section><h2>What this receipt does not say</h2><ul>" + "".join(f"<li>{E(x)}</li>" for x in r["limits"])
                     + "</ul><p class='muted'>Facts from Lantern's map and scanners on two checks of the code. No model wrote "
                     "or ranked any line of this page.</p></section>")
-    style = STYLE + PAGE_STYLE
-    digest = base64.b64encode(hashlib.sha256(style.encode("utf-8")).digest()).decode("ascii")
     return ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'sha256-{digest}'; "
-            "base-uri 'none'; form-action 'none'\">"
-            f"<title>Change receipt · {E(_name(r['head']))}</title>\n<style>{style}</style></head>"
+            f"<meta http-equiv=\"Content-Security-Policy\" content=\"{policy()}\">"
+            f"<title>Change receipt · {E(_name(r['head']))}</title>\n<style>{STYLE + PAGE_STYLE}</style></head>"
             "<body data-mode=\"simple\"><main>" + "".join(sections) + "</main></body></html>\n")
 
 
@@ -967,6 +1061,8 @@ def read(path) -> dict:
         got = results.table(path)
     except results.Refused as e:
         raise NotResults(str(e)) from None
+    except (ValueError, RecursionError):        # text that is no JSON, or JSON nested deeper than Python follows
+        raise NotResults(f"{path} is not a change receipt this Lantern reads.") from None
     if not isinstance(got, dict) or got.get("schema") != SCHEMA or any(k not in got for k in PARTS):
         raise NotResults(f"{path} is {'not there' if got is None else 'not a change receipt this Lantern reads'}.")
     return got

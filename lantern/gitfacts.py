@@ -727,6 +727,13 @@ def _shown(name) -> str:
     return "".join(c if c.isprintable() else "?" for c in str(name))[:80]
 
 
+def named(name) -> bool:
+    """Whether `name` is written the way `resolve` takes a commit's name. A look at the text only: nothing is
+    asked of git or of any repository."""
+    return bool(isinstance(name, str) and NAMED.fullmatch(name) and ".." not in name and "//" not in name
+                and not name.endswith((".lock", "/", ".")))
+
+
 def resolve(folder: Path | str, name: str) -> str:
     """The commit `name` stands for in the repository `folder` is in: `HEAD`, a tag, a branch, a remote's branch
     (`origin/main`), a commit's number or the start of one, each with git's steps back after it (`main~2`,
@@ -734,8 +741,8 @@ def resolve(folder: Path | str, name: str) -> str:
     git folder of Lantern's own, to take the steps back, to complete a shortened number and to say that the commit
     is there. `NoCommit` with a sentence for anything else."""
     repo = _repo_for(folder)
-    m = NAMED.fullmatch(name) if isinstance(name, str) else None
-    if not m or ".." in name or "//" in name or name.endswith((".lock", "/", ".")):
+    m = NAMED.fullmatch(name) if named(name) else None
+    if not m:
         raise NoCommit(f"'{_shown(name)}' is not a name Lantern takes for a commit. Write a branch, a tag, HEAD or a "
                        "commit's number, with ~1 or ^ after it for the commit before.")
     base, steps = m.group(1), m.group(2)

@@ -136,7 +136,9 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
     from . import deep
     if deep.line_words(g.meta):   # code nested deeper than a reader follows was left where the reading stopped
         log(f"deep    {deep.line_words(g.meta)}")
-    run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
+    from . import __version__
+    # which Lantern made this check: two checks made by two versions may differ for that alone (`lantern diff` says so)
+    run_meta: dict = {"lantern": __version__, "timings": timings, "privacy": privacy, "offline": offline}
     if g.meta.get("typecheck"):   # asked for: which checkers answered, and what came of it
         from . import typecheck as types
         run_meta["typecheck"] = g.meta["typecheck"]
@@ -256,7 +258,7 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
 
 def change(repo: Path, spec: str | None = None, out: str | Path | None = None, offline: bool | None = None,
            log: Log = print, base_results: str | Path | None = None, head_results: str | Path | None = None,
-           base_label: str | None = None, head_label: str | None = None) -> dict:
+           base_label: str | None = None, head_label: str | None = None, privacy: str = "full") -> dict:
     """What a change does to an app (`lantern diff`, roadmap of 2026-11-14, stage 2): two versions of the project
     are checked and what the checks found is compared (`lantern/diff.py`). `spec` says which two (`diff.sides`):
     with none, the last commit and the files as they are now. A commit is copied out of the repository into a
@@ -264,7 +266,9 @@ def change(repo: Path, spec: str | None = None, out: str | Path | None = None, o
     touched) and checked there by `analyze`, tests not run; the files as they are now are checked where they are.
     `base_results` / `head_results`: the results folder of a check already made of that side, which is then not
     made again (the commit it is of is the one its own results name). `base_label` / `head_label`: what the receipt
-    calls a side in place of the name written in `spec` ("main", "this pull request"). Written into `out` (default: `change` in the project's results folder): the receipt as
+    calls a side in place of the name written in `spec` ("main", "this pull request"). `privacy`: as for `analyze`,
+    for the two checks' own reports (`structure` keeps the project's source out of them; the receipt itself never
+    holds source). Written into `out` (default: `change` in the project's results folder): the receipt as
     `change.json`, `change.md` and `change.html` (`diff.write`), and the two checks' own results in `before/` and
     `after/`. The project's results folder itself is left as it is. Returns `{"receipt", "paths", "line"}`.
     `gitfacts.NoCommit` (a sentence) when a commit cannot be named or copied, `diff.NotResults` for a results folder
@@ -282,7 +286,7 @@ def change(repo: Path, spec: str | None = None, out: str | Path | None = None, o
         say = lambda line: log(f"{word:<7} {line}")      # noqa: E731
         if commit is None:
             log(f"{word:<7} checking {diff.AS_THEY_ARE}")
-            analyze(repo, side_out, log=say, offline=offline)
+            analyze(repo, side_out, privacy, log=say, offline=offline)
             return diff.load(side_out, label=label or diff.AS_THEY_ARE)
         log(f"{word:<7} checking commit {commit[:12]}" + (f" ({name})" if name and not commit.startswith(name) else ""))
         with programs.folder() as own:
@@ -298,7 +302,7 @@ def change(repo: Path, spec: str | None = None, out: str | Path | None = None, o
                 notes.append(f"Commit {commit[:12]} names {got['submodules']} submodule{'s' if got['submodules'] != 1 else ''}. "
                              "A submodule's code is not part of a commit and was not checked on that side; where the "
                              "other side is the files as they are now, code in a submodule's folder reads as added.")
-            analyze(got["root"], side_out, log=say, offline=offline)
+            analyze(got["root"], side_out, privacy, log=say, offline=offline)
         return diff.load(side_out, label=label or name, commit=commit, notes=notes)
 
     base_commit = None if base_results else gitfacts.resolve(repo, base_name)

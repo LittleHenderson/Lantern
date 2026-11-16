@@ -9,6 +9,37 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- What a change does (`lantern diff`, `docs/diff.md`; roadmap of 2026-11-14, stage 2). Two versions of a project are
+  checked and what the two checks found is compared, as a change receipt (`change.json`, `change.md`, `change.html`
+  in `.lantern/change/`): pages, routes and commands added, removed or moved; a login check that got weaker or was
+  taken off; a request the page still makes that no route answers any more; findings that are new, fixed, reached by
+  a page or route only now, ranked higher, or accepted in the change (a line that was only given a `# nosec` comment
+  is listed as accepted, with the comment's reason, never as fixed); calls that cost money that a route reaches now;
+  the functions that changed with what leads to them and what they lead to; and the release decision before and
+  after. Only differences are listed, two versions that differ in comments and spacing give "nothing changed", and
+  no model writes or ranks any line (`lantern/diff.py`: a function of two results folders). A check now says which
+  Lantern made it (`run.json` `lantern`): a receipt whose two checks were made by different versions, or by one
+  that does not say, says that a difference may be the Lantern's and not the change's.
+  - `lantern diff [PATH] [BASE..HEAD]`: with no versions, the last commit and the files as they are now; `BASE`,
+    `BASE..HEAD`, `BASE...HEAD` (from where the two parted, as a pull request shows it). An earlier version is
+    copied out of the repository into a folder of Lantern's own and checked there (`gitfacts.resolve`,
+    `gitfacts.copy`): the project's folder is not touched, and the settings, hooks, filters and attributes that
+    come with a repository decide nothing about the copy.
+  - The app (`lantern serve`): one new button on a project's screen, **What changed**, compares the last commit
+    with the files as they are now and opens the receipt (`POST /api/projects/<id>/change`,
+    `/p/<id>/change.html`: built from the data each time, no script in it). The terminal takes
+    `diff [BASE..HEAD]`.
+  - The GitHub Action: on a pull request the comment and the run's page begin with what the pull request changes
+    (the code before it is the first parent of GitHub's merge commit; the pull request's own check is not made a
+    second time). New inputs: `change` (default on) and `code-scanning` (default off: also hand the findings to
+    GitHub's code scanning, which needs `security-events: write`). The findings are in the full report as
+    `lantern.sarif` either way.
+  - `security.json` has a new field, `route_logins`: what each route shows about asking who is calling
+    (`shown`, `lookup` or `none`, with the sign that was read), the reading the missing-login rule already made,
+    written down so that two checks can be compared route by route. Results of an older Lantern are still read; a
+    receipt made from them says that the login record is missing.
+  - Result files that are damaged, or are no plain file, are refused by `lantern diff` with a sentence.
+
 - Lantern leaves its report on the GitHub repository it checked (`docs/github.md`), in three ways: one comment with
   the result (Passed, Blocked or Incomplete) on every pull request, edited on each push; one pull request on the main
   branch that saves the report in `.lantern/report/` (README in words, the commit-pinned Evidence Report, the digest

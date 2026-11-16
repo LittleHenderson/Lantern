@@ -341,6 +341,168 @@ def test_a_new_serious_finding_moves_the_release_decision(checks):
     assert back["release"]["after"]["decision"] != "Blocked" and back["release"]["changed"] is True
 
 
+# -------------------------------------------------- a finding somebody answered for, and one that weighs more now
+SHELL_LINE = '    subprocess.run("tar czf " + name + " notes.db", shell=True)\n'
+REASON = "only the nightly job calls it, with a fixed name"
+SHELL_LINE_SAID = SHELL_LINE.rstrip("\n") + f"  # nosec B602: {REASON}\n"
+
+
+def test_a_finding_answered_for_by_a_comment_in_the_code_is_accepted_and_not_fixed(checks):
+    """The comment changes the line's text, and with it the finding's id: the old id is gone, and the line is as
+    risky as it was. A receipt that called it fixed would say what no tool found."""
+    pytest.importorskip("bandit")
+    risky = changed(changed(BASE, store=BACKUP), store=BACKUP_NIGHTLY)
+    said = changed(risky, store=(SHELL_LINE, SHELL_LINE_SAID))
+    r = checks.receipt(risky, said)
+    assert r["findings"]["fixed"] == [] and r["counts"]["findings_fixed"] == 0
+    assert [(f["rule"], f["file"], f["how"], f["reason"], f.get("came")) for f in r["findings"]["accepted"]] == [
+        ("B602", "api/store.py", "nosec", REASON, None)]
+    assert r["counts"]["findings_accepted"] == 1 and r["same"] is False
+    assert r["findings"]["new"] == [] and r["findings"]["still_open"] == []
+    text = diff.markdown(r)
+    assert f"**Accepted in this change** (a `# nosec` comment: “{REASON}”)" in text and "Fixed ·" not in text
+    assert "1 finding accepted" in diff.summary_line(r) and "fixed" not in diff.summary_line(r)
+    assert "accepted here" in diff.page(r)
+
+
+def test_the_comment_taken_off_again_opens_the_finding_again(checks):
+    pytest.importorskip("bandit")
+    risky = changed(changed(BASE, store=BACKUP), store=BACKUP_NIGHTLY)
+    r = checks.receipt(changed(risky, store=(SHELL_LINE, SHELL_LINE_SAID)), risky)
+    assert [(f["rule"], f["file"]) for f in r["findings"]["reopened"]] == [("B602", "api/store.py")]
+    assert r["findings"]["new"] == [] and r["counts"]["findings_new"] == 0 and r["counts"]["findings_reopened"] == 1
+    assert "Open again (it was accepted before)" in diff.markdown(r) and "1 finding open again" in diff.summary_line(r)
+
+
+def test_a_finding_that_comes_with_its_own_comment_is_listed_as_accepted_and_as_new_here(checks):
+    """A change that adds a risky line and its excuse at once is not a change with nothing to say about findings."""
+    pytest.importorskip("bandit")
+    said = changed(changed(changed(BASE, store=BACKUP), store=BACKUP_NIGHTLY), store=(SHELL_LINE, SHELL_LINE_SAID))
+    r = checks.receipt(BASE, said)
+    shell = [f for f in r["findings"]["accepted"] if f["rule"] == "B602"]
+    assert [(f["file"], f["how"], f["reason"], f["came"]) for f in shell] == [("api/store.py", "nosec", REASON, True)]
+    assert all(f["rule"] != "B602" for f in r["findings"]["new"])
+    assert "(new here; a `# nosec` comment" in diff.markdown(r) and "new here" in diff.page(r)
+    back = checks.receipt(said, BASE)           # twin: the line and its comment removed together: nothing was fixed,
+    assert all(f["rule"] != "B602" for f in back["findings"]["fixed"])      # because nothing was open
+    assert back["findings"]["reopened"] == []
+
+
+def test_a_finding_accepted_in_the_accepted_file_keeps_its_id_and_is_accepted(checks):
+    pytest.importorskip("bandit")
+    risky = changed(changed(BASE, store=BACKUP), store=BACKUP_NIGHTLY)
+    [was] = [f for f in checks.of(risky, "before")["security"]["findings"] if f["rule"] == "B602"]
+    listed = dict(risky) | {"lantern-accepted.json": json.dumps({"accepted": [
+        {"id": was["id"], "reason": "the name is fixed text in every caller", "by": "a reviewer", "date": "2026-11-16"}]})}
+    r = checks.receipt(risky, listed)
+    assert [(f["id"], f["how"], f["reason"]) for f in r["findings"]["accepted"]] == [
+        (was["id"], "accepted", "the name is fixed text in every caller")]
+    assert r["findings"]["fixed"] == [] and r["counts"]["findings_accepted"] == 1
+    assert "**Accepted in this change** (lantern accept: “the name is fixed text in every caller”)" in diff.markdown(r)
+    back = checks.receipt(listed, risky)
+    assert [f["id"] for f in back["findings"]["reopened"]] == [was["id"]] and back["counts"]["findings_reopened"] == 1
+
+
+def test_a_finding_that_weighs_more_after_the_change_is_named_and_counted(checks):
+    """The line was there and a route reached it; what changed is that the route hands it the request's own text."""
+    pytest.importorskip("bandit")
+    risky = changed(changed(BASE, store=BACKUP), app=BACKUP_ROUTE)
+    tame = changed(risky, app=("    store.backup(name)\n", '    store.backup("nightly")\n'))
+    r = checks.receipt(tame, risky)
+    assert [(f["rule"], f["rank_before"], f["rank"], f["raised"], f["door"]["words"]) for f in r["findings"]["rank_changed"]] == [
+        ("B602", "low", "critical", True, "POST /api/backup")]
+    assert r["counts"]["findings_raised"] == 1 and r["findings"]["new"] == [] and r["findings"]["now_reached"] == []
+    assert r["release"]["after"]["decision"] == "Blocked" and "1 finding now ranked critical or high" in r["release"]["words"]
+    assert "**Ranked higher** (was low)" in diff.markdown(r) and "1 finding ranked higher" in diff.summary_line(r)
+    back = checks.receipt(risky, tame)          # twin: the other way it weighs less, and nothing is called fixed
+    assert [(f["rank_before"], f["rank"], f["raised"]) for f in back["findings"]["rank_changed"]] == [("critical", "low", False)]
+    assert back["counts"]["findings_raised"] == 0 and back["findings"]["fixed"] == [] and back["same"] is False
+    assert "Ranked lower (was critical)" in diff.markdown(back) and "ranked higher" not in diff.summary_line(back)
+
+
+def test_what_moved_the_decision_is_said_in_words_that_count_more_than_one_rightly(checks):
+    side = checks.of(BASE, "before")
+    two = lambda **more: [{"rank": "high", **more}, {"rank": "critical", **more}]  # noqa: E731
+    none = {k: [] for k in ("new", "fixed", "still_open", "now_reached", "rank_changed", "accepted", "reopened")}
+    why = diff._compare_release(side, side, none | {
+        "new": two(), "now_reached": two(), "rank_changed": two(raised=True, rank_before="low"), "reopened": two(),
+        "fixed": two(), "accepted": two()})["why"]
+    assert why == ["2 new critical or high findings", "2 critical or high findings a door reaches now",
+                   "2 findings now ranked critical or high", "2 critical or high findings open again",
+                   "2 critical or high findings fixed", "2 critical or high findings accepted in this change"]
+    one = diff._compare_release(side, side, none | {"fixed": two()[:1], "accepted": two(came=True)})["why"]
+    assert one == ["1 critical or high finding fixed"]      # one that came with its acceptance moved nothing
+    lower = diff._compare_release(side, side, none | {"rank_changed": two(raised=False, rank_before="low")})["why"]
+    assert lower == [] and diff._compare_release(side, side, none)["why"] == []
+
+
+# ----------------------------------------------------------------------------------------- calls that cost money
+SUMMARISE = '''
+
+@app.post("/api/summarise")
+def summarise(text: str, user=Depends(current_user)):
+    from openai import OpenAI
+    return OpenAI().chat.completions.create(model="m", messages=[{"role": "user", "content": text}])
+'''
+SUMMARY_HELPER = '''
+
+def summary_of(text):
+    from openai import OpenAI
+    return OpenAI().chat.completions.create(model="m", messages=[{"role": "user", "content": text}])
+'''
+SUMMARY_ROUTE = '''
+
+@app.post("/api/summarise")
+def summarise(text: str, user=Depends(current_user)):
+    return store.summary_of(text)
+'''
+
+
+def test_a_paid_call_a_new_route_reaches_is_named(checks):
+    r = checks.receipt(BASE, changed(BASE, app=SUMMARISE))
+    [p] = r["paid"]
+    assert (p["kind"], p["detail"], (p["login"] or {}).get("state")) == ("route", "POST /api/summarise", "shown")
+    assert [(c["kind"], c["provider"], c["file"]) for c in p["calls"]] == [("model", "OpenAI", "api/app.py")]
+    assert p["in"]["node"] == "py:api.app.summarise" and r["counts"]["paid_new"] == 1
+    assert r["touches"]["paid"] == ["model (OpenAI)"]
+    assert "### Calls that cost money" in diff.markdown(r) and "now reaches a paid call (model · OpenAI" in diff.markdown(r)
+    assert "1 new way to a paid call" in diff.summary_line(r) and "now reaches a call that costs money" in diff.page(r)
+
+
+def test_a_paid_call_no_door_reaches_is_no_way_to_it_until_a_route_calls_it(checks):
+    helper = changed(BASE, store=SUMMARY_HELPER)
+    r = checks.receipt(BASE, helper)
+    assert r["paid"] == [] and r["counts"]["paid_new"] == 0 and [f["name"] for f in r["touches"]["added"]] == ["summary_of"]
+    assert "### Calls that cost money" not in diff.markdown(r)
+    wired = checks.receipt(helper, changed(helper, app=SUMMARY_ROUTE))     # the call was there; the way to it is new
+    [p] = wired["paid"]
+    assert (p["detail"], p["in"]["node"], p["in"]["file"]) == ("POST /api/summarise", "py:api.store.summary_of", "api/store.py")
+    assert wired["counts"]["paid_new"] == 1
+    same = checks.receipt(changed(BASE, app=SUMMARISE), changed(BASE, app=SUMMARISE))      # reached before and after
+    assert same["paid"] == [] and same["same"] is True
+
+
+# -------------------------------------------------------------------- links that were mended, routes nobody asks
+def test_a_route_put_back_where_the_page_asks_mends_the_link(checks):
+    lost = changed(BASE, app=('@app.delete("/api/notes/{note_id}")', '@app.delete("/api/note/{note_id}")'))
+    r = checks.receipt(lost, BASE)
+    assert [(m["words"], m["file"], words(m["answered_by"])) for m in r["links"]["mended"]] == [
+        ("DELETE /api/notes/{}", "web/src/api.js", ["DELETE /api/notes/{note_id}"])]
+    assert r["links"]["broken"] == [] and r["links"]["unanswered"] == [] and r["same"] is False
+    assert [(d["before"], d["after"]) for d in r["doors"]["moved"]] == [("DELETE /api/note/{note_id}", "DELETE /api/notes/{note_id}")]
+    assert "answers now." in diff.markdown(r) and "1 door moved" in diff.summary_line(r)
+
+
+def test_a_route_the_page_stops_asking_is_named_and_is_no_broken_link(checks):
+    quiet = changed(BASE, api=('  await fetch(`/api/notes/${id}`, { method: "DELETE" });\n', "  return id;\n"))
+    r = checks.receipt(BASE, quiet)
+    assert words(r["links"]["unasked"]) == ["DELETE /api/notes/{note_id}"]
+    assert r["links"]["broken"] == [] and r["doors"]["removed"] == [] and r["same"] is False
+    assert "any more; the route is still there." in diff.markdown(r)
+    back = checks.receipt(quiet, BASE)          # twin: the page asks again, and a route answers: nothing to mend
+    assert back["links"]["unasked"] == [] and back["links"]["mended"] == [] and back["links"]["broken"] == []
+
+
 # -------------------------------------------------------------------------------------------- what a change touches
 def test_what_a_changed_function_touches_is_followed_up_to_the_doors_and_down_to_the_data(checks):
     head = changed(BASE, store=('"delete from notes where id = ? and owner = ?"', '"delete from notes where owner = ? and id = ?"'))
@@ -360,6 +522,28 @@ def test_a_folder_that_holds_no_results_is_refused_with_a_sentence(tmp_path):
         diff.load(tmp_path)
 
 
+def test_results_that_are_damaged_or_no_plain_file_are_refused_with_a_sentence_too(checks, tmp_path):
+    good = Path(checks.of(BASE, "before")["out"])
+    for n, (name, make) in enumerate([
+            ("security.json", lambda f: f.write_text("{", encoding="utf-8")),                  # cut off
+            ("readiness.json", lambda f: f.write_text("[" * 200_000, encoding="utf-8")),       # nested too deep
+            ("graph.json", lambda f: f.write_text("[1, 2]", encoding="utf-8")),                # another shape
+            ("graph.json", lambda f: f.symlink_to(good / "graph.json"))]):                     # a link, also to a good file
+        folder = tmp_path / f"r{n}"
+        folder.mkdir()
+        for other in diff.FILES:
+            (folder / other).write_bytes((good / other).read_bytes())
+        (folder / name).unlink()
+        try:
+            make(folder / name)
+        except OSError:                 # a system that lets this user make no link
+            continue
+        with pytest.raises(diff.NotResults, match="does not hold the results of a check") as e:
+            diff.load(folder)
+        assert name in str(e.value), (n, str(e.value))
+    assert diff.load(good)["graph"]["nodes"]                 # the twin: the good folder is taken
+
+
 def test_results_of_an_older_lantern_are_compared_without_the_login_record_and_the_receipt_says_so(checks, tmp_path):
     base, head = checks.of(BASE, "before"), checks.of(changed(BASE, app=EXPORT_OPEN), "after")
     old = dict(base, security={k: v for k, v in base["security"].items() if k != "route_logins"})
@@ -368,6 +552,61 @@ def test_results_of_an_older_lantern_are_compared_without_the_login_record_and_t
     assert any("does not write down what each route shows about a login" in x for x in r["limits"])
     newer = diff.compare(base, head)
     assert not any("does not write down" in x for x in newer["limits"])
+
+
+def another(folder, out, **parts) -> Path:
+    """A copy of one check's results in which, for each `name=change`, that file's table went through `change`."""
+    folder.mkdir(parents=True)
+    for p in Path(out).iterdir():
+        if p.is_file():
+            (folder / p.name).write_bytes(p.read_bytes())
+    for name, change in parts.items():
+        table = json.loads((folder / f"{name}.json").read_text(encoding="utf-8"))
+        change(table)
+        (folder / f"{name}.json").write_text(json.dumps(table), encoding="utf-8")
+    return folder
+
+
+def test_two_checks_made_by_two_lanterns_are_compared_and_the_receipt_says_what_that_may_mean(checks, tmp_path):
+    """What an older Lantern found in the same code may differ for the Lantern alone: a rule added since, a rank
+    worked out another way. A receipt that lists such a difference as the change's own has to say so."""
+    import lantern
+    base, head = checks.of(BASE, "before"), checks.of(changed(BASE, app=EXPORT_OPEN), "after")
+    said = "different versions of Lantern"
+    r = diff.compare(base, head)
+    assert (r["base"]["lantern"], r["head"]["lantern"]) == (lantern.__version__, lantern.__version__)
+    assert not any(said in x or "which version of Lantern" in x for x in r["limits"])
+    older = diff.load(another(tmp_path / "older", base["out"], run=lambda t: t.update(lantern="0.10.0")), label="before")
+    r = diff.compare(older, head)
+    assert r["base"]["lantern"] == "0.10.0" and words(r["doors"]["added"]) == ["POST /api/admin/export"]
+    assert any(f"{said} (0.10.0 before the change, {lantern.__version__} after)" in x for x in r["limits"]), r["limits"]
+    assert said in diff.markdown(r) and said in diff.page(r)
+    unsaid = diff.load(another(tmp_path / "unsaid", base["out"], run=lambda t: t.pop("lantern")), label="before")
+    r = diff.compare(unsaid, head)
+    assert r["base"]["lantern"] is None
+    assert any("before the change does not say which version of Lantern made it" in x for x in r["limits"])
+    (tmp_path / "unsaid" / "run.json").unlink()             # results with no record of the run at all: the same
+    assert diff.compare(diff.load(tmp_path / "unsaid"), head)["base"]["lantern"] is None
+    for odd in (HOSTILE, "9" * 300, ["0.11.0"], 11):          # what stands there is repeated only when it is a version
+        made = diff.load(another(tmp_path / f"odd{len(str(odd))}", base["out"], run=lambda t, odd=odd: t.update(lantern=odd)))
+        r = diff.compare(made, head)
+        assert r["base"]["lantern"] is None and "onerror" not in diff.page(r) and "9" * 40 not in diff.markdown(r)
+
+
+def test_findings_that_two_checks_name_in_two_ways_are_not_compared(checks, tmp_path):
+    """A finding is the same on both sides by its id. Where the two checks make ids in different ways, every finding
+    would read as fixed and as new: nothing about findings is said then, and the receipt says why."""
+    pytest.importorskip("bandit")
+    base, head = checks.of(BASE, "before"), checks.of(changed(changed(BASE, store=BACKUP), app=BACKUP_ROUTE), "after")
+    assert diff.compare(base, head)["findings"]["new"]          # twin: named the same way, the new finding is listed
+    other = diff.load(another(tmp_path / "other", base["out"], security=lambda t: t.update(id_version=1)), label="before")
+    r = diff.compare(other, head)
+    assert all(rows == [] for rows in r["findings"].values())
+    assert not any(n for k, n in r["counts"].items() if k.startswith("findings_"))
+    assert any("findings are not compared" in x for x in r["limits"]), r["limits"]
+    assert "finding" not in " ".join(r["release"]["why"])       # and no finding is given as what moved the decision
+    assert words(r["doors"]["added"]) == ["POST /api/backup"] and r["same"] is False     # the rest is compared
+    assert "### Findings" not in diff.markdown(r) and "findings are not compared" in diff.markdown(r)
 
 
 # ------------------------------------------------------------------------------------------- the receipt's forms

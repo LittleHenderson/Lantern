@@ -263,7 +263,7 @@ def cmd_diff(a) -> int:
     try:
         got = change(repo, spec, out=a.out, offline=a.offline or None, base_results=a.base_results,
                      head_results=a.head_results, base_label=a.base_label, head_label=a.head_label,
-                     log=(lambda line: print(line, file=sys.stderr)) if quiet else print)
+                     privacy=a.privacy, log=(lambda line: print(line, file=sys.stderr)) if quiet else print)
     except (gitfacts.NoCommit, diff.NotResults) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -728,6 +728,8 @@ def _main(argv: list[str]) -> int:
                          "last commit compared with the files as they are now")
     sp.add_argument("--out", help="folder for the receipt and the two checks (default PATH/.lantern/change)")
     sp.add_argument("--offline", action="store_true", help="skip the dependency audits in both checks")
+    sp.add_argument("--privacy", choices=["full", "structure"], default="full",
+                    help="structure: keep the project's source out of the two checks' own reports")
     sp.add_argument("--base-results", metavar="DIR", help="results of a check already made of the code before the change")
     sp.add_argument("--head-results", metavar="DIR", help="results of a check already made of the code after the change")
     sp.add_argument("--base-label", metavar="WORDS", help="what the receipt calls the code before the change (\"main\")")

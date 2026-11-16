@@ -26,7 +26,7 @@ On a pull request Lantern checks the code twice, as it was before the pull reque
 comment begins with the difference. It lists only what the two checks show:
 
 * **Doors**: pages, routes and commands that were added or removed, with what a new route shows about a login
-  ("Added `POST /api/admin/export`: no login check is shown, and it changes data"), and a login check that got
+  ("Added `POST /api/admin/export`: no login check found, and it changes data"), and a login check that got
   weaker or was taken off a route that is still there.
 * **Links between page and server**: a request the page still makes that no route answers any more (the route was
   removed, renamed or answers another verb now), and a new request that no route of the project answers.
