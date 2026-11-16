@@ -10,6 +10,7 @@ only a comment and the spacing changed), and the twin's receipt has to be quiet 
 import json
 
 import pytest
+from test_commit_copy import commit, git, held
 
 from lantern import diff, pipeline
 
@@ -464,3 +465,110 @@ def test_whether_a_comment_inside_a_function_reads_as_a_change_is_what_the_recei
         assert len(fn) == 1 and fn[0].fingerprint, (prefix, [n.id for n in g.nodes.values()])
         prints.append(fn[0].fingerprint)
     assert (prints[0] != prints[1]) == (prefix in diff.BY_TEXT), (prefix, prints)
+
+
+# ------------------------------------------------------------------------- the command: two commits of a project
+def run(args, capsys):
+    from lantern.cli import main
+    code = main(args)
+    said = capsys.readouterr()
+    return code, said.out, said.err
+
+
+def test_the_command_checks_two_commits_and_names_the_planted_change(tmp_path, capsys):
+    repo = tmp_path / "notes"
+    first = commit(repo, BASE)
+    second = commit(repo, changed(BASE, app=EXPORT_OPEN))
+    before = held(repo)
+    code, out, err = run(["diff", str(repo), "HEAD~1..HEAD", "--offline"], capsys)
+    assert code == 0, err
+    where = repo / ".lantern" / "change"
+    assert [line.split()[-1] for line in out.splitlines() if line.startswith("wrote ")] == [
+        str(where / "change.html"), str(where / "change.md"), str(where / "change.json")]
+    assert "change  release decision Incomplete → Incomplete: 1 new door" in out
+    r = json.loads((where / "change.json").read_text(encoding="utf-8"))
+    assert words(r["doors"]["added"]) == ["POST /api/admin/export"] and r["counts"]["doors_added_open"] == 1
+    assert (r["base"]["commit"], r["head"]["commit"]) == (first, second)
+    assert (r["base"]["label"], r["head"]["label"]) == ("HEAD~1", "HEAD")
+    md = (where / "change.md").read_text(encoding="utf-8")
+    assert f"Compared `HEAD~1 ({first[:10]})` (before) with `HEAD ({second[:10]})` (after)." in md
+    # each side's own results are beside the receipt; the project's files and its results folder are as they were
+    assert (where / "before" / "graph.json").is_file() and (where / "after" / "security.json").is_file()
+    assert {k: v for k, v in held(repo).items() if not k.startswith(".lantern/")} == before
+    assert sorted(p.name for p in (repo / ".lantern").iterdir()) == ["change"]
+    assert git("status", "--porcelain", "--untracked-files=no", cwd=repo) == ""
+
+
+def test_with_no_words_the_last_commit_is_compared_with_the_files_as_they_are(tmp_path, capsys, monkeypatch):
+    repo = tmp_path / "notes"
+    first = commit(repo, BASE)
+    write(repo, changed(BASE, app=(DELETE_ASKS, DELETE_OPEN)))          # changed and not committed
+    monkeypatch.chdir(repo)
+    code, out, err = run(["diff", "--offline", "--format", "md", "--short"], capsys)
+    assert code == 0, err
+    assert out.startswith(diff.MARK) and "**Login check weaker** on `DELETE /api/notes/{note_id}`" in out
+    assert f"Compared `HEAD ({first[:10]})` (before) with `the files as they are now ({first[:10]} with changes that are not committed)`" in out
+    assert "<details><summary>The functions</summary>" not in out
+    assert "checking commit " + first[:12] in err and "checking the files as they are now" in err     # the log went beside it
+
+
+def test_one_word_that_is_no_folder_is_the_two_versions(tmp_path, capsys, monkeypatch):
+    repo = tmp_path / "notes"
+    first = commit(repo, BASE)
+    git("branch", "before-export", first, cwd=repo)
+    commit(repo, changed(BASE, app=EXPORT_ASKS))
+    monkeypatch.chdir(repo)
+    code, out, err = run(["diff", "before-export..main", "--offline", "--format", "json"], capsys)
+    assert code == 0, err
+    r = json.loads(out)
+    assert words(r["doors"]["added"]) == ["POST /api/admin/export"] and r["counts"]["doors_added_open"] == 0
+    assert (r["base"]["label"], r["head"]["label"]) == ("before-export", "main")
+
+
+def test_three_dots_compare_from_where_the_two_parted(tmp_path, capsys):
+    repo = tmp_path / "notes"
+    commit(repo, BASE)
+    git("checkout", "-q", "-b", "feature", cwd=repo)
+    commit(repo, changed(BASE, app=EXPORT_OPEN))
+    git("checkout", "-q", "main", cwd=repo)
+    commit(repo, changed(BASE, app=(DELETE_ASKS, DELETE_OPEN)))          # main went on: not the feature's doing
+    code, out, err = run(["diff", str(repo), "main...feature", "--offline", "--format", "json"], capsys)
+    assert code == 0, err
+    r = json.loads(out)
+    assert words(r["doors"]["added"]) == ["POST /api/admin/export"] and r["doors"]["login_changed"] == []
+    assert r["base"]["label"] == "where main and feature parted"
+    two = run(["diff", str(repo), "main..feature", "--offline", "--format", "json"], capsys)
+    assert [d["weaker"] for d in json.loads(two[1])["doors"]["login_changed"]] == [False]      # two dots: main as it is now
+
+
+def test_checks_already_made_are_used_and_not_made_again(checks, tmp_path, capsys):
+    base, head = checks.of(BASE, "x")["out"], checks.of(changed(BASE, app=EXPORT_OPEN), "x")["out"]
+    plain = tmp_path / "plain"          # no repository at all: nothing is copied or checked
+    plain.mkdir()
+    code, out, err = run(["diff", str(plain), "--base-results", base, "--head-results", head, "--out", str(tmp_path / "c"),
+                          "--format", "json"], capsys)
+    assert code == 0, err
+    assert words(json.loads(out)["doors"]["added"]) == ["POST /api/admin/export"]
+    assert sorted(p.name for p in (tmp_path / "c").iterdir()) == ["change.html", "change.json", "change.md"]
+    assert "checking" not in err
+
+
+@pytest.mark.parametrize("args, sentence", [
+    (["nowhere..HEAD"], "has no branch, tag or commit named 'nowhere'"),
+    (["HEAD~7"], "git did not find the commit 'HEAD~7' stands for"),
+    (["HEAD@{1}"], "is not a name Lantern takes for a commit"),
+    (["--base-results", "{empty}"], "does not hold the results of a check"),
+])
+def test_what_cannot_be_compared_ends_with_a_sentence_and_writes_nothing(tmp_path, capsys, args, sentence):
+    repo = tmp_path / "notes"
+    commit(repo, BASE)
+    (tmp_path / "empty").mkdir()
+    code, out, err = run(["diff", str(repo), *[a.replace("{empty}", str(tmp_path / "empty")) for a in args], "--offline"], capsys)
+    assert code == 2 and sentence in err and err.count("\n") <= 3, err
+    assert not (repo / ".lantern" / "change" / "change.json").exists() and "Traceback" not in err
+
+
+def test_a_folder_in_no_repository_is_said_so(tmp_path, capsys):
+    write(tmp_path / "plain", BASE)
+    code, out, err = run(["diff", str(tmp_path / "plain"), "--offline"], capsys)
+    assert code == 2 and "is in no git repository Lantern reads" in err

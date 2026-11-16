@@ -68,12 +68,32 @@ class NotResults(ValueError):
 
 
 # ---------------------------------------------------------------------------------------------------- one side
-def load(out, label: str | None = None, commit: str | None = None) -> dict:
+AS_THEY_ARE = "the files as they are now"
+
+
+def sides(spec) -> tuple[str, str | None, bool]:
+    """What the person wrote after `lantern diff`, as (the name of the commit before, the name of the commit after
+    or None for the files as they are now, whether the first is to be the commit where the two parted):
+    nothing → the last commit and the files as they are; `A` → A and the files as they are; `A..B`; `A...B`
+    (from the commit A and B both come from, which is what a pull request shows). A side left empty is `HEAD`.
+    The names are checked where they are read (`gitfacts.resolve`)."""
+    spec = spec.strip() if isinstance(spec, str) else ""
+    if not spec:
+        return "HEAD", None, False
+    for dots, parted in (("...", True), ("..", False)):
+        if dots in spec:
+            a, _, b = spec.partition(dots)
+            return a or "HEAD", b or "HEAD", parted
+    return spec, None, False
+
+
+def load(out, label: str | None = None, commit: str | None = None, notes=()) -> dict:
     """The results of one check, as `compare` takes them: the three files read the strict way (`results.table`: a
     link, a pipe or a damaged file is an error, never "nothing found"). `label`: what the person called this side
-    (a branch, a commit, "the files as they are")."""
+    (a branch, a commit, "the files as they are"). `notes`: sentences about how this side's code was got, which
+    the receipt repeats among what it does not say."""
     out = Path(out)
-    side = {"out": str(out), "label": label, "commit": commit}
+    side = {"out": str(out), "label": label, "commit": commit, "notes": [str(x) for x in notes]}
     for name in FILES:
         got = results.table(out / name)
         if not isinstance(got, dict):
@@ -503,6 +523,8 @@ def _limits(base: dict, head: dict, touches: dict) -> list[str]:
                    "it is written.")
     out.append("Code that stands outside every function (a setting at the top of a file, the fields of a class) is not "
                "listed among what the change touches. A door, a link or a finding it changes is listed.")
+    for side in (base, head):
+        out += [x for x in side.get("notes") or () if x not in out]
     return out
 
 
@@ -573,6 +595,8 @@ def _name(about: dict) -> str:
     commit = about.get("commit")
     short = commit[:10] if isinstance(commit, str) else None
     label = about.get("label")
+    if label and short and about.get("uncommitted_changes"):
+        return f"{label} ({short} with changes that are not committed)"
     if label and short and label != commit and not str(commit).startswith(str(label)):
         return f"{label} ({short})"
     return str(label or short or "a folder with no commit")

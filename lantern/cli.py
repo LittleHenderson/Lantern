@@ -251,6 +251,34 @@ def _write_named(repo: Path, dest: Path, text: str) -> None:
         dest.write_text(text, encoding="utf-8")
 
 
+def cmd_diff(a) -> int:
+    """`lantern diff [PATH] [BASE..HEAD]` (lantern/diff.py): two versions of the project checked and compared."""
+    from . import diff, gitfacts
+    from .pipeline import change
+    path, spec = a.path, a.range
+    if spec is None and path != "." and not Path(path).is_dir():
+        path, spec = ".", path          # `lantern diff main..HEAD`: one word that is no folder is the two versions
+    repo = Path(path).resolve()
+    quiet = a.format != "line"
+    try:
+        got = change(repo, spec, out=a.out, offline=a.offline or None, base_results=a.base_results,
+                     head_results=a.head_results, log=(lambda line: print(line, file=sys.stderr)) if quiet else print)
+    except (gitfacts.NoCommit, diff.NotResults) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if a.format == "md":
+        sys.stdout.write(diff.markdown(got["receipt"], short=a.short))
+    elif a.format == "json":
+        sys.stdout.write(json.dumps(got["receipt"], indent=1) + "\n")
+    else:
+        for name in ("html", "md", "json"):
+            print(f"wrote   {got['paths'][name]}")
+    return 0
+
+
 def cmd_github(a) -> int:
     """`lantern github setup|summary|save` (lantern/onrepo.py): what Lantern leaves on the repository it checked."""
     from . import onrepo, results
@@ -683,6 +711,20 @@ def _main(argv: list[str]) -> int:
     sp = sub.add_parser("packs", help="list the analysis packs (rule and framework pattern files) in use and check them")
     common(sp)
 
+    sp = sub.add_parser("diff", help="what a change does to the app: two versions of the project checked and compared "
+                                     "(doors, login checks, links between page and server, findings, the release decision)")
+    sp.add_argument("path", nargs="?", default=".")
+    sp.add_argument("range", nargs="?", metavar="BASE..HEAD",
+                    help="the two versions: BASE..HEAD, BASE...HEAD (from the commit where the two parted, as a pull "
+                         "request shows it), or BASE alone (compared with the files as they are now). With none: the "
+                         "last commit compared with the files as they are now")
+    sp.add_argument("--out", help="folder for the receipt and the two checks (default PATH/.lantern/change)")
+    sp.add_argument("--offline", action="store_true", help="skip the dependency audits in both checks")
+    sp.add_argument("--base-results", metavar="DIR", help="results of a check already made of the code before the change")
+    sp.add_argument("--head-results", metavar="DIR", help="results of a check already made of the code after the change")
+    sp.add_argument("--format", choices=["line", "md", "json"], default="line",
+                    help="what to print: where the files were written (default), the text for a pull request, or the data")
+    sp.add_argument("--short", action="store_true", help="with --format md: without the list of changed functions")
     sp = sub.add_parser("github", help="leave Lantern's report on the GitHub repository it checked: setup, summary, save")
     gsub = sp.add_subparsers(dest="gh", required=True)
     gp = gsub.add_parser("setup", help="write the workflow that checks every push and pull request, the badge and its "
@@ -783,6 +825,8 @@ def _main(argv: list[str]) -> int:
         return 0
     if a.cmd == "accept":
         return cmd_accept(a)
+    if a.cmd == "diff":
+        return cmd_diff(a)
     if a.cmd == "github":
         return cmd_github(a)
     if a.cmd == "starter":
