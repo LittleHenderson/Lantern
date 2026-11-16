@@ -80,7 +80,7 @@ async function appSmoke(url, out, image, expectText, slowTests) {
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
     p.on('console', m => { if (m.type() === 'error' && !outside.refusedFont(m) && !(allow400 && /status of 400/.test(m.text()))) errs.push(`${name} console: ${m.text()}${outside.where(m)}`); });
     p.on('dialog', d => { errs.push(`${name}: a dialog opened: ${d.message()}`); d.dismiss(); });
-    const api = (path, body) => p.evaluate(([path, body]) => fetch(path, body === undefined ? {} : {method: 'POST',
+    const api = (path, body) => p.evaluate(([path, body]) => fetch(path, body === undefined ? {headers: {'X-Lantern-Token': TOKEN}} : {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN}, body: JSON.stringify(body)}).then(r => r.json()), [path, body]);
     try {
       await p.goto(url);
