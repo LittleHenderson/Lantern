@@ -116,6 +116,13 @@ def test_what_is_counted_while_others_ask_is_counted_once_and_read_whole(tmp_pat
     store = Store(str(tmp_path / "g.db"))
     token = store.sign_in("github:1", "someone")
     h, odd = store.user(token)["hash"], []
+    issued = store.stats(DAY, 7)["allowance"]["tokens_issued"]
+
+    def numbers():                      # the owner's dashboard: some thirty reads, one after the other
+        for _ in range(COUNTS):
+            seen = store.stats(DAY, 7)["allowance"]["tokens_issued"]
+            if seen != issued:
+                odd.append(("the dashboard", issued, seen))
 
     def count():
         for _ in range(COUNTS):
@@ -129,7 +136,7 @@ def test_what_is_counted_while_others_ask_is_counted_once_and_read_whole(tmp_pat
                 odd.append((last, now, spent, who))
             last = now
 
-    raised = _at_once(count, count, *[ask] * (ASKERS - 2))
+    raised = _at_once(count, count, numbers, *[ask] * (ASKERS - 3))
     assert raised == [], f"{len(raised)} threads ended with an error, the first: {raised[0]!r}"
     assert odd == []
     assert store.today_requests(h, DAY) == 2 * COUNTS == store.user(token)["used_requests"]
@@ -201,11 +208,18 @@ def _takes_the_lock(node) -> bool:
         and isinstance(i.context_expr.value, ast.Name) and i.context_expr.value.id == "self" for i in node.items)
 
 
+def _the_connection(node) -> bool:
+    return (isinstance(node, ast.Attribute) and node.attr == "db" and isinstance(node.value, ast.Name)
+            and node.value.id == "self")
+
+
 def _outside_the_lock(text: str, name: str) -> list[tuple[str, int, str]]:
-    """The calls on a store's one connection, and on the helpers that count on their caller's lock, that stand
-    outside `with self.lock:`. A helper that counts on its caller is named with an underscore, takes no lock
-    itself and uses the connection, or a helper that does; `__init__` is left out, because nobody else has the
-    store yet."""
+    """The uses of a store's one connection, and of the helpers that count on their caller's lock, that stand
+    outside `with self.lock:`. A use is a call written on it and also the connection or one of its functions taken
+    under another name (`q = self.db.execute`, called three lines further down: the first version of this reading
+    looked for calls only and passed such a function by). A helper that counts on its caller is named with an
+    underscore, takes no lock itself and uses the connection, or a helper that does; `__init__` is left out,
+    because nobody else has the store yet."""
     store = next(n for n in ast.parse(text).body if isinstance(n, ast.ClassDef) and n.name == name)
     methods = [n for n in store.body if isinstance(n, ast.FunctionDef) and n.name != "__init__"]
     bare = [m for m in methods if m.name.startswith("_") and not any(_takes_the_lock(n) for n in ast.walk(m))]
@@ -221,12 +235,14 @@ def _outside_the_lock(text: str, name: str) -> list[tuple[str, int, str]]:
 
     def walk(node, fn, locked):
         locked = locked or _takes_the_lock(node)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and not locked:
-            on = node.func.value
-            if isinstance(on, ast.Attribute) and on.attr == "db" and isinstance(on.value, ast.Name) and on.value.id == "self":
-                out.append((fn, node.lineno, f"self.db.{node.func.attr}"))
-            if isinstance(on, ast.Name) and on.id == "self" and node.func.attr in inner:
-                out.append((fn, node.lineno, f"self.{node.func.attr}"))
+        if not locked and isinstance(node, ast.Attribute):
+            if _the_connection(node.value):
+                out.append((fn, node.lineno, f"self.db.{node.attr}"))
+                return
+            if _the_connection(node):
+                out.append((fn, node.lineno, "self.db"))
+            elif isinstance(node.value, ast.Name) and node.value.id == "self" and node.attr in inner:
+                out.append((fn, node.lineno, f"self.{node.attr}"))
         for child in ast.iter_child_nodes(node):
             walk(child, fn, locked)
 
@@ -256,3 +272,8 @@ def test_the_reading_of_a_stores_code_tells_a_call_outside_the_lock_from_one_und
     late = safe + ("    def count(self, h):\n        with self.lock:\n            self.db.execute('update')\n"
                    "        self.db.commit()\n")
     assert _outside_the_lock(late, "Store") == [("count", 19, "self.db.commit")]
+    by_name = safe + ("    def numbers(self):\n        q = self.db.execute\n"
+                      "        return q('select').fetchall()\n")
+    assert _outside_the_lock(by_name, "Store") == [("numbers", 17, "self.db.execute")]
+    handed = safe + "    def copy(self, to):\n        return backup(self.db, to)\n"
+    assert _outside_the_lock(handed, "Store") == [("copy", 17, "self.db")]

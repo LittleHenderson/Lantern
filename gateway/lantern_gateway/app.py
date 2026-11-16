@@ -544,6 +544,10 @@ class Store:
 
     def stats(self, today: str, days: int = 30) -> dict:
         """Everything the owner's dashboard shows. Aggregates only."""
+        with self.lock:                 # some thirty reads on the one connection: one lock around all of them
+            return self._stats(today, days)
+
+    def _stats(self, today: str, days: int) -> dict:
         since = (dt.date.fromisoformat(today) - dt.timedelta(days=days - 1)).isoformat()
         week = (dt.date.fromisoformat(today) - dt.timedelta(days=6)).isoformat()
         q = self.db.execute
