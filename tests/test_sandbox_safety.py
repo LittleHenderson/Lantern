@@ -1419,7 +1419,10 @@ def test_a_test_run_started_from_the_apps_terminal_stops_the_same_way(app_with, 
     from test_server import call, wait
     base, add = app_with
     pid = add(_project(tmp_path, STARTS + "\ndef test_never_ends():\n    start()\n    time.sleep(300)\n"))
-    code, started = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["trace", "--", *PYTEST]})
+    # where this system's sandbox does not hold every program of the tests (macOS, Windows, a run inside another
+    # sandbox), the terminal starts them only on the person's word, as the sheet does on its tick box
+    word = ["--anyway"] if sandbox.reach("python")["ask"] else []
+    code, started = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["trace", *word, "--", *PYTEST]})
     assert code == 202 and started["job"]["can_stop"] is True, started
     jid, end, pids = started["job"]["id"], time.time() + 120, []
     while not pids and time.time() < end:
