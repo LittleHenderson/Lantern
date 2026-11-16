@@ -8,6 +8,7 @@ so that no scanner reads it, the route taken away, a test deleted. The contract 
 the part that broke, and hold on the true fix. Until this stage the recheck called several of them "fixed".
 """
 import json
+import os
 
 import pytest
 
@@ -450,3 +451,156 @@ def test_the_result_as_text_names_every_part_and_the_verdict(checks):
     assert "broken" in text and "held" in text
     assert fixcheck.text(checks.judge(TRUE_FIX)).splitlines()[0].startswith("Passed")
     assert fixcheck.text(checks.judge(TRUE_FIX, tests=None)).splitlines()[0].startswith("Incomplete")
+
+
+# ------------------------------------------------------------ parts that a small app's own versions do not reach
+def changed(side: dict, change) -> dict:
+    """One check's results with something in them written by hand: what a scanner said, a call it could not follow."""
+    import copy
+    other = copy.deepcopy(side)
+    change(other)
+    return other
+
+
+def scanner(record: dict):
+    def put(side: dict) -> None:
+        tools = [t for t in side["security"]["tools"] if t.get("tool") != record["tool"]]
+        side["security"]["tools"] = tools + [record]
+    return put
+
+
+def checks_judge(checks, after: dict, repo) -> dict:
+    return fixcheck.judge(checks.of(BASE)[0], after, checks.finding("B602"), repo=repo, tests=RAN_AND_PASSED)
+
+
+@pytest.mark.parametrize("was, now, state, words", [
+    ({"state": "ok", "status": "ok"},
+     {"state": "partial", "status": "partial: 1 file could not be read", "errors": ["pom.xml: not valid XML"]},
+     "broken", "read everything it was given before the fix and now says “partial: 1 file could not be read” "
+               "(pom.xml: not valid XML)"),
+    ({"state": "ok", "status": "ok"}, {"state": "failed", "status": "failed: timed out"}, "broken", "failed: timed out"),
+    ({"state": "ok", "status": "ok"}, {"state": "skipped", "status": "skipped: offline"},
+     "not-shown", "finished before the fix and did not run after it"),
+    ({"state": "ok", "status": "ok"}, None, "not-shown", "is not in the check after it"),
+    ({"state": "partial", "status": "partial", "unpinned": 1},
+     {"state": "partial", "status": "partial: 3 libraries with no exact version", "unpinned": 3},
+     "broken", "left out more than before the fix"),
+    ({"state": "partial", "status": "partial", "unpinned": 3}, {"state": "partial", "status": "partial", "unpinned": 3},
+     "held", "Every scanner that finished before the fix finished after it"),
+    ({"state": "partial", "status": "partial", "unpinned": 3}, {"state": "ok", "status": "ok"}, "held", "Every scanner"),
+    ({"state": "failed", "status": "failed: not installed"}, {"state": "failed", "status": "failed: not installed"},
+     "held", "Every scanner"),
+    ({"state": "skipped", "status": "skipped: offline"}, {"state": "failed", "status": "failed: timed out"},
+     "held", "Every scanner"),         # it did not run before either: the fix is not held to it
+])
+def test_a_scanner_that_reads_less_after_the_fix_than_before(checks, was, now, state, words):
+    """`still-read`, for the scanners a small app does not have: the record of a library look-up before and after."""
+    fixed, repo = checks.of(TRUE_FIX)
+    before = changed(checks.of(BASE)[0], scanner({"tool": "maven-audit", **was}))
+    after = changed(fixed, scanner({"tool": "maven-audit", **now})) if now is not None else fixed
+    r = fixcheck.judge(before, after, checks.finding("B602"), repo=repo, tests=RAN_AND_PASSED)
+    assert states(r)["still-read"] == state, said(r, "still-read")
+    assert words in said(r, "still-read")
+    assert r["verdict"] == {"broken": "refused", "not-shown": "incomplete", "held": "passed"}[state]
+
+
+def test_one_more_call_that_cannot_be_followed_for_an_everyday_reason_is_not_shown(checks):
+    """A call on a parameter is unresolved in honest code every day: one more of them after the fix is neither a
+    hidden call nor nothing, so the part is not shown and the fix does not pass by it. In a test file it counts for
+    nothing."""
+    fixed, repo = checks.of(TRUE_FIX)
+    site = {"at": "api/store.py:9:14", "file": "api/store.py", "line": 9, "col": 14, "callee": "gadget.turn",
+            "caller": "py:api.store.user_for", "lang": "python", "group": "written", "outcome": "unresolved", "to": [],
+            "reason": "parameter", "why": "`gadget` is a parameter with no type Lantern can read", "test": False}
+    such = sum(1 for s in fixed["calls"]["sites"] if s.get("file") == "api/store.py" and not s.get("test")
+               and s.get("outcome") == "unresolved" and s.get("reason") == "parameter")
+    after = changed(fixed, lambda side: side["calls"]["sites"].append(site))
+    r = checks_judge(checks, after, repo)
+    assert states(r)["calls"] == "not-shown" and r["verdict"] == "incomplete"
+    assert "api/store.py:9 calls `gadget.turn`, which Lantern could not follow" in said(r, "calls")
+    assert f"in this file now, {such} before the fix" in said(r, "calls")
+    in_a_test = changed(fixed, lambda side: side["calls"]["sites"].append({**site, "test": True}))
+    assert states(checks_judge(checks, in_a_test, repo))["calls"] == "held"
+    computed = changed(fixed, lambda side: side["calls"]["sites"].append({**site, "reason": "computed"}))
+    assert states(checks_judge(checks, computed, repo))["calls"] == "broken"
+
+
+def test_a_test_put_in_the_place_of_another_is_not_shown(checks):
+    """As many tests as before, one of them under a new name: whether the new one asks what the old one asked is
+    not something Lantern reads, so the part is not shown."""
+    renamed = swap(TRUE_FIX, "tests/test_store.py", "def test_a_backup_is_made(", "def test_something_else(")
+    r = checks.judge(renamed)
+    assert states(r)["tests"] == "not-shown" and r["verdict"] == "incomplete"
+    assert "test_a_backup_is_made" in said(r, "tests") and "as many tests came in their place" in said(r, "tests")
+
+
+# ------------------------------------------------------------------------------ the check a fix is compared with
+def test_a_check_is_kept_read_back_and_let_go(checks, tmp_path):
+    side, repo = checks.of(BASE)
+    fid, home = checks.finding("B602"), tmp_path / "home"
+    assert fixcheck.kept(home, repo, fid) is None
+    note = fixcheck.keep(home, repo, fid, side["out"])
+    assert note["finding"] == fid and note["how"] == "brief" and "calls.json" in note["files"]
+    held, again = fixcheck.kept(home, repo, fid)
+    assert again == note
+    assert sorted(f["id"] for f in held["security"]["findings"]) == sorted(f["id"] for f in side["security"]["findings"])
+    assert held["calls"] == side["calls"]
+    assert not any(repo.rglob("brief.json"))                 # under Lantern's own folder, never in the project
+    assert fixcheck.kept(home, repo, "another-finding") is None
+    assert fixcheck.kept(home, tmp_path, fid) is None        # and it belongs to its project
+    fixcheck.forget(home, repo, fid)
+    assert fixcheck.kept(home, repo, fid) is None
+    fixcheck.forget(home, repo, fid)                         # letting go of nothing is no error
+
+
+def test_a_kept_check_that_is_not_whole_or_not_this_findings_is_not_used(checks, tmp_path):
+    side, repo = checks.of(BASE)
+    fid, home = checks.finding("B602"), tmp_path / "home"
+    fixcheck.keep(home, repo, fid, side["out"])
+    folder = next(home.rglob("brief.json")).parent
+    (folder / "brief.json").write_text(json.dumps({"finding": "someone-elses", "kept_at": "x"}), encoding="utf-8")
+    assert fixcheck.kept(home, repo, fid) is None
+    fixcheck.keep(home, repo, fid, side["out"])
+    (folder / "security.json").unlink()
+    assert fixcheck.kept(home, repo, fid) is None
+    with pytest.raises(Exception, match="does not hold the results of a check"):
+        fixcheck.keep(home, repo, fid, tmp_path / "nothing-here")
+
+
+def test_which_check_a_fix_is_compared_with(checks, tmp_path):
+    """The check kept for the finding wins. With none, the project's last check is the one, and it is kept at
+    that moment: the next check of the same fix is compared with it too, whatever was analyzed in between."""
+    side, repo = checks.of(BASE)
+    fid, home = checks.finding("B602"), tmp_path / "home"
+    assert fixcheck.before(home, repo, side["out"], "no-such-finding") is None
+    was, target, note = fixcheck.before(home, repo, side["out"], fid[:8], keep_first=False)     # the beginning of an id
+    assert target["id"] == fid and note is None and fixcheck.kept(home, repo, fid) is None
+    assert fixcheck.since(note) == "the project's last check"
+    was, target, note = fixcheck.before(home, repo, side["out"], fid)
+    assert target["id"] == fid and note["how"] == "first-check"
+    assert "kept when the fix was first checked" in fixcheck.since(note)
+    # the project is analyzed again with a trick in it: its last check no longer shows the finding, the kept one does
+    after_trick = checks.of(COMPUTED)[0]["out"]
+    assert fixcheck.opened(fixcheck.load(after_trick), fid) is None
+    was, target, again = fixcheck.before(home, repo, after_trick, fid)
+    assert target["id"] == fid and again == note
+    # a brief asked for replaces it
+    fixcheck.keep(home, repo, fid, side["out"])
+    assert "kept when the fix brief was asked for" in fixcheck.since(fixcheck.before(home, repo, after_trick, fid)[2])
+    # an accepted finding is a person's decision and nothing to fix
+    accepted, _ = checks.of({**BASE, "lantern-accepted.json": json.dumps(
+        {"accepted": [{"id": checks.finding("B324"), "reason": REASON}]})})
+    assert fixcheck.opened(accepted, checks.finding("B324")) is None
+    assert fixcheck.opened(accepted, fid)["id"] == fid
+
+
+def test_no_more_than_so_many_checks_are_kept_for_one_project(checks, tmp_path, monkeypatch):
+    side, repo = checks.of(BASE)
+    home = tmp_path / "home"
+    monkeypatch.setattr(fixcheck, "MOST_KEPT", 3)
+    for i in range(6):
+        fixcheck.keep(home, repo, f"finding-{i}", side["out"])
+        os.utime(next(p for p in home.rglob("brief.json") if json.loads(p.read_text())["finding"] == f"finding-{i}").parent,
+                 (1_700_000_000 + i, 1_700_000_000 + i))
+    left = sorted(json.loads(p.read_text(encoding="utf-8"))["finding"] for p in home.rglob("brief.json"))
+    assert left == ["finding-3", "finding-4", "finding-5"]

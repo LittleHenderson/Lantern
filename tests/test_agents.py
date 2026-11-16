@@ -26,6 +26,13 @@ AGENT = textwrap.dedent("""
         app = pathlib.Path("shop/app.py")
         app.write_text(app.read_text() + '\\n\\n@app.get("/ping")\\ndef ping(host: str):\\n'
                        '    subprocess.call("ping -c1 " + host, shell=True)\\n    return {"ok": True}\\n')
+    elif mode == "computed":   # the finding stops showing; the weak hash is still what runs
+        auth.write_text(src.replace("hashlib.md5(", 'getattr(hashlib, "m" + "d5")('))
+    elif mode == "comment":    # a comment answers for the finding
+        auth.write_text(src.replace(" == user", " == user  # nosec B324: only compared, never stored"))
+    elif mode == "no_tests":   # a true fix that also takes the project's test away
+        auth.write_text(src.replace("hashlib.md5(", "hashlib.sha256("))
+        pathlib.Path("tests/test_auth.py").unlink()
     elif mode == "nothing":
         pass
     print("prompt was:", sys.argv[2][:60])
@@ -188,3 +195,31 @@ def test_the_app_offers_the_agent_only_once_it_is_picked(shop, tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_a_change_that_only_hides_the_finding_is_not_called_fixed(shop):
+    """The verdict is the fix contract's (`lantern/fixcheck.py`). Until 2026-11-16 only the finding's id was looked
+    for, and the call put together at run time read "Fixed"."""
+    repo, mode, work = shop
+    for how, part, words in (("computed", "calls", "it was hidden and not fixed"),
+                             ("comment", "gone", "Lantern still finds the problem")):
+        mode.write_text(how)
+        res = agents.run_fix(repo, repo / ".lantern", md5_id(repo), "claude", "full", lambda m: None, work_root=work)
+        assert res["status"] == "not_fixed" and words in res["verdict"], (how, res["verdict"])
+        assert "Don't apply this one." in res["verdict"]
+        assert res["contract"]["verdict"] == "refused" and part in res["contract"]["broken"], (how, res["contract"])
+        agents.discard_fix(res["fix"], work_root=work)
+    mode.write_text("no_tests")
+    res = agents.run_fix(repo, repo / ".lantern", md5_id(repo), "claude", "full", lambda m: None, work_root=work)
+    assert res["status"] == "fixed_with_new" and "makes something else worse" in res["verdict"], res["verdict"]
+    assert "tests/test_auth.py is gone" in res["verdict"] and res["contract"]["broken"] == ["tests"]
+    assert "Look before you apply it." in res["verdict"]
+
+
+def test_a_true_fix_says_that_the_tests_were_not_run(shop):
+    repo, mode, work = shop
+    mode.write_text("fix")
+    res = agents.run_fix(repo, repo / ".lantern", md5_id(repo), "claude", "full", lambda m: None, work_root=work)
+    assert res["status"] == "fixed" and "Your tests were not run on the change" in res["verdict"]
+    assert res["contract"]["verdict"] == "incomplete" and res["contract"]["not_shown"] == ["tests"]
+    assert [i["id"] for i in res["contract"]["items"]] == ["gone", "no-suppression", "still-read", "links", "calls", "nothing-new", "tests"]
