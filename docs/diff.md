@@ -43,9 +43,13 @@ Only differences between the two checks:
   accepted in this change (by `lantern accept`, or by a `# nosec` comment with a written reason: the receipt quotes
   the reason, and says so when the finding came with the change), open again after an acceptance was taken away.
   A finding that was only excused is never listed as fixed.
-* **Calls that cost money** (a model, a payment, a message) that a route reaches now and did not before.
+* **Calls that cost money** (a model, a payment, a message) that a route reaches now and did not before. A call
+  counts where the code makes it: a remark or a text that only names a provider is none, and a vector store is not
+  counted as one that costs money.
 * **What the change touches**: the functions whose code changed, the pages and routes that lead to them, and what
-  they lead to (database tables, the shell, other services).
+  they lead to (database tables, the shell, other services). "The shell" lists what starts a program
+  (`subprocess.run`, `child_process.exec`); what a started program gave back or raised (`subprocess.CompletedProcess`,
+  `subprocess.TimeoutExpired`) is not listed.
 * **The release decision before and after**, for example `Passed → Blocked`, with what moved it.
 
 Two versions that differ only in comments and spacing give a receipt that says nothing changed.

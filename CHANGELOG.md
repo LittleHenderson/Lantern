@@ -9,6 +9,23 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- A paid call is read from the code and not from what is written about it (`lantern/aiapp.py`: `read_as_code`,
+  `named`). Until now every line that did not begin as a comment was read as code, so a remark at a line's end, the
+  later lines of a block comment or of a docstring, and a text kept over several lines (a help text, a tiny app in a
+  test) each "made" a call into a model, a payment or an email service: the function was marked as one that spends
+  money, and a route that reaches it could be listed as one anyone can make spend it. Found on the first real pull
+  request that got the "what this change does" comment: it said the changed code leads to a payment, for a remark in
+  one of Lantern's own files (Lantern's check of itself listed 30 such calls in its own code; 27 were only written
+  about, the other 3 are in a sample app). Now: remarks are none in Python, Ruby, Go and the languages that write
+  them `//` and `/* */`; a text over several lines is none in Python, Go and the languages with text blocks in three
+  double quotes; a Python docstring is none for a vector store either (a vector store is still read out of the text
+  of a query handed to a call). The same calls written as code are found as before, also after a remark, after a `#`
+  or `//` inside a text and after a pattern that holds a backtick. Not judged: a JavaScript template that runs over
+  several lines (Known gaps). Tests: `tests/test_aiapp.py` (4 more).
+  - The change receipt: only a call that is paid for is "a call that costs money" (a vector store was one too), and
+    what a started program gave back or raised (`subprocess.CompletedProcess`, `subprocess.TimeoutExpired` and
+    their like) is no longer listed under "the shell". Tests: `tests/test_diff.py` (2 more).
+
 - What a change does (`lantern diff`, `docs/diff.md`; roadmap of 2026-11-14, stage 2). Two versions of a project are
   checked and what the two checks found is compared, as a change receipt (`change.json`, `change.md`, `change.html`
   in `.lantern/change/`): pages, routes and commands added, removed or moved; a login check that got weaker or was

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from test_commit_copy import commit, git, held
 
-from lantern import diff, onrepo, pipeline
+from lantern import aiapp, diff, onrepo, pipeline
 
 APP = '''\
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -482,6 +482,35 @@ def test_a_paid_call_no_door_reaches_is_no_way_to_it_until_a_route_calls_it(chec
     assert same["paid"] == [] and same["same"] is True
 
 
+NEAREST_HELPER = '''
+
+def nearest(q):
+    with sqlite3.connect(DB) as con:
+        return con.execute("select id from notes order by embedding <-> ? limit 5", (q,)).fetchall()
+'''
+NEAREST_ROUTE = '''
+
+@app.get("/api/nearest")
+def nearest(q: str, user=Depends(current_user)):
+    return store.nearest(q)
+'''
+
+
+def test_a_vector_store_a_new_route_reaches_is_no_call_that_costs_money(checks):
+    """Until 2026-11-16 everything in the check's list of model, vector-store and paid calls was "a call that costs
+    money" to the receipt. A vector store is a place data is kept."""
+    assert diff.PAID == aiapp.PAID_KINDS
+    head = changed(BASE, store=NEAREST_HELPER, app=NEAREST_ROUTE)
+    seen = checks.of(head, "after")["security"]["ai"]["calls"]
+    assert [(c["kind"], c["node"]) for c in seen] == [("vector", "py:api.store.nearest")]      # the check does see it
+    r = checks.receipt(BASE, head)
+    assert words(r["doors"]["added"]) == ["GET /api/nearest"]
+    assert r["paid"] == [] and r["counts"]["paid_new"] == 0 and r["touches"]["paid"] == []
+    assert "cost money" not in diff.markdown(r) and "Calls that cost money" not in diff.page(r)
+    both = checks.receipt(head, changed(head, app=SUMMARISE))          # twin: a model call beside it is named, alone
+    assert both["touches"]["paid"] == ["model (OpenAI)"] and both["counts"]["paid_new"] == 1
+
+
 # -------------------------------------------------------------------- links that were mended, routes nobody asks
 def test_a_route_put_back_where_the_page_asks_mends_the_link(checks):
     lost = changed(BASE, app=('@app.delete("/api/notes/{note_id}")', '@app.delete("/api/note/{note_id}")'))
@@ -514,6 +543,29 @@ def test_what_a_changed_function_touches_is_followed_up_to_the_doors_and_down_to
     assert "GET /api/notes" not in words(t["doors"])
     assert any("sqlite3" in x for x in t["reaches"]["outside"]), t["reaches"]
     assert r["doors"]["added"] == [] and r["links"]["broken"] == [] and r["same"] is False
+
+
+TIMED = '''
+
+def timed(cmd):
+    try:
+        return subprocess.run(cmd, timeout=5)
+    except OSError:
+        raise subprocess.TimeoutExpired(cmd, 5)
+    finally:
+        print(subprocess.CompletedProcess(cmd, 0))
+'''
+
+
+def test_what_a_started_program_gave_back_is_not_the_shell(checks):
+    """The receipt of the first real pull request listed `subprocess.CompletedProcess` and `subprocess.TimeoutExpired`
+    under "the shell": a result and an error, which start no program."""
+    with_import = changed(BASE, store=("import sqlite3\n", "import sqlite3\nimport subprocess\n"))
+    r = checks.receipt(BASE, changed(with_import, store=TIMED))
+    reach = r["touches"]["reaches"]
+    assert reach["shell"] == ["subprocess.run"], reach
+    assert not [x for part in reach.values() for x in part if "CompletedProcess" in x or "TimeoutExpired" in x], reach
+    assert "the shell: `subprocess.run`" in diff.markdown(r)
 
 
 # ------------------------------------------------------------------------------------- results Lantern can use

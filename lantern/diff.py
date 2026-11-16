@@ -62,6 +62,12 @@ LOGIN_WORDS = {"shown": "a login check is shown", "lookup": "it only looks a use
 SHELL = ("subprocess", "os.system", "os.popen", "child_process", "node:child_process", "shell_exec", "exec",
          "system", "passthru", "proc_open", "popen", "Kernel.system", "Kernel.exec", "Kernel.spawn", "Kernel.`",
          "Process.Start", "Runtime.exec", "ProcessBuilder", "std.process", "std.system", "os/exec")
+# Names under those that start no program: what a started program gave back, and the errors raised about one. They are
+# listed nowhere (until 2026-11-16 the first real pull request's receipt named two of them under "the shell").
+NOT_THE_SHELL = ("subprocess.CompletedProcess", "subprocess.TimeoutExpired", "subprocess.CalledProcessError",
+                 "subprocess.SubprocessError", "subprocess.list2cmdline")
+# The kinds of `security.json` `ai.calls` that are paid for by the call (`aiapp.PAID_KINDS`; a test keeps the two equal)
+PAID = frozenset({"model", "embedding", "image", "speech", "payment", "email", "sms"})
 # A function is changed when its fingerprint is. The readers of Python, JavaScript/TypeScript, Go, Rust and Java take it
 # from the function's code without comments and spacing; the readers below take it from the function's text as it is
 # written, so there a comment or other spacing inside a function reads as a change, and a receipt that lists such a
@@ -432,11 +438,12 @@ class _Map:
 
 
 def _paid(side: dict) -> dict[str, list[dict]]:
-    """The calls that cost money, by the function that makes them (`security.json` `ai.calls`)."""
+    """The calls that cost money, by the function that makes them (`security.json` `ai.calls`). That list holds the
+    vector stores too, and a vector store is a place data is kept, not a call that is paid for (`PAID`)."""
     out: dict[str, list[dict]] = {}
     ai = side["security"].get("ai") if isinstance(side["security"].get("ai"), dict) else {}
     for c in ai.get("calls") or []:
-        if isinstance(c, dict) and isinstance(c.get("node"), str):
+        if isinstance(c, dict) and isinstance(c.get("node"), str) and c.get("kind") in PAID:
             out.setdefault(c["node"], []).append({k: c.get(k) for k in ("kind", "provider", "file", "line", "what")})
     return out
 
@@ -468,6 +475,8 @@ def _kind_outside(nid: str) -> str:
     if nid.startswith("ext:HTTP "):
         return "service"
     name = nid[4:]
+    if any(name == s or name.startswith((s + ".", s + "(")) for s in NOT_THE_SHELL):
+        return ""
     return "shell" if any(name == s or name.startswith(s + ".") for s in SHELL) else "outside"
 
 
@@ -489,7 +498,7 @@ def _compare_touch(base: dict, head: dict, bn: dict, hn: dict, bmap: _Map, hmap:
     paid = _paid(head)
     reaches = {"table": [], "shell": [], "service": [], "outside": []}
     for nid in sorted(down):
-        if outside(nid) and (hn.get(nid) or {}).get("lane") == "data":
+        if outside(nid) and (hn.get(nid) or {}).get("lane") == "data" and _kind_outside(nid):
             reaches[_kind_outside(nid)].append(nid.split(":", 1)[1])
     costs = sorted({f"{c.get('kind') or 'paid call'}{' (' + str(c['provider']) + ')' if c.get('provider') else ''}"
                     for nid in down | set(live) for c in paid.get(nid, ())})
