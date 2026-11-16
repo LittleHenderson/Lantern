@@ -68,7 +68,8 @@ file. New entries go under `## Unreleased`, on top.
 - Guard coverage completed in four places where Lantern starts another program on a project's files (each with
   tests written first and safe twins that work as before).
   The Python check: where something that is not the project's own cannot be written as an exclusion, Bandit runs
-  on copies of the project's own Python files in a folder of Lantern's own (`way: "copies"` in its record).
+  on copies of the project's own Python files in a folder of Lantern's own (`way: "copies"` in its record),
+  each written through `programs.put_copy` (`tests/test_programs.py`, 1 new).
   The Evidence page: the line to copy holds a commit's own name and Lantern's fixed words; a report's test command
   is shown as what the report says, word by word, and the person types it (`lantern verify` and the connector too).
   Git facts: git is not started where a repository's objects folder leads elsewhere; the files then count as

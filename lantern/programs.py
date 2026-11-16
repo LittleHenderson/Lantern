@@ -135,3 +135,23 @@ def put(folder: Path, name: str, text: str) -> Path:
     path = Path(folder) / name
     path.write_text(text, encoding="utf-8", newline="\n")
     return path
+
+
+def _one_name(part) -> bool:
+    """Is `part` the name of one file or folder on this system: nothing that leads up, down or to another drive?"""
+    return isinstance(part, str) and bool(part) and part not in (".", "..") and "\0" not in part \
+        and not any(sep and sep in part for sep in (os.sep, os.altsep, "/")) and not (WINDOWS and ":" in part)
+
+
+def put_copy(folder: Path, parts: list[str], data: bytes) -> Path:
+    """A copy of a project's file in a folder of Lantern's own (`folder()`): `data`, byte for byte, under the names
+    `parts`, one folder below the other as they are in the project, handed back as its path. For a tool that is
+    started on copies of a project's files and not on the project itself. ValueError when `parts` is no list of
+    names of one file or folder each (nothing is written outside the folder); OSError when the copy cannot be
+    written: the caller then does not start the tool."""
+    if not isinstance(parts, (list, tuple)) or not parts or not all(_one_name(part) for part in parts):
+        raise ValueError("not a bare name")
+    path = Path(folder).joinpath(*parts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path

@@ -217,9 +217,11 @@ def _copies(repo: Path, own: Path, named: list[tuple[str, str, bool]]) -> tuple[
         except OSError:
             missed.append(rel)
             continue
-        os.makedirs(os.path.dirname(to), exist_ok=True)
-        with open(to, "wb") as f:
-            f.write(data)
+        try:
+            programs.put_copy(Path(top), parts, data)          # the one way this file writes a file (`lantern/programs.py`)
+        except ValueError:                                   # a name this system does not take as one name
+            missed.append(rel)
+            continue
         back[to] = path
     return top, back, missed
 
