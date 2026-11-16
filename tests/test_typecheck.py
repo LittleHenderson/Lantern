@@ -876,6 +876,12 @@ def test_the_command_asks_the_report_says_so_and_a_report_starts_no_checker(tmp_
     assert main(["verify", str(repo), "--report", str(out / "evidence.html"), "--offline"]) == 2
     err = capsys.readouterr().err
     assert ran == [] and "--typecheck" in err and "does not start them because a report says so" in err
+    # the connector starts no checker either: it hands the refusal on, with the command a person would type
+    from lantern.mcp_server import Projects, Server
+    answer = Server(Projects([str(repo)])).handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "lantern_verify", "arguments": {"project": repo.name, "report": str(out / "evidence.json"), "offline": True}}})
+    told = answer["result"]["content"][0]["text"]
+    assert ran == [] and "--typecheck" in told and answer["result"]["structuredContent"].get("typecheck") is True, answer
     assert main(["verify", str(repo), "--report", str(out / "evidence.html"), "--offline", "--typecheck"]) == 0
     assert ran == [1]
     monkeypatch.setenv("LANTERN_TYPECHECK", "1")        # the person's standing word counts as the flag does

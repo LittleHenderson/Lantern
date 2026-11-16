@@ -477,8 +477,10 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert "runs-on: macos-latest" in mac and len(its) == 1 and ("ci.yml", its[0]) in runs and " -k " in its[0], mac
     # The type checkers: the same two versions in the three jobs, install scripts off, each version read back from
     # what was installed before it is named; named by the variables Lantern itself reads and by the tests' rule.
-    install = ('npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --no-audit --no-fund '
-               'typescript@6.0.2 pyright@1.1.414')
+    # Nothing comes with them: neither package needs another, and the one pyright would take if it could (a file
+    # watcher for macOS, asked for by a range of versions) is left out, so the two fixed versions are all there is.
+    install = ('npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit '
+               '--no-fund typescript@6.0.2 pyright@1.1.414')
     assert ci.count(install) == 3 and ci.count("typescript@") == 3 and ci.count("pyright@") == 3, ci.count(install)
     for line in ('test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"',
                  'test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"',

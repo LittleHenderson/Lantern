@@ -45,10 +45,12 @@ jobs:
         # tests/test_typecheck.py starts the real checkers where LANTERN_TESTS_TYPECHECK is set, and under `required`
         # a checker that is not found fails its tests. They are installed outside the checkout and kept off PATH,
         # and named by the variables Lantern itself reads, so that Lantern's check of itself runs as on a computer
-        # without them. Each version is read back from what was installed before it is named.
+        # without them. Each version is read back from what was installed before it is named. Nothing comes with
+        # them: neither package needs another, and the one pyright would take if it could (a file watcher for macOS,
+        # asked for by a range of versions) is left out, so the two fixed versions are all that is installed.
         shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
+          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
           at="$RUNNER_TEMP/checkers/node_modules"
           test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"
           test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"
@@ -234,10 +236,12 @@ jobs:
         # tests/test_typecheck.py starts the real checkers where LANTERN_TESTS_TYPECHECK is set, and under `required`
         # a checker that is not found fails its tests. They are installed outside the checkout and kept off PATH,
         # and named by the variables Lantern itself reads, so that Lantern's check of itself runs as on a computer
-        # without them. Each version is read back from what was installed before it is named.
+        # without them. Each version is read back from what was installed before it is named. Nothing comes with
+        # them: neither package needs another, and the one pyright would take if it could (a file watcher for macOS,
+        # asked for by a range of versions) is left out, so the two fixed versions are all that is installed.
         shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
+          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
           at="$RUNNER_TEMP/checkers/node_modules"
           test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"
           test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"
@@ -297,10 +301,12 @@ jobs:
         # tests/test_typecheck.py starts the real checkers where LANTERN_TESTS_TYPECHECK is set, and under `required`
         # a checker that is not found fails its tests. They are installed outside the checkout and kept off PATH,
         # and named by the variables Lantern itself reads, so that Lantern's check of itself runs as on a computer
-        # without them. Each version is read back from what was installed before it is named.
+        # without them. Each version is read back from what was installed before it is named. Nothing comes with
+        # them: neither package needs another, and the one pyright would take if it could (a file watcher for macOS,
+        # asked for by a range of versions) is left out, so the two fixed versions are all that is installed.
         shell: bash
         run: |
-          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
+          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
           at="$RUNNER_TEMP/checkers/node_modules"
           test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"
           test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"
