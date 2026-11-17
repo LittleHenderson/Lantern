@@ -9,6 +9,28 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- New heuristic `LA-UNBOUNDED-AGENT-LOOP` (roadmap stage 5, the AI-app pack's second version; labelled
+  heuristic): an agent loop with no cap on its paid calls. An agent asks a paid model, does what the model asks
+  for, and asks again until the model says it is done; where only the model's answer ends the rounds, a model
+  that keeps asking, or words put into what it reads that tell it to, keep it going, and every round is billed.
+  Read from the program the data-flow step builds, so nothing of the project is run (`lantern/agentloop.py`): a
+  model call known by the library's own name for it and paid for each call (a model run on this computer is not),
+  made in the loop or in a function of the project the loop calls; a `while` loop, `for (;;)`, `do … while`, a
+  `for` over an endless iterator, or a function that calls itself; every way out of the rounds (the loop's own
+  test, a `break`, a `return`, a `raise`) taken on the model's answer; no counter the loop changes, no clock and
+  no budget read where it decides to go on, and no person asked in each round. A loop that something else can end
+  too (a queue that runs out, a flag the code sets, a limit a helper checks) is counted apart and is no finding.
+  Also a library's own agent loop with its limit switched off: LangChain's `AgentExecutor(max_iterations=None)`
+  with no time limit, the AI SDK's `stopWhen` made only of `hasToolCall(...)`, or `maxSteps: Infinity`. Ranked
+  medium: a cost with no end, not a way in. The flow step's record counts what it read (`scope.agent_loops`).
+  Measured on 30 folders before and after, written down before the first run: 478 findings, none gone, none new,
+  none changed; none of the 30 folders has an agent loop, so no precision is known. Tests:
+  `tests/test_agent_loop.py`.
+- Fixed: a model call on a client that a model's library made at a file's top (`claude.messages.create(...)` on
+  `claude = anthropic.Anthropic()`) was handed to the project's one method of the same name where the map had
+  linked it by the method's name alone, so none of the AI rules saw the call. Such a call now stays the
+  library's, only for the names of model calls, whose whole path is the library's own. Found while writing
+  `LA-UNBOUNDED-AGENT-LOOP`; none of the 30 measured folders changed. Tests: `tests/test_ai_pack.py`.
 - New heuristic `LA-UNSAFE-MCP-TOOL` (roadmap stage 5, the AI-app pack's second version; labelled heuristic): a
   tool handed to a model that runs what the model puts into it. A model chooses a tool's arguments, and whoever
   can put words into what it reads (a message, a web page, a file, another tool's answer) can choose them through

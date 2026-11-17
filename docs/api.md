@@ -587,7 +587,14 @@ stage: what a model puts into a function of the project it is handed as a tool, 
 (functions a library is told are tools a model may call), `flows`, `findings` (new `LA-UNSAFE-MCP-TOOL` findings),
 `approval_asked` (flows not kept because a person is asked first: the library's approval flag, or a question in the
 function before the action), `reads_only` (flows to a file that is only read), `on_model_findings` (flows to a line
-an `LA-MODEL-OUTPUT-TO-TOOL` finding already names)`}`)`}`; `partial` when a file could not be read, a function could not be followed or the
+an `LA-MODEL-OUTPUT-TO-TOOL` finding already names)`}`), `agent_loops` (only when a paid model call or a
+finding is there, since the same stage: loops and functions that call themselves with a paid model call in each
+round, `{paid_calls` (model calls paid for each time, known by the library's own name for them), `loops` (rounds
+that make a paid call and that the model's answer can end), `capped` (of those, the ones where a count the loop
+changes, a clock or a budget is read where it decides to go on), `asked` (a person says yes to each round),
+`ends_otherwise` (something else can end them too: a queue that runs out, a flag the code sets, a limit a helper
+checks), `settings_off` (a library's own agent loop with its limit switched off), `findings`
+(`LA-UNBOUNDED-AGENT-LOOP` findings, the loops and the settings)`}`)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
 (22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
@@ -907,6 +914,11 @@ for a provider's: the word of its address, or the header or event name in its li
 (how many such places are not listed, only when there are more), `"at"` (the line of the check that lets a failed
 message on, or that comes after the write; absent for `none`), `"at_file"` (the file that line is in, only when it
 is not the route's own)`}`),
+`agent_loop` (`LA-UNBOUNDED-AGENT-LOOP`, since stage 5: `{"kind"`: `loop`|`itself`|`setting`, `"paid"` [the
+paid calls made in each round, at most 4: `{"file", "line", "what"` (the call as written), `"through"` (only
+where the call is made in a function the round calls: the place of the model call itself, `file:line`)`}`],
+`"ends"` [the conditions on the model's answer that end the rounds, at most 4: `{"line", "what"}`], `"setting"`
+(only for `setting`: the words of the limit that is switched off)`}`),
 `row_rules` (`LW-NO-RLS` only, since 2026-11-14, `websec.row_rules`: what the project's SQL files, replayed in the
 order they are applied (`lantern/rowrules.py`), leave open on one table: `{"table"` (`<schema>.<name>`), `"state"`:
 `off` (the files create the table and never switch row-level security on), `off-in-the-files` (the same, and code
