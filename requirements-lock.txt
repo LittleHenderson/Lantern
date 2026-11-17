@@ -111,6 +111,8 @@ pyparsing==3.3.3
     # via pip-requirements-parser
 pytest==9.2.0
     # via lantern (pyproject.toml)
+python-multipart==0.0.32
+    # via lantern (pyproject.toml)
 pyyaml==6.0.3
     # via bandit
 requests==2.34.2

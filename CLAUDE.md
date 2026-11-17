@@ -832,7 +832,10 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   names and versions, never code). `--offline` skips the audits and the fetch.
 * A library a new test needs goes in the `dev` extra in `pyproject.toml` and, pinned, in `requirements-lock.txt`
   (its header says how to refresh it; put the hand-written header back afterwards). CI installs `.[scan,dev]` and
-  fails a run in which a test was skipped for a missing library; never work round that with a skip.
+  fails a run in which a test was skipped for a missing library; never work round that with a skip. A test that
+  starts an app names the libraries the app loads by itself too (`pytest.importorskip("python_multipart")` for a
+  FastAPI app that takes a form): `tests/test_isolation.py` holds every name a test asks for against the lists, so
+  a library that only this computer happens to have is found before a run on exactly the listed ones fails.
 * A test that reads Lantern's own files (a page of `lantern/viewer/`, a module's source, a walk over the modules)
   takes them from `tests/lantern_files.py` (`PACKAGE`, `VIEWER`, `page(name)`, `modules(deep=)`, `named(path)`), never
   from the checkout's `lantern/` folder: the release runs every test against the installed package with that folder

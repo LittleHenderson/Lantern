@@ -32,6 +32,9 @@ file. New entries go under `## Unreleased`, on top.
   Nothing was done once there, so that it was not done twice proved nothing. Found by the first run above.
 - Not in it: other frameworks, a sign-in kept in a cookie, an API key in a header of its own, the other kinds of
   check, what two people of one team may do to each other, and running the plan from the app or the website.
+- Lantern's own tests need one more library, `python-multipart` (the `dev` extra, pinned in
+  `requirements-lock.txt`): FastAPI reads a form with it, the starter notes app takes its sign-in as a form, and
+  the new tests start that app with the plan written for it. Lantern itself does not use it.
 - The fix contract (roadmap stage 3; `docs/fix.md`, `lantern/fixcheck.py`): Lantern calls a finding fixed only when
   the change shows seven things: the finding is gone and not moved, nothing was hushed with a `# nosec` comment or
   an accepted-risk entry, every scanner still read what it read, no route or link between page and server broke, no

@@ -1034,6 +1034,7 @@ def test_with_one_part_wrong_the_case_for_that_part_breaks_and_no_other(tmp_path
 @pytest.mark.parametrize("solved", [False, True])
 def test_the_starter_notes_app_gets_a_plan_that_runs_as_it_is(tmp_path, solved):
     pytest.importorskip("fastapi")
+    pytest.importorskip("python_multipart")     # the starter takes its sign-in as a form, which FastAPI reads with it
     repo = tmp_path / "notes-api"
     learn.scaffold("notes-api", repo, solved=solved)
     made = behave_init.write(repo)
