@@ -23,8 +23,9 @@ CONF_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 SEV_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 LANGS = ("python", "typescript/javascript")      # as `engine.build_graph` names them in `g.meta["languages"]`
 RAW_PLACE = "LW-XSS-RAW"                         # websec.template_rules: a template prints a value without escaping
-# where a flow starts that is not what a request sent: text a model wrote, and what a model hands a tool. Such flows
-# are the AI pack's (`aiapp.from_flows`, `LA-MODEL-OUTPUT-TO-TOOL`), never another tool's finding or an `LT-` one
+# where a flow starts that is not what a request sent: text a model wrote, and what a model puts into a function it
+# is handed as a tool. Such flows are the AI pack's (`aiapp.from_flows`, `LA-MODEL-OUTPUT-TO-TOOL`;
+# `aiapp.from_tool_flows`, `LA-UNSAFE-MCP-TOOL`), never another tool's finding or an `LT-` one
 MODEL_ORIGINS = frozenset({"model", "tool"})
 
 
@@ -170,8 +171,10 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
                        if not (f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in stood_for)]
     groups: dict[tuple, list[dict]] = {}
     model: dict[tuple, list[dict]] = {}     # text a model wrote, followed to an action: the AI pack's own findings
+    tools: dict[tuple, list[dict]] = {}     # what a model puts into a tool, followed to an action: the AI pack's too
     for fl in res.flows:
-        (groups if from_request(fl) else model).setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
+        where = groups if from_request(fl) else tools if fl.get("origin") == "tool" else model
+        where.setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
     by_file: dict[str, list[dict]] = {}
     for f in findings:
         if f.get("file"):
@@ -215,10 +218,13 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         f["flow"] = shaped
         out.append(f)
         by_file.setdefault(file, []).append(f)
-    from .aiapp import from_flows, made_safe
+    from .aiapp import from_flows, from_tool_flows, made_safe
     made, on_older = from_flows({k: _shape(v) for k, v in model.items()}, by_file, lines_for,
                                 res.engine.model_safe)
     out.extend(made)
+    # a tool handed to a model that runs, asks the database, or writes or removes a file with what it is given
+    tool_made, tool_text = from_tool_flows(tools, by_file, lines_for, res.engine)
+    out.extend(tool_made)
     # the older reading of that rule, inside one function by the names of its lines, on a line where this step saw the
     # model's text arrive made safe on every way (checked against a list of the code's own, made a number): not kept
     checked = made_safe(findings, res.engine.model_safe)
@@ -313,7 +319,9 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         notes.append("the time limit was reached before every function was read")
     fields = {"version": VERSION, "findings": len(out), "duration_ms": int((time.perf_counter() - t0) * 1000),
               "scope": {"files": st.get("files", 0), "functions": st.get("functions", 0),
-                        "flows": len(res.flows) - sum(len(v) for v in model.values()),     # what a request sent
+                        # what a request sent
+                        "flows": len(res.flows) - sum(len(v) for v in model.values()) -
+                        sum(len(v) for v in tools.values()),
                         "on_other_findings": attached, "not_followed_further": st.get("stopped", 0),
                         "login_read_from_code": len(named_open),
                         "token_check_lets_on": lets_on, "sender_checked": sender_checked}}
@@ -322,6 +330,8 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
     if model or checked:    # text a model wrote, followed to a command, a query, `eval`, an address or a file
         fields["scope"]["model_text"] = {"flows": sum(len(v) for v in model.values()), "findings": len(made),
                                          "on_older_findings": on_older, "checked_by_code": checked}
+    if tool_text["tools"]:      # functions a model is handed as tools, and what their inputs were followed to
+        fields["scope"]["tool_text"] = tool_text
     if stood_for:       # ... and the routes whose "no login" finding a webhook finding stands for
         fields["scope"]["webhook_for_no_login"] = len(stood_for)
     if notes:

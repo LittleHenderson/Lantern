@@ -460,6 +460,82 @@ def made_safe(findings: list[dict], safe: set) -> int:
     return len(drop)
 
 
+def tool_asked(fl: dict, asks: dict) -> bool:
+    """Whether a person is asked before the action of a flow from a tool's input: a question (`flow_rules.ASKS`, read
+    by the name of the call) in the same function as a step of the way, on a line before that step."""
+    for s in fl.get("steps") or ():
+        for first, end, at in asks.get(s.get("file"), ()):
+            if first <= at < s.get("line", 0) <= end:
+                return True
+    return False
+
+
+def from_tool_flows(groups: dict, by_file: dict, lines_for=None, engine=None) -> tuple[list[dict], dict]:
+    """`LA-UNSAFE-MCP-TOOL` from the data-flow step (`flowscan.run`): `groups` holds, for each (kind of action, file,
+    line), the flows that start at what a model puts into a function it is handed as a tool (`flow.Engine.find_tools`,
+    origin "tool"). One line is one finding. Not made: a flow to a file that is only read (`flow.WRITES`), a flow where
+    a person is asked first (the library's approval setting where the tool is made, `Tool.approval`, or a question in
+    the code before the action, `tool_asked`), and a line already found as text the model wrote reaching it
+    (`LA-MODEL-OUTPUT-TO-TOOL`: one problem, one finding). Returns (the findings, the record's counts)."""
+    from .flow_rules import CWE, MODEL_RULE, MODEL_WHAT, TOOL_RULE, TOOL_WHAT
+    from .flowscan import _shape
+    from .websec import _finding
+    tools = getattr(engine, "tools", None) or {}
+    sources = getattr(engine, "tool_sources", None) or {}
+    asks = getattr(engine, "asks", None) or {}
+    said = {f"Text the model wrote is used as {what}": cls for cls, what in MODEL_WHAT.items()}
+    rec = {"tools": len(tools), "flows": 0, "findings": 0, "approval_asked": 0, "reads_only": 0,
+           "on_model_findings": 0}
+    made: list[dict] = []
+    for (cls, file, line), group in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
+        rec["flows"] += len(group)
+        if cls == "path":
+            reads = [fl for fl in group if not fl.get("writes")]
+            rec["reads_only"] += len(reads)
+            group = [fl for fl in group if fl.get("writes")]
+        left = []
+        for fl in group:
+            src = fl["source"]
+            tool = sources.get((src["file"], src["line"], src["what"]))
+            if (tool is not None and tool.approval) or tool_asked(fl, asks):
+                rec["approval_asked"] += 1
+            else:
+                left.append(fl)
+        if not left:
+            continue
+        if any(f.get("rule") == MODEL_RULE and f.get("line") == line and said.get(f.get("title")) == cls
+               for f in by_file.get(file, ())):
+            rec["on_model_findings"] += len(left)
+            continue
+        fl = _shape(left)
+        what = TOOL_WHAT[cls]
+        src = fl["source"]
+        text = ""
+        if lines_for is not None:
+            lines = lines_for(file)
+            text = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+        files = len({s["file"] for s in fl["steps"]})
+        more = (f"What the model puts into a tool is followed to this line from {src['file']}:{src['line']} "
+                f"({src['what']}) in {len(fl['steps'])} steps" + (f" through {files} files" if files > 1 else "") +
+                (f", and {fl['count'] - 1} more tool input(s) reach it too" if fl["count"] > 1 else "") +
+                f", and used as {what} here. The model chooses a tool's arguments, and anything that can put words "
+                "into what it reads (a visitor's message, a web page, a file, another tool's answer) can choose them "
+                "through it. Keep the tool to what it is for: check the value against a list the code holds, keep a "
+                "path inside a folder the code names, hand values to the database as parameters, or have a person "
+                "approve each call (the library's approval setting, or a question before the action). Heuristic: a "
+                "tool is known by the library's own name for making one, a person's approval by the name of the call "
+                "that asks, and Lantern does not know what the model reads.")
+        f = _finding(TOOL_RULE, f"A tool handed to the model uses what it is given as {what}", "HIGH", file, line,
+                     category="code", conf="LOW", cwe=CWE[cls], more=more, snippet=text[:200],
+                     fixed_rank="medium" if fl["confidence"] == "LOW" else None)
+        f["tool"] = "lantern-flow"
+        f["flow"] = fl
+        made.append(f)
+        by_file.setdefault(file, []).append(f)
+        rec["findings"] += 1
+    return made, rec
+
+
 def _said(value) -> str:
     """The text of a notebook cell or output: one text, or a list of lines. The file comes with the project, so
     whatever else is there is read as the text it would print as: a key written inside it is still a key."""

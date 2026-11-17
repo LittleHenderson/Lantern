@@ -51,9 +51,11 @@ MOST_ASKED = 400     # parts of one query that are looked at for the field that 
 MAX_FILE = 2_000_000
 DOM_OK = {"xss", "redirect"}
 # A value that did not come with a request does harm only in some kinds of action (`Taint.origin`): the page's own
-# address in the browser in a page or a redirect, text a model wrote (`flow_rules.MODEL_CALL`) and what a model hands a
-# tool where it is run, asked of the database, fetched or names a file. A request's own data ("server") in all of them.
-ORIGIN_KINDS = {"dom": DOM_OK, "model": R.MODEL_OK, "tool": R.MODEL_OK}
+# address in the browser in a page or a redirect, text a model wrote (`flow_rules.MODEL_CALL`) where it is run, asked of
+# the database, fetched or names a file, and what a model puts into a tool it was handed (`Engine.find_tools`) where it
+# is run, asked of the database or names a file (`R.TOOL_OK`: one that is only read is told apart by `WRITES`). A
+# request's own data ("server") in all of them.
+ORIGIN_KINDS = {"dom": DOM_OK, "model": R.MODEL_OK, "tool": R.TOOL_OK}
 URL_NEEDS = {"nohost", "nolocal"}
 URL_OPEN = URL_NEEDS | {"based"}        # ... and "based": the value follows a start of the server's own (`R.BASE`)
 FIXED0: frozenset = frozenset()
@@ -124,7 +126,7 @@ class Taint(NamedTuple):
     safe: frozenset      # the kinds of action this value has been made safe for (and marks such as "path:resolved")
     steps: tuple         # ((file, line, words), ...)
     origin: str | None   # "server" | "dom" (the page's address) | "model" (text a model wrote) | "tool" (what a model
-    #                      hands a tool it was given); see `ORIGIN_KINDS`
+    #                      puts into a function of the project it is handed as a tool); see `ORIGIN_KINDS`
     drop: frozenset      # kinds whose earlier safety no longer holds (the name of an entry inside an uploaded archive)
 
 
@@ -1085,6 +1087,24 @@ class SinkRec(NamedTuple):
     node: str | None
 
 
+# A file action that writes, changes or removes the file it is handed, and not only reads it (`Engine.hit(needs=)`,
+# `file_changed`). A mark carried with the flow (`"writes": True`) and the sink, never a condition: a tool that
+# only reads a file is not `LA-UNSAFE-MCP-TOOL`, a request that names a file to read is still `LT-PATH`.
+WRITES = frozenset({"writes"})
+
+
+class Tool(NamedTuple):
+    """A function of the project that a library is told is a tool a model may call (`Engine.find_tools`): what the
+    model puts into its parameters is followed like what a request sent, with the origin "tool"."""
+    name: str             # the tool's name where the code says it, else the function's or the value's; "" for none
+    via: str              # how the code makes it a tool, as written: `mcp.tool`, `function_tool`, `server.tool`
+    file: str
+    line: int
+    fills: str            # the parameters the model fills: "all", "after-first" (the first is the run's context), "first"
+    approval: bool        # the library is told to ask a person before each call (`needs_approval=True`)
+    every: bool = False   # one handler of every tool of a server (the MCP SDK's low-level server)
+
+
 class Az:
     """What one route, or one function for its summary, shows about who may reach what."""
     __slots__ = ("ev", "pev", "records", "sender", "wrote")
@@ -1195,12 +1215,14 @@ class Ctx:
             self.set_on: set = set()     # records read into an object on which a field was set (`Engine.changed`)
 
     def flow(self, cls, t: Taint, steps, conf, what, file, line, node, unless=FIXED0, change=False, had=None,
-             hadp=None, act=None) -> None:
+             hadp=None, act=None, writes=False) -> None:
         top = self.top
         key = (cls, file, line, t.key)
         f = {"class": cls, "file": file, "line": line, "sink": what, "confidence": conf, "node": node,
              "origin": t.origin or "server", "source": {"file": t.key[0], "line": t.key[1], "what": t.key[2]},
              "steps": [{"file": a, "line": b, "what": c} for a, b, c in steps]}
+        if writes:      # the file action here writes, changes or removes the file (`WRITES`)
+            f["writes"] = True
         if cls == "record":
             # no finding by itself: the route it is reached from decides, with every check it makes (`Engine.authz`).
             # `unless`: parameters that make the record the caller's own if they are who is signed in; `had`: the
@@ -1218,8 +1240,7 @@ class Ctx:
                 self.az.records[key] = f
             return
         old = top.flows.get(key)
-        if old is None or len(f["steps"]) < len(old["steps"]):
-            top.flows[key] = f
+        top.flows[key] = kept_flow(old, f)
 
     def sink(self, rec: SinkRec) -> None:
         top = self.top
@@ -1228,8 +1249,47 @@ class Ctx:
         if old is None:
             top.sinks[key] = rec
         else:
-            top.sinks[key] = old._replace(safe=old.safe & rec.safe, needs=old.needs & rec.needs,
+            # a need is what must hold for the action to do harm: both ways must need it. That the action writes is
+            # a fact of the line: one way that hands it the file it writes is enough (`shutil.copy(p, p + ".bak")`)
+            top.sinks[key] = old._replace(safe=old.safe & rec.safe,
+                                          needs=(old.needs & rec.needs) | ((old.needs | rec.needs) & WRITES),
                                           drop=old.drop | rec.drop)
+
+
+def kept_flow(old: dict | None, f: dict) -> dict:
+    """Of two flows to the same line from the same origin, the shorter way, which keeps that the line writes the file
+    when either says so (`WRITES`)."""
+    if old is None:
+        return f
+    keep = f if len(f["steps"]) < len(old["steps"]) else old
+    if (f.get("writes") or old.get("writes")) and not keep.get("writes"):
+        keep = dict(keep, writes=True)
+    return keep
+
+
+def opens_to_write(mode: "N | None") -> bool:
+    """Whether a file opened with this mode, as the call writes it, may be written: Python's `"w"`, `"a"`, `"x"`,
+    `"r+"`, Node's `'w'`, `'a'`, `'r+'`, flags of `os.open` with `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC` or
+    `O_APPEND`. No mode is a read. A mode Lantern cannot read (a variable) may be either, and counts as a write."""
+    if mode is None:
+        return False
+    if mode.k == "const":
+        return isinstance(mode.a, str) and bool(set(mode.a) & set("wax+"))
+    flags = {x.name for x in every_node(mode) if x.k in ("name", "attr") and x.name}
+    if flags & R.OPEN_WRITE_FLAGS:
+        return True
+    return not flags & R.OPEN_READ_FLAGS
+
+
+def file_changed(name: str, e: "N") -> bool:
+    """Whether the file action `name` writes, changes or removes the file its first argument names (`os.remove`,
+    `fs.writeFileSync`, `open(path, "w")`, the place `shutil.move` moves a file from), and not only reads it
+    (`open(path)`, `fs.readFile`, the file `shutil.copy` copies; where a file is copied to is written: the second
+    argument, `Engine.sinks`)."""
+    if R.OPENS.match(name):
+        items, kw = e.items or (), e.kw or {}
+        return opens_to_write(items[1] if len(items) > 1 else kw.get("mode", kw.get("flags")))
+    return bool(R.FILE_CHANGES.match(name)) and (not R.PATH_BOTH_ARGS.search(name) or bool(R.FILE_MOVES.search(name)))
 
 
 class Soft(NamedTuple):
@@ -1464,6 +1524,12 @@ class Engine:
         # (file, line, kind of action) where text a model wrote arrived made safe for it (`hit`): the older reading of
         # `LA-MODEL-OUTPUT-TO-TOOL`, inside one function and by the names of the lines, is not kept there
         self.model_safe: set = set()
+        # functions a model is handed as tools (`find_tools`): id(Fn) -> Tool; the source of each tool's parameters
+        # (`tool_param`: (file, line, words)) -> its Tool; and where a person is asked inside a function before it
+        # goes on (`call1`, `R.ASKS`): file -> {(the function's first line, its last, the line of the question)}
+        self.tools: dict = {}
+        self.tool_sources: dict = {}
+        self.asks: dict = {}
         self._assigned: dict = {}          # function key -> {name: what it is set to in the function's own lines}
         self.before: dict = {}             # route function key -> {dependency name: its function's key or None}
         self.sent: dict = {}               # a request value's key (file, line, words) -> (its name, the part it is in)
@@ -1510,6 +1576,7 @@ class Engine:
         if flow_js is not None:
             for mod in flow_js.build_all(self.repo, MAX_FILE, self.stats):
                 self.add(mod)
+        self.find_tools()
 
     def add(self, mod: Mod) -> None:
         self.mods[mod.file] = mod
@@ -1556,6 +1623,329 @@ class Engine:
                     way.maker, way.derived = fn.key, made_from(back)
                     self.given[id(back)], self.hands_back[fn.key] = way, back
                     break
+
+    # ---- functions a model is handed as tools (`LA-UNSAFE-MCP-TOOL`)
+    def find_tools(self) -> None:
+        """Every function of the project that a library is told is a tool a model may call, known by the library's
+        own name for that (`R.TOOL_MAKER_PY`, `TOOL_SERVER_PY`, `TOOL_LIST_PY`, `TOOL_REG_JS`, `TOOL_LOW_JS`), never by
+        a name of the project's: a class of the project with a method called `tool` makes no tool. Also the methods a
+        call of the tool runs of a class made from a library's tool class (`R.TOOL_CLASS_PY`), functions handed to an
+        agent in a list (`R.TOOL_LIST_PY`, `TOOL_LIST_ARG_PY`) and the AI SDK's tools written as plain objects
+        (`R.TOOL_OBJECTS_JS`). What the model puts into such a function is its parameters (`tool_param`, origin
+        "tool")."""
+        for mod in list(self.mods.values()):
+            try:
+                if mod.lang == "py":
+                    self._py_tools(mod)
+                else:
+                    self._js_tools(mod)
+            except RecursionError:
+                self.errors.append(f"{mod.file}: nested too deep to look for the tools it makes")
+
+    def add_tool(self, fn, tool: Tool) -> None:
+        """`fn` is a tool; the first way the code makes it one stands."""
+        if isinstance(fn, Fn):
+            self.tools.setdefault(id(fn), tool)
+
+    def py_canon(self, mod: Mod, dotted: str, depth: int = 0) -> str | None:
+        """What a dotted name written in a Python file stands for, by the file's imports: a library's name
+        (`function_tool` -> `agents.function_tool`), or `<class>()` and what follows it for an object that a file of
+        the project makes at its top with a library's class (`mcp.tool` -> `mcp.server.fastmcp.FastMCP().tool`), also
+        where that object is imported from the file that makes it. None for a name of the project's own and for one
+        Lantern cannot place."""
+        if depth > 3 or not dotted:
+            return None
+        head, _, rest = dotted.partition(".")
+        tail = "." + rest if rest else ""
+        origin = mod.imports.get(head)
+        if origin is not None:
+            if not origin.startswith("."):
+                return origin + tail
+            full = self.absolute(mod, origin)        # imported from a file of the project
+            home, _, name = full.rpartition(".")
+            other = self.py_mods.get(home)
+            if other is not None and other is not mod and name:
+                return self.py_canon(other, name + tail, depth + 1)
+            other = self.py_mods.get(full)
+            if other is not None and other is not mod and rest:
+                return self.py_canon(other, rest, depth + 1)
+            return None
+        if head in mod.names:           # a function or a class of this file
+            return None
+        for v in mod.consts.get(head) or ():
+            if isinstance(v, N) and v.k == "call" and v.a is not None and v.a.k in ("name", "attr"):
+                made = self.py_canon(mod, text_of(v.a), depth + 1)
+                if made and "()" not in made:
+                    return made + "()" + tail
+        return None
+
+    @staticmethod
+    def py_tool_way(canon: str | None) -> tuple[str, bool] | None:
+        """Which parameters a model fills of a function that the library call `canon` makes a tool of ("all",
+        "after-first"), and whether the function is handed the calls of every tool of a server (the MCP SDK's
+        low-level `call_tool`); None where the call makes no tool."""
+        if not canon:
+            return None
+        if R.TOOL_MAKER_PY.match(canon):
+            return "all", False
+        cls, sep, member = canon.rpartition("().")
+        if sep:
+            for rx, members, fills, every in R.TOOL_SERVER_PY:
+                if member in members and rx.match(cls):
+                    return fills, every
+        return None
+
+    def py_fn(self, mod: Mod, x: N | None) -> Fn | None:
+        """The function of the project `x` names in a Python file: one of the file, one it imports from another
+        file, or a function written in place (`lambda`)."""
+        if x is None:
+            return None
+        if x.k == "fn" and isinstance(x.a, Fn):
+            return x.a
+        if x.k != "name":
+            return None
+        here = mod.names.get(x.name)
+        if isinstance(here, Fn):
+            return here
+        origin = mod.imports.get(x.name)
+        return self.imported(mod, origin) if origin and origin.startswith(".") else None
+
+    def py_class_home(self, mod: Mod, dotted: str) -> tuple:
+        """The file of the project and the name in it of a class `dotted` names where the file imports it from another
+        file of the project (`from srv.base import GuardedTool`, `base.GuardedTool`); (None, "") otherwise."""
+        head, _, rest = dotted.partition(".")
+        origin = mod.imports.get(head)
+        if not origin or not origin.startswith("."):
+            return None, ""
+        full = self.absolute(mod, origin)
+        home, _, name = full.rpartition(".")
+        other = self.py_mods.get(home)
+        if other is not None and other is not mod and not rest and name in other.bases:
+            return other, name
+        other = self.py_mods.get(full)
+        if other is not None and other is not mod and rest in other.bases:
+            return other, rest
+        return None, ""
+
+    def py_tool_class(self, mod: Mod, cls: str, depth: int = 0) -> tuple | None:
+        """Where the class `cls` of the file is made from a library's tool class (`R.TOOL_CLASS_PY`), also through
+        classes of the project in this file or one it imports from: the methods a call of the tool runs and the base
+        as written; None for any other class."""
+        if depth > 5:
+            return None
+        for b in mod.bases.get(cls, ()):
+            canon = self.py_canon(mod, b)
+            for rx, methods in R.TOOL_CLASS_PY if canon else ():
+                if rx.match(canon):
+                    return methods, b
+            if canon:
+                continue
+            if b in mod.bases and b != cls:
+                got = self.py_tool_class(mod, b, depth + 1)
+            else:
+                other, name = self.py_class_home(mod, b)
+                got = self.py_tool_class(other, name, depth + 1) if other is not None else None
+            if got is not None:
+                return got[0], b
+        return None
+
+    @staticmethod
+    def py_lists(unit: Fn) -> dict:
+        """The lists written in a function's own lines under a name (`tools = [search, run]`): name -> [list, ...]."""
+        out: dict = {}
+        for x in every_node(unit.body):
+            if x.k == "assign" and x.a is not None and x.a.k == "seq" and len(x.items or ()) == 1 and \
+                    x.items[0] is not None and x.items[0].k == "name":
+                out.setdefault(x.items[0].name, []).append(x.a)
+        return out
+
+    def _py_tools(self, mod: Mod) -> None:
+        classes: dict = {}
+        for fn in mod.fns:
+            for d in fn.decorators:
+                m = R.DECORATOR.match(d or "")
+                way = self.py_tool_way(self.py_canon(mod, m.group(1))) if m else None
+                if way is None:
+                    continue
+                said = m.group(2) or ""
+                n = R.TOOL_NAME_KW.search(said) or R.TOOL_NAME_FIRST.match(said)
+                ok = R.TOOL_APPROVAL.search(said)
+                fills, every = way
+                self.add_tool(fn, Tool("" if every else n.group(2) if n else fn.name, m.group(1), mod.file, fn.line,
+                                       fills, bool(ok and ok.group(1) not in R.TOOL_NO_APPROVAL), every))
+                break
+            if fn.cls and fn.cls in mod.bases:      # a method of a class made from a library's tool class
+                if fn.cls not in classes:
+                    classes[fn.cls] = self.py_tool_class(mod, fn.cls)
+                got = classes[fn.cls]
+                if got is not None and fn.name in got[0]:
+                    self.add_tool(fn, Tool(fn.cls, got[1], mod.file, fn.line, "all", False))
+        agents = any(R.TOOL_LIST_PY.match(o) for o in mod.imports.values() if o and not o.startswith("."))
+        seen: set = set()
+        for unit in [mod.top] + mod.fns:
+            kept = None         # the lists this function keeps under a name, read when first asked for
+            for x in all_nodes(unit.body):
+                if not isinstance(x, N) or x.k != "call" or x.a is None or id(x) in seen:
+                    continue
+                seen.add(id(x))
+                via = text_of(x.a)
+                canon = self.py_canon(mod, via)
+                kw = x.kw or {}
+                way = self.py_tool_way(canon)
+                if way is not None:     # `mcp.add_tool(f)`, `Tool(f)`, `StructuredTool.from_function(func=f)`
+                    handed = next((kw[k] for k in ("func", "fn", "function", "handler", "coroutine") if k in kw),
+                                  None) or next((it for it in x.items or () if self.py_fn(mod, it) is not None), None)
+                    f = self.py_fn(mod, handed)
+                    if f is not None:
+                        name = kw.get("name")
+                        asked = next((kw[k] for k in ("needs_approval", "requires_approval", "require_approval")
+                                      if k in kw), None)
+                        fills, every = way
+                        self.add_tool(f, Tool("" if every else name.a if name is not None and name.k == "const" and
+                                              isinstance(name.a, str) else f.name, via, mod.file, x.line, fills,
+                                              asked is not None and not (asked.k == "const" and not asked.a), every))
+                    continue
+                last = x.a.name if x.a.k == "attr" else (canon or via).rpartition(".")[2]
+                listed = kw.get("tools")
+                at = R.TOOL_LIST_ARG_PY.get(last)
+                if listed is None and at is not None and len(x.items or ()) > at:
+                    listed = x.items[at]
+                if listed is None or not ((canon and R.TOOL_LIST_PY.match(canon)) or
+                                          (canon is None and last == "bind_tools" and agents)):
+                    continue
+                seqs = [listed] if listed.k == "seq" else []
+                if listed.k == "name" and listed.name not in mod.names:     # a list kept under a name
+                    if kept is None:
+                        kept = self.py_lists(unit)
+                    seqs = kept.get(listed.name) or [v for v in mod.consts.get(listed.name) or ()
+                                                     if isinstance(v, N) and v.k == "seq"]
+                for seq in seqs:
+                    for it in seq.items or ():
+                        f = self.py_fn(mod, it)
+                        if f is not None:
+                            self.add_tool(f, Tool(f.name, via, mod.file, x.line, "all", False))
+
+    def js_canons(self, mod: Mod, x: N) -> list[str]:
+        """The library names a JavaScript call goes by: the map's (`ext:` taken off) and the one its first name's
+        import gives (`tool` imported from "ai" -> `ai.tool`)."""
+        out = []
+        site = self.sites.get((mod.file, x.line, x.col))
+        for t in (site or {}).get("to") or ():
+            if isinstance(t, str) and t.startswith("ext:"):
+                out.append(t[4:])
+        head, _, rest = text_of(x.a).partition(".")
+        origin = mod.imports.get(head)
+        if origin and not origin.startswith("."):
+            out.append(origin + ("." + rest if rest else ""))
+        return out
+
+    def js_fn(self, mod: Mod, x: N | None) -> Fn | None:
+        """The function of the file `x` is: one written in place, or one of the file by its name."""
+        if x is None:
+            return None
+        if x.k == "fn" and isinstance(x.a, Fn):
+            return x.a
+        here = mod.names.get(x.name) if x.k == "name" else None
+        return here if isinstance(here, Fn) else None
+
+    @staticmethod
+    def js_entry(m: N | None, key: str) -> N | None:
+        """What the object written as `m` holds under `key`."""
+        for k, v in (m.items or ()) if m is not None and m.k == "map" else ():
+            if k is not None and k.k == "const" and k.a == key:
+                return v
+        return None
+
+    @classmethod
+    def js_key(cls, x: N, key: str) -> N | None:
+        """What the objects written in the call `x` hold under `key`."""
+        for it in x.items or ():
+            got = cls.js_entry(it, key)
+            if got is not None:
+                return got
+        return None
+
+    @staticmethod
+    def js_approved(asked: N | None) -> bool:
+        """Whether the value written under the library's word for a person's approval asks for one (`needsApproval:
+        true`, a function that decides); not `false`, `null`, `0` or `undefined`."""
+        return asked is not None and not (asked.k == "const" and asked.a in (False, None, 0)) and \
+            not (asked.k == "name" and asked.name == "undefined")
+
+    def _js_tool_objects(self, mod: Mod, x: N) -> None:
+        """The AI SDK's tools written as plain objects in the call `x` (`R.TOOL_OBJECTS_JS`), each under its name, also
+        where the object of them, or one of them, is kept under a name of the file."""
+        def held(v):
+            if v is not None and v.k == "name":
+                return next((c for c in mod.consts.get(v.name) or () if isinstance(c, N) and c.k == "map"), v)
+            return v
+        box = held(self.js_key(x, "tools"))
+        for k, v in (box.items or ()) if box is not None and box.k == "map" else ():
+            v = held(v)
+            f = self.js_fn(mod, self.js_entry(v, "execute"))
+            if f is None or k is None or k.k != "const" or not isinstance(k.a, str):
+                continue
+            asked = next((a for a in (self.js_entry(v, w) for w in R.TOOL_APPROVAL_KEYS) if a is not None), None)
+            self.add_tool(f, Tool(k.a, text_of(x.a), mod.file, x.line, "first", self.js_approved(asked)))
+
+    def _js_tools(self, mod: Mod) -> None:
+        named = {id(v): k for k, vals in mod.consts.items() for v in vals or () if isinstance(v, N)}
+        seen: set = set()
+        for x in all_nodes([mod.top] + mod.fns):
+            if not isinstance(x, N) or x.k != "call" or x.a is None or id(x) in seen:
+                continue
+            seen.add(id(x))
+            items = x.items or ()
+            for canon in self.js_canons(mod, x):
+                if R.TOOL_OBJECTS_JS.match(canon):
+                    self._js_tool_objects(mod, x)
+                    break
+                where = next((w for rx, w in R.TOOL_REG_JS if rx.match(canon)), None)
+                every = where is None and bool(R.TOOL_LOW_JS.match(canon)) and bool(items) and \
+                    bool(R.TOOL_LOW_SCHEMA.search(mod.imports.get(text_of(items[0]), text_of(items[0]))))
+                if where is None and not every:
+                    continue
+                if every or where == "last":
+                    handed = next((it for it in reversed(items) if it.k in ("fn", "name")), None)
+                elif where == "first":
+                    handed = items[0] if items else None
+                else:
+                    handed = self.js_key(x, where)
+                f = self.js_fn(mod, handed)
+                if f is None:
+                    break
+                said = self.js_key(x, "name")
+                name = "" if every else items[0].a if (where == "last" and items and items[0].k == "const" and
+                                                       isinstance(items[0].a, str)) else \
+                    said.a if said is not None and said.k == "const" and isinstance(said.a, str) else \
+                    named.get(id(x)) or (f.name if f.name and not f.name.startswith("<") else "")
+                asked = next((v for v in (self.js_key(x, k) for k in R.TOOL_APPROVAL_KEYS) if v is not None), None)
+                self.add_tool(f, Tool(name, text_of(x.a), mod.file, x.line, "first", self.js_approved(asked), every))
+                break
+
+    def tool_param(self, fn: Fn, i: int, p: P, tool: Tool, base: Val) -> Val:
+        """A parameter of a function a model is handed as a tool (`find_tools`): what the model puts into the tool,
+        with the origin "tool". Not what the library hands in itself: the run's context (`R.TOOL_CONTEXT`: `ctx:
+        Context`, `config: RunnableConfig`), the first parameter of Pydantic AI's `@agent.tool`, and in JavaScript
+        every parameter after the first (the call's options). A parameter written as a number, a date or a flag
+        carries no text into an action."""
+        pos = i - (1 if fn.lang == "py" and fn.cls and fn.params and fn.params[0].name in ("self", "cls") else 0)
+        if pos < 0 or (tool.fills == "first" and pos != 0) or (tool.fills == "after-first" and pos == 0) or \
+                (p.ann and R.TOOL_CONTEXT.search(p.ann)):
+            return base
+        names = [p.name] if p.name else list(dict.fromkeys(
+            x.name for x in all_nodes(p.pattern) if isinstance(x, N) and x.k == "name" and x.name))
+        what = (", ".join(f"`{n}`" for n in names[:4]) or "what it is handed") + (" are" if len(names) > 1 else " is")
+        if tool.every:
+            words = f"{what} what the model puts into a call of any tool of the server (`{tool.via}`)"
+        elif tool.name:
+            words = f"{what} what the model puts into the tool `{tool.name}`"
+        else:
+            words = f"{what} what the model puts into a tool (`{tool.via}`)"
+        safe = R.ALL if p.ann and R.SAFE_TYPES.match(p.ann) else FIXED0
+        t = self.source(fn, fn.line, words, safe, origin="tool")
+        self.tool_sources[t.key] = tool
+        return join(base, Val((t,)))
 
     def node_for(self, file: str, fn: Fn) -> str | None:
         """The map's function that starts where this one does; of several on one line, the one with its name."""
@@ -1682,9 +2072,7 @@ class Engine:
         flows: dict = {}
         for fl in self.flows.values():
             for key, f in fl.items():
-                old = flows.get(key)
-                if old is None or len(f["steps"]) < len(old["steps"]):
-                    flows[key] = f
+                flows[key] = kept_flow(flows.get(key), f)
         out = sorted(flows.values(), key=lambda f: (f["file"], f["line"], f["class"], f["source"]["file"],
                                                     f["source"]["line"]))
         out = self.read_back_flows(out)
@@ -1845,6 +2233,9 @@ class Engine:
         py = fn.lang == "py"
         if py and i == 0 and fn.cls and name in ("self", "cls"):
             return Val(kind="self", data=fn.cls)
+        tool = self.tools.get(id(fn)) if self.tools else None
+        if tool is not None:        # what a model puts into a function it is handed as a tool
+            return self.tool_param(fn, i, p, tool, base)
         if not py and i == 0 and (self.entry(fn) or {}).get("trpc"):
             # a tRPC procedure is handed one object, whole (`opts`) or taken apart (`{ ctx, input }`): `member1`
             return Val(kind="req", data="trpc")
@@ -3077,6 +3468,9 @@ class Engine:
         """What the call gives back, and the checks on who is signed in it stands for (`asked`)."""
         f = e.a
         fn = env.fn
+        if fn is not fn.mod.top and (R.ASKS.search(text_of(f)) or R.ASKS.search(self.canon_of(e, env) or "")):
+            # a person is asked here before the function goes on (`Engine.asks`), by the name of the call
+            self.asks.setdefault(fn.file, set()).add((fn.first, fn.end, e.line))
         if e.kw and "dependencies" in e.kw:
             self.router_wide(e, env)
         recv = member = recv_expr = None
@@ -3675,11 +4069,12 @@ class Engine:
                     conf = "LOW" if guess else rec.conf
                     if ta.kind == "src":
                         if not need_sql and qkeep is None:
-                            ctx.flow(rec.cls, ta, steps, conf, at[3], at[0], at[1], at[2], unless, change, h, hp, act)
+                            ctx.flow(rec.cls, ta, steps, conf, at[3], at[0], at[1], at[2], unless, change, h, hp, act,
+                                     "writes" in rec.needs)
                     else:
                         bare = not av.prefix or av.prefix == R.BASE
                         keep = frozenset(n for n in rec.needs if (n == "sql" and need_sql) or
-                                         (n in URL_OPEN and bare) or n in ("bag", "name") or
+                                         (n in URL_OPEN and bare) or n in ("bag", "name", "writes") or
                                          n.startswith("act:")) | \
                             (frozenset({"based"}) if av.prefix == R.BASE and rec.needs & URL_OPEN else FIXED0) | \
                             frozenset(f"who:{j}" for j in unless if j != ta.key) | \
@@ -4348,7 +4743,7 @@ class Engine:
             return callee
         if recv is not None and recv.kind == "upload":
             if member in R.UPLOAD_SAVE and a0 is not None:
-                self.hit(ctx, env, "path", a0, e, what, "MEDIUM")
+                self.hit(ctx, env, "path", a0, e, what, "MEDIUM", WRITES)
                 if e.items and e.items[0].k == "name":       # from here on that file holds what was uploaded
                     self.hold(env, e.items[0].name, recv)
                 return UNKNOWN
@@ -5423,23 +5818,24 @@ class Engine:
         if name and R.TAR_EXTRACT.match(name):
             src = recv if name.startswith("tarfile") else a0
             if src is not None and src.taints and "filter" not in kw:
-                self.hit(ctx, env, "path", self.entry_names(src, e, env), e, what)
+                self.hit(ctx, env, "path", self.entry_names(src, e, env), e, what, needs=WRITES)
         elif name and R.PATH_CALL.match(name):
             p = arg(0, "file", "path", "filename", "name")
             if p is not None and not (last is not None and "root" in last.data):
-                self.hit(ctx, env, "path", p, e, what)
+                self.hit(ctx, env, "path", p, e, what, needs=WRITES if file_changed(name, e) else FIXED0)
             if R.PATH_BOTH_ARGS.search(name) and len(args) > 1 and args[1] is not None:
-                self.hit(ctx, env, "path", args[1], e, what)
+                self.hit(ctx, env, "path", args[1], e, what, needs=WRITES)      # where it is copied or moved to
         elif not name and member in R.PATH_MEMBERS:
-            if a0 is not None and member not in ("read_text", "read_bytes", "unlink", "rmdir", "iterdir") \
-                    and not (last is not None and "root" in last.data):
-                self.hit(ctx, env, "path", a0, e, what, "MEDIUM")
-            elif recv is not None and recv.taints and member in ("read_text", "read_bytes", "write_text",
-                                                                 "write_bytes", "unlink", "rmdir", "iterdir"):
-                self.hit(ctx, env, "path", recv, e, what, "MEDIUM")
+            changes = WRITES if member in R.FILE_CHANGE_MEMBERS else FIXED0
+            if a0 is not None and member not in R.PATH_ON_OBJECT and not (last is not None and "root" in last.data):
+                self.hit(ctx, env, "path", a0, e, what, "MEDIUM", changes)
+            elif recv is not None and recv.taints and member in R.PATH_ON_OBJECT:
+                self.hit(ctx, env, "path", recv, e, what, "MEDIUM", changes)
         elif recv is not None and recv.kind == "ext" and isinstance(recv.data, str) and recv.data.startswith("pathlib.") \
                 and member in (R.PATH_MEMBERS | R.PATHLIB_MEMBERS) and recv.taints:
-            self.hit(ctx, env, "path", recv, e, what)
+            changes = member in R.FILE_CHANGE_MEMBERS or (member == "open" and opens_to_write(
+                e.items[0] if e.items else (e.kw or {}).get("mode")))
+            self.hit(ctx, env, "path", recv, e, what, needs=WRITES if changes else FIXED0)
         # --- outbound requests
         if name and R.SSRF_CALL.match(name):
             u = arg(0, "url")
@@ -5622,12 +6018,14 @@ class Engine:
                 continue
             if t.kind == "src":
                 if not need_sql:
-                    ctx.flow(cls, t, cut(t.steps + (step,)), conf, what, file, line, fn.node)
+                    ctx.flow(cls, t, cut(t.steps + (step,)), conf, what, file, line, fn.node,
+                             writes="writes" in needs)
             else:
                 # an address: what a caller hands in may still say where it goes, where nothing stands before
                 # the value here, or only a start of the server's own (`R.BASE`: then text that closes the host)
                 bare = not val.prefix or val.prefix == R.BASE
-                keep = frozenset(n for n in needs if (n == "sql" and need_sql) or (n in URL_NEEDS and bare)) | \
+                keep = frozenset(n for n in needs if (n == "sql" and need_sql) or (n in URL_NEEDS and bare) or
+                                 n == "writes") | \
                     (frozenset({"based"}) if val.prefix == R.BASE and needs & URL_NEEDS else FIXED0)
                 ctx.sink(SinkRec(t.key, cls, t.safe, t.drop, cut(t.steps + (step,)), file, line, what, conf,
                                  keep, fn.node))

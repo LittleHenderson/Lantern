@@ -428,6 +428,9 @@ PATH_MEMBERS = {"read_text", "read_bytes", "write_text", "write_bytes", "unlink"
                 "download", "sendfile", "createReadStream", "createWriteStream", "readFileSync", "writeFileSync",
                 "readFile", "writeFile", "unlinkSync"}
 PATHLIB_MEMBERS = {"open", "touch", "mkdir", "rename", "replace", "glob", "rglob", "exists", "is_file", "stat"}
+# ... of which pathlib's own name the file by the object the call is made on: what `write_text` is handed is what is
+# written, not where (`p.write_text(text)`), also where Lantern does not know the object's type
+PATH_ON_OBJECT = frozenset({"read_text", "read_bytes", "write_text", "write_bytes", "unlink", "rmdir", "iterdir"})
 # ---- a page rendered from a template file (`lantern/templates.py` reads what the file prints without escaping)
 RENDER_CALL = re.compile(r"^(flask\.render_template|flask\.templating\.render_template|quart\.render_template|"
                          r"django\.shortcuts\.render|django\.template\.loader\.render_to_string|"
@@ -631,6 +634,115 @@ MODEL_OK = frozenset({"shell", "sql", "eval", "ssrf", "path"})
 MODEL_RULE = "LA-MODEL-OUTPUT-TO-TOOL"
 MODEL_WHAT = {"shell": "a shell command", "sql": "a database query", "eval": "code (eval / exec)",
               "ssrf": "a web request", "path": "a file path"}
+
+# ---- what a model hands a tool (roadmap of 2026-11-14, stage 5: `LA-UNSAFE-MCP-TOOL`)
+# A function a library is told is a tool a model may call: the model chooses its arguments, and whoever can put words
+# into what the model reads (a message, a page, a file, another tool's answer) can choose them through it. Its
+# parameters are followed like what a request sent, with the origin "tool" (`flow.ORIGIN_KINDS`, `Engine.find_tools`),
+# into the kinds of action this rule names: a command or code that is run, query text, and the place of a file that
+# is written, moved or removed. A file that is only read is counted and is no finding (`FILE_CHANGES`).
+TOOL_OK = frozenset({"shell", "sql", "eval", "path"})
+TOOL_RULE = "LA-UNSAFE-MCP-TOOL"
+TOOL_WHAT = {"shell": "a shell command", "sql": "a database query", "eval": "code (eval / exec)",
+             "path": "the path of a file it writes or removes"}
+# Python: a library's function that makes a tool of the function it decorates or is handed (by what its name stands
+# for in the file: `@tool` from `langchain_core.tools`, `@function_tool` from the Agents SDK, `Tool(f)`)
+TOOL_MAKER_PY = re.compile(
+    r"^(?:langchain(?:_core)?\.tools(?:\.convert|\.base)?\.tool|langchain\.agents(?:\.tools)?\.tool|"
+    r"crewai\.tools\.tool|crewai_tools\.tool|smolagents(?:\.tools)?\.tool|agents(?:\.tool)?\.function_tool|"
+    r"semantic_kernel\.functions(?:\.kernel_function_decorator)?\.kernel_function|pydantic_ai(?:\.tools)?\.Tool|"
+    r"langchain(?:_core)?\.tools(?:\.base|\.simple|\.structured)?\.(?:Tool|StructuredTool)(?:\.from_function)?|"
+    r"llama_index\.core\.tools\.FunctionTool(?:\.from_defaults)?|google\.adk\.tools\.FunctionTool|"
+    r"autogen_core\.tools\.FunctionTool|strands\.tool)$")
+# ... and the classes of a library whose objects do it with one of their members: an MCP server (FastMCP, in the MCP
+# SDK and on its own), Pydantic AI's agent, and the MCP SDK's low-level server, whose one handler gets every call's
+# tool name and arguments. (class, members, which parameters the model fills: "all" or "after-first", and whether
+# the function is handed the calls of every tool of the server, so that no one tool's name is said for it)
+TOOL_SERVER_PY = (
+    (re.compile(r"^(?:mcp\.server\.fastmcp(?:\.server)?|fastmcp(?:\.server(?:\.server)?)?)\.FastMCP$"),
+     frozenset({"tool", "add_tool"}), "all", False),
+    (re.compile(r"^pydantic_ai(?:\.agent)?\.Agent$"), frozenset({"tool_plain"}), "all", False),
+    (re.compile(r"^pydantic_ai(?:\.agent)?\.Agent$"), frozenset({"tool"}), "after-first", False),
+    (re.compile(r"^mcp\.server(?:\.lowlevel(?:\.server)?)?\.Server$"), frozenset({"call_tool"}), "all", True),
+)
+# A library call handed `tools=[f, g]` hands those functions to a model (LangGraph's `create_react_agent`, Pydantic
+# AI's and the Agents SDK's `Agent`, Google's ADK, smolagents, CrewAI, LlamaIndex): only a library of these
+TOOL_LIST_PY = re.compile(r"^(?:langchain[\w.]*|langgraph[\w.]*|pydantic_ai[\w.]*|agents|agents\.[\w.]+|"
+                          r"smolagents[\w.]*|crewai[\w.]*|llama_index[\w.]*|google\.adk[\w.]*|autogen[\w.]*|"
+                          r"strands[\w.]*|mcp[\w.]*|fastmcp[\w.]*)(?:\.|$)")
+# ... and where such a call takes the list without the word `tools`, by the call's last name: LangGraph's
+# `create_react_agent(model, tools)` and `ToolNode(tools)`, LangChain's agent makers, a chat model's
+# `bind_tools(tools)` (counted on a model Lantern cannot place where the file uses one of these libraries)
+TOOL_LIST_ARG_PY = {"create_react_agent": 1, "create_agent": 1, "create_tool_calling_agent": 1,
+                    "create_openai_tools_agent": 1, "create_openai_functions_agent": 1,
+                    "create_structured_chat_agent": 1, "ToolNode": 0, "initialize_agent": 0, "bind_tools": 0}
+# A class of the project made from a library's tool class, and the methods a call of the tool runs: LangChain's and
+# CrewAI's `BaseTool` (`_run`, `_arun`), smolagents' `Tool` (`forward`)
+TOOL_CLASS_PY = (
+    (re.compile(r"^(?:langchain(?:_core)?\.tools(?:\.base)?|langchain_community\.tools|crewai\.tools(?:\.base_tool)?|"
+                r"crewai_tools)\.BaseTool$"), frozenset({"_run", "_arun"})),
+    (re.compile(r"^smolagents(?:\.tools)?\.Tool$"), frozenset({"forward"})),
+)
+# JavaScript and TypeScript, by the map's name for the call (`ext:` taken off): where the function is and which of
+# its parameters the model fills (the second is the library's own: the request's extra, the call's options).
+# "last": the last function in the call (the MCP SDK's `server.tool(name, ..., handler)` and `registerTool`);
+# "first": the first (LangChain's `tool(fn, {...})`); "execute" / "func": that key of the object handed over (the AI
+# SDK's and the Agents SDK's `tool({ execute })`, Mastra's `createTool`, LangChain's `DynamicStructuredTool`).
+TOOL_REG_JS = (
+    (re.compile(r"^@modelcontextprotocol/sdk/server/mcp(?:\.js)?\.McpServer\.(?:tool|registerTool)$"), "last"),
+    (re.compile(r"^fastmcp\.FastMCP\.addTool$"), "execute"),
+    (re.compile(r"^(?:ai|@openai/agents(?:-core)?|@mastra/core(?:/tools)?)\.(?:tool|createTool)$"), "execute"),
+    (re.compile(r"^@langchain/core/tools\.tool$"), "first"),
+    (re.compile(r"^(?:new )?@langchain/(?:core/tools|community/tools/dynamic)\.(?:DynamicStructuredTool|DynamicTool)"
+                r"(?:\(\))?$"), "func"),
+)
+# ... the AI SDK's calls that take tools written as plain objects, each under its name: `generateText({ tools: { run:
+# { inputSchema, execute } } })` (an object made with `tool(...)` is the call above)
+TOOL_OBJECTS_JS = re.compile(r"^(?:new )?ai\.(?:generateText|streamText|generateObject|streamObject|ToolLoopAgent|"
+                             r"Experimental_Agent)(?:\(\))?$")
+# ... and the MCP SDK's low-level server: `server.setRequestHandler(CallToolRequestSchema, async (request) => ...)`,
+# whose handler is handed the whole call (`request.params.name`, `request.params.arguments`)
+TOOL_LOW_JS = re.compile(r"^@modelcontextprotocol/sdk/server(?:/index(?:\.js)?)?\.Server\.setRequestHandler$")
+TOOL_LOW_SCHEMA = re.compile(r"(?:^|\.)CallToolRequestSchema$")
+# A parameter the library fills itself and the model does not: the call's context, the agent's state, settings
+TOOL_CONTEXT = re.compile(r"\b(?:Context|RunContext|RunContextWrapper|ToolContext|InjectedToolArg|InjectedState|"
+                          r"InjectedStore|InjectedToolCallId|RunnableConfig|CallbackManagerForToolRun|"
+                          r"AsyncCallbackManagerForToolRun|Kernel|KernelArguments|ToolRuntime)\b")
+# The library's own word that a person approves each call before it runs, written where the tool is made, and the
+# values that switch it off
+TOOL_APPROVAL = re.compile(r"\b(?:needs_approval|requires_approval|require_approval|needsApproval|requiresApproval|"
+                           r"requireApproval)\s*[=:]\s*([^,)}\s]+)")
+TOOL_NO_APPROVAL = {"False", "false", "None", "null", "undefined", "0", "'never'", '"never"'}
+TOOL_APPROVAL_KEYS = ("needsApproval", "requiresApproval", "requireApproval", "needs_approval")    # JavaScript
+# a Python decorator as the reader writes it (`ast.unparse`): the dotted name, and what it is handed; the tool's name
+# where the call says it (`@mcp.tool(name='save')`, `@tool('lookup')`)
+DECORATOR = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*(?:\((.*)\))?\s*$", re.S)
+TOOL_NAME_KW = re.compile(r"\bname\s*=\s*(['\"])(.*?)\1")
+TOOL_NAME_FIRST = re.compile(r"\s*(['\"])(.*?)\1\s*(?:,|$)")
+# A person asked inside a function before it goes on (`Engine.asks`): an MCP elicitation, a console confirmation,
+# LangGraph's `interrupt`. Read by the name of the call, not by what is done with the answer.
+ASKS = re.compile(r"(?:^|\.)(?:elicit|elicitInput|elicit_input)$|^(?:click|typer)\.(?:confirm|prompt)$|"
+                  r"^(?:rich\.prompt\.)?(?:Confirm|Prompt)\.ask$|^questionary\.confirm\(\)\.(?:ask|ask_async|unsafe_ask)$|"
+                  r"^(?:input|confirm|window\.confirm|interrupt|langgraph\.types\.interrupt)$|"
+                  r"^(?:rl|readline|readlineInterface)\.question$|^inquirer\.prompt$")
+# The file actions that change what is on the disk (`flow.file_changed`, `flow.WRITES`): a write, a move, a copy's
+# target, a removal, a folder made, an archive unpacked. Any other file action of `PATH_CALL` only reads (opens to
+# read, lists, serves a file).
+FILE_CHANGES = re.compile(r"^(?:os\.(?:remove|unlink|rmdir|mkdir|makedirs|rename|replace|chmod|chown|truncate|"
+                          r"removedirs)|shutil\.(?:copy|copy2|copyfile|copytree|move|rmtree|unpack_archive)|"
+                          r"(?:fs|fs/promises|fs-extra|node:fs|node:fs/promises|graceful-fs|fs\.promises)\."
+                          r"(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rm|"
+                          r"rmSync|rmdir|rmdirSync|mkdir|mkdirSync|copyFile|copyFileSync|rename|renameSync|outputFile|"
+                          r"outputFileSync|remove|removeSync|copy|copySync|move|moveSync|ensureFile|ensureDir|emptyDir|"
+                          r"truncate))$")
+FILE_MOVES = re.compile(r"\.(?:move|rename|replace|renameSync|moveSync)$")      # the first place is removed too
+FILE_CHANGE_MEMBERS = {"write_text", "write_bytes", "unlink", "rmdir", "createWriteStream", "writeFileSync",
+                       "writeFile", "unlinkSync", "touch", "mkdir", "rename", "replace"}
+OPENS = re.compile(r"^(?:open|io\.open|codecs\.open|aiofiles\.open|os\.open|"
+                   r"(?:fs|fs/promises|node:fs|node:fs/promises|graceful-fs|fs\.promises|fs-extra)\.(?:open|openSync))$")
+# ... where the mode decides (`flow.opens_to_write`): the flags of `os.open` and Node's `fs.constants` by their names
+OPEN_WRITE_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_EXCL"})
+OPEN_READ_FLAGS = frozenset({"O_RDONLY"})
 
 # a finding another tool made on the same line is the same problem: the flow is attached to it, not listed twice
 SAME_PROBLEM = {

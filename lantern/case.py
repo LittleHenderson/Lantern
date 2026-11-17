@@ -147,6 +147,15 @@ def build(f: dict, g: Graph) -> dict:
                                      if fl["count"] > 1 else ""), "from": "data flow"})
         if _whose(f.get("owned")):
             evidence.append({"fact": _whose(f["owned"]), "from": "data model"})
+    elif fl and fl.get("origin") == "tool":
+        # what a model puts into a function it is handed as a tool (`LA-UNSAFE-MCP-TOOL`)
+        src = fl["source"]
+        evidence.append({"fact": f"What the model puts into the tool was followed to this line in "
+                                 f"{len(fl['steps'])} steps, starting at {src['file']}:{src['line']}: {src['what']}" + (
+                                     f" ({fl['count'] - 1} more tool input(s) reach it too)" if fl["count"] > 1
+                                     else "") + (
+                                     ". One step rests on a call matched by name only." if fl["confidence"] == "LOW"
+                                     else ""), "from": "data flow"})
     elif fl and not from_request(fl):
         # text a model wrote (the AI pack's flows): where it came from, and, apart, what the input check saw here
         src = fl["source"]
@@ -240,6 +249,18 @@ def build(f: dict, g: Graph) -> dict:
             if from_request(fl):
                 conditions[-1] = _cond("What they send reaches this line", True,
                                        f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+            elif fl and fl.get("origin") == "tool":
+                # what a model puts into a tool: that it gets here is followed; who steers the model is not known
+                conditions[-1] = _cond("What the model puts into the tool reaches this line", True,
+                                       f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+                conditions.append(_cond(
+                    "Someone outside can put words into what the model reads", None,
+                    "Lantern does not know what the model reads: a visitor's message, a web page, a file, a mail or "
+                    "another tool's answer can carry words that steer it"))
+                conditions.append(_cond(
+                    "Nobody approves each call before it runs", True,
+                    "the tool is made with no approval setting, and no question is asked before this line on the way "
+                    "Lantern followed (a question is read by the name of the call that asks it)"))
             elif fl:
                 # text a model wrote: that it gets here is followed; who can steer it is what the prompt holds
                 conditions[-1] = _cond("Text the model wrote reaches this line", True,
@@ -373,6 +394,9 @@ def _claim(f: dict, kind: str) -> str:
     if f.get("rule") == "LW-NONATOMIC-BALANCE":
         return (f"{base}. Read from one function's own lines; whether the check and the write are about the same "
                 "record is not checked.")
+    if f.get("rule") == "LA-UNSAFE-MCP-TOOL":
+        return (f"{base}. Read from the library's name for making a tool and the way its input was followed; what the "
+                "model reads, and a check made outside the code Lantern followed, are not known.")
     if f.get("rule") == "LW-UNSIGNED-WEBHOOK":
         return (f"{base}. Read from the route's own lines and the functions it calls; a signature checked by "
                 "something in front of the app, or in a way Lantern does not follow, is not seen.")
