@@ -134,6 +134,8 @@ def build(f: dict, g: Graph) -> dict:
                                  f"{src['line']}: {src['what']}" + (
                                      f" ({fl['count'] - 1} more reach a record on this route too)"
                                      if fl["count"] > 1 else ""), "from": "data flow"})
+        if _whose(f.get("owned")):
+            evidence.append({"fact": _whose(f["owned"]), "from": "data model"})
     elif fl:
         src = fl["source"]
         evidence.append({"fact": f"Request data was followed to this line in {len(fl['steps'])} steps, starting at "
@@ -298,6 +300,26 @@ def build(f: dict, g: Graph) -> dict:
             "confidence": {"level": level, "why": "; ".join(why), "about": "How sure Lantern is that the flagged pattern "
                            "is there and reached, not that it is exploitable"},
             "unknown": unknown, "status": _status(f, None)}
+
+
+def _whose(o) -> str:
+    """What the project's model files say of whose a record is, as a fact of the case (`lantern/tenantscope.py`
+    writes `owned` on an ownership finding); empty when the finding has none."""
+    if not isinstance(o, dict) or not isinstance(o.get("model"), str):
+        return ""
+    name, at = o["model"], f"({o.get('file')}:{o.get('line')})"
+    fields = [x for x in o.get("fields") or [] if isinstance(x, str)][:3]
+    maybe = [x for x in o.get("maybe") or [] if isinstance(x, str)][:3]
+    if fields:
+        return f"The project's data model names the owner of `{name}` in " + ", ".join(f"`{x}`" for x in fields) + f" {at}"
+    if o.get("itself"):
+        return f"By the project's data model `{name}` is what other records belong to {at}"
+    if isinstance(o.get("through"), str):
+        return f"The project's data model gives `{name}` no owner of its own; it belongs to `{o['through']}` {at}"
+    if maybe:
+        return (f"The project's data model names no owner for `{name}` in the usual words; "
+                + ", ".join(f"`{x}`" for x in maybe) + f" may say whose it is {at}")
+    return f"The project's data model names no owner for `{name}`, and nothing it belongs to has one {at}"
 
 
 def _claim(f: dict, kind: str) -> str:

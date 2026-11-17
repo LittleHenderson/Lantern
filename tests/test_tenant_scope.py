@@ -280,6 +280,30 @@ OPEN = {
          "  return NextResponse.json({ amount: invoice?.amount });",
          "const invoice = await prisma.invoice.findFirst({ where: { id: params.id }, "
          "select: { orgId: true, amount: true } });"),
+    "the owner field is one of two ways in":
+        ("  const invoice = await prisma.invoice.findFirst({ where: { OR: [{ id: params.id }, "
+         "{ orgId: ctx.orgId }] } });\n"
+         "  return NextResponse.json({ amount: invoice?.amount });",
+         "const invoice = await prisma.invoice.findFirst({ where: { OR: [{ id: params.id }, "
+         "{ orgId: ctx.orgId }] } });"),
+    "the query asks for the records that are not that org's":
+        ("  const invoice = await prisma.invoice.findFirst({ where: { id: params.id, NOT: { orgId: ctx.orgId } } "
+         "});\n"
+         "  return NextResponse.json({ amount: invoice?.amount });",
+         "const invoice = await prisma.invoice.findFirst({ where: { id: params.id, NOT: { orgId: ctx.orgId } } "
+         "});"),
+    "the owner field is given no value":
+        ("  const invoice = await prisma.invoice.findFirst({ where: { id: params.id, orgId: undefined } });\n"
+         "  return NextResponse.json({ amount: invoice?.amount });",
+         "const invoice = await prisma.invoice.findFirst({ where: { id: params.id, orgId: undefined } });"),
+    "the owner field is given written text":
+        ('  const invoice = await prisma.invoice.findFirst({ where: { id: params.id, orgId: "org_1" } });\n'
+         "  return NextResponse.json({ amount: invoice?.amount });",
+         'const invoice = await prisma.invoice.findFirst({ where: { id: params.id, orgId: "org_1" } });'),
+    "the owner field is among what is written onto the record":
+        ("  await prisma.invoice.update({ where: { id: params.id }, data: { orgId: ctx.orgId } });\n"
+         "  return NextResponse.json({ ok: true });",
+         "await prisma.invoice.update({ where: { id: params.id }, data: { orgId: ctx.orgId } });"),
     "the owner field is compared with what the request names":
         ("  const invoice = await prisma.invoice.findUnique({ where: { id: params.id } });\n"
          f"  if (!invoice || invoice.orgId !== params.orgId) {FORBID}\n"
@@ -431,6 +455,27 @@ def test_a_finding_names_the_field_that_says_whose_the_record_is(tmp_path):
                           "line": _line_of(SCHEMA, "model Invoice {"), "fields": ["orgId", "userId"]}
     assert f["rank"] == "medium" and f["tool_confidence"] == "LOW"
     assert "`orgId`" in f["more_info"] and "prisma/schema.prisma" in f["more_info"]
+
+
+def test_the_case_for_the_finding_names_the_place_in_the_model_file(tmp_path):
+    """An engineer who checks the finding is told where the data model says it: a fact of the case, with its place."""
+    f = _one(tmp_path / "owned", "  const invoice = await prisma.invoice.findUnique({ where: { id: params.id } });\n"
+                                 "  return NextResponse.json({ amount: invoice?.amount });")
+    line = _line_of(SCHEMA, "model Invoice {")
+    facts = [e["fact"] for e in f["case"]["evidence"] if e["from"] == "data model"]
+    assert facts == [f"The project's data model names the owner of `Invoice` in `orgId`, `userId` "
+                     f"(prisma/schema.prisma:{line})"]
+    plan = _one(tmp_path / "nobodys", "  const plan = await prisma.plan.findUnique({ where: { id: params.id } });\n"
+                                      "  return NextResponse.json({ name: plan?.name });")
+    line = _line_of(SCHEMA, "model Plan {")
+    assert [e["fact"] for e in plan["case"]["evidence"] if e["from"] == "data model"] == [
+        f"The project's data model names no owner for `Plan`, and nothing it belongs to has one "
+        f"(prisma/schema.prisma:{line})"]
+    # ... and a finding with no model named on its line has no such fact
+    none = _one(tmp_path / "none", "  const table = (prisma as any)[ctx.kind];\n"
+                                   "  const row = await table.findUnique({ where: { id: params.id } });\n"
+                                   "  return NextResponse.json({ row });")
+    assert [e for e in none["case"]["evidence"] if e["from"] == "data model"] == []
 
 
 def test_a_record_that_belongs_to_one_with_an_owner_is_said_through_it(tmp_path):

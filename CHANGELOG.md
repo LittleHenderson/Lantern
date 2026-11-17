@@ -9,6 +9,28 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The ownership check reads the project's data model (roadmap stage 5; `LT-AUTHZ-OWNER`, still labelled
+  heuristic; `lantern/tenantscope.py`, `flow.Engine.asks_owner`, `owner_field`). Where the project's model files
+  (a Prisma schema, SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`) name the field
+  that says whose a record is (`orgId`, `owner_id`, `created_by`): a query that asks for that field with a value
+  the request did not choose, and that field of the record compared after the read, count as asking for the
+  owner, so such a route is no longer listed; a finding names the field to ask for and where the model file
+  says so (`owned` on the finding, a sentence in `more_info`, a fact of the case from "data model"). A read of a
+  record to which the data gives no owner at all (a price plan, a tag) is ranked low, with the place in the
+  model file as the reason; a change or a removal of one keeps its rank, and so does any record with a field
+  that could say whose it is under another name (`customerId`, an e-mail address, a secret). Who is signed in is
+  known for more sign-in libraries (the helper Auth.js version 5 hands out, better-auth, Lucia, Auth0 version 4,
+  Kinde, WorkOS AuthKit, Supabase's `getClaims`): until now a route that asked for the owner through one of the
+  first two was listed twice as one that asks nobody. A query's `join` on a database library's value is a
+  query's join (it was read as text glued together, and a record such a query reached by an id alone was listed
+  nowhere). With no model file in the project nothing changes. Not read: Drizzle's `eq(table.ownerId, x)` and
+  SQLAlchemy's positional comparisons by the field's name (the older reading, by who is signed in, still
+  applies there), a helper function handed the owner's value by a sign-in library Lantern does not know, Django
+  REST framework's ready-made views. The roadmap's name for this is `LAUTH-MISSING-TENANT-SCOPE`; it is the same
+  finding, so the rule keeps its id. Tests: `tests/test_tenant_scope.py`.
+- Fixed: a pack's `requires` word is looked for in a project's manifest whatever its case. A `requirements.txt`
+  that writes `Django==5.1`, as `pip freeze` does, switched the Django pack on nowhere, and none of such a
+  project's routes were read.
 - New heuristic `LW-SENSITIVE-COLUMN-RETURNED` (roadmap stage 5; labelled heuristic; `lantern/wholerecord.py`): a
   record sent back whole, with a secret field in it. A query that asks for every field of a record whose model
   holds a password's hash, a reset token or a key, and an answer that hands the record on as it came: whoever
