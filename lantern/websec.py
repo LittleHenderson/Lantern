@@ -1020,6 +1020,127 @@ def own_name(signature: str) -> str:
     return m.group(1) if m and m.group(1) not in NOT_A_NAME else ""
 
 
+# A secret of the server's own, read from its settings (`process.env.NOTES_API_TOKEN`, `settings.API_TOKEN`). Its
+# name is built from an auth word, and reading it asks nobody who is calling: a route that puts it on a request to
+# another service has checked nothing. It stands in a login's place only where the request is held against it
+# (`_held_against`): the statement it stands in compares something or calls a function named for checking
+# (`_statement`, `_asks`), or a later statement does that with the name the setting was kept under. A comparison
+# with nothing (`=== undefined`, `== None`, `!== ""`) asks whether the setting is set and nobody who is calling.
+SETTING_READ = re.compile(r"(?:(?:[A-Za-z_$][\w$]*\.){0,3}env|(?:self\.|this\.)?(?:settings|config|cfg|conf|secrets)|"
+                          r"(?:current_)?app\.config)\.[A-Za-z_$][\w$]*$")
+HOLDS_AGAINST = re.compile(r"[!=]==?|(?<![\w$.])not\s+in(?![\w$])")
+SET_AT_ALL = re.compile(r"[!=]==?\s*(?:undefined|null|None|nil|~~(?!~))(?![\w$.(\[])(?!\s*\+)"
+                        r"|(?<![\w$.])(?:undefined|null|None|nil)\s*[!=]==?"
+                        r"|\btypeof\s+[\w$.]+\s*[!=]==?\s*~+")
+IS_AMONG = re.compile(r"(?<![\w$.])in(?![\w$])")
+LOOPS_OVER = re.compile(r"(?<![\w$.])for(?![\w$])")
+CALLED = re.compile(r"([A-Za-z_$][\w$]*)\s*\(")
+CHECK_NAMED = re.compile(r"\b(?:compar\w*|cmp|equals?|eq|same|verif\w*|validat\w*|valid|check(?:s|ed|er)?|authenticat\w*|"
+                         r"authori[sz]\w*|match(?:es|ed)?|guard\w*|require[sd]?|assert\w*|protect\w*|ensure[sd]?|"
+                         r"includes?|contains?|has)\b")
+KEPT_AS = re.compile(r"\s*(?:(?:export\s+)?(?:const|let|var|final)\s+)?([A-Za-z_$][\w$]*)\s*(?::[^=\n]{0,80})?=(?![=>])")
+GOES_ON = ("=", "!", "<", ">", "&", "|", "+", "-", "*", "/", "%", "?", " and", " or", " not", " in")
+COMES_ON = (".", "?", ":", "&&", "||", "==", "!=", "+", "-", "*", "/", "%", "<", ">", "and ", "or ", "in ", "not in ")
+MOST_STATEMENT = 800        # characters of a statement read to either side of a setting
+MOST_AFTER = 20_000         # characters of a handler read for the name a setting was kept under,
+MOST_USES = 12              # ...and the uses of that name that are looked at
+MOST_SETTINGS = 20          # setting reads of one handler that are looked at; past them the older reading stands
+
+
+def _opens_block(code: str, i: int) -> bool:
+    """Whether the `{` at `i` opens a block of statements (`) {`, `=> {`, `else {`) and not an object written out."""
+    j = i - 1
+    while j >= 0 and code[j] in " \t\n":
+        j -= 1
+    if j < 0:
+        return False
+    return code[j] == ")" or code[j - 1:j + 1] == "=>" or bool(re.search(r"(?<![\w$.])(?:else|try|finally|do)$",
+                                                                         code[max(0, j - 8):j + 1]))
+
+
+def _statement(code: str, s: int, e: int) -> tuple[int, int]:
+    """Where the statement begins and ends that the code at [s:e] stands in, read from its brackets: out to the
+    outermost call, list or object it is written inside (never out of a block of statements, past a `;` or past an
+    arrow), back over lines that end in an operator, and on to where that statement ends. At most `MOST_STATEMENT`
+    characters to either side; a statement cut short there only reads as holding less."""
+    lo, depth, start, i = max(0, s - MOST_STATEMENT), 0, s, s - 1
+    while i >= lo:
+        c = code[i]
+        if c in ")]}":
+            depth += 1
+        elif c in "([{":
+            if depth:
+                depth -= 1
+            elif c == "{" and _opens_block(code, i):
+                break
+            else:
+                start = i
+        elif not depth and (c == ";" or (c == ">" and i and code[i - 1] == "=")):
+            break
+        i -= 1
+    floor = i + 1
+    a = code.rfind("\n", 0, start) + 1
+    while a > floor:                # the line before ends in an operator, or this one begins with one
+        p = code.rfind("\n", 0, a - 1) + 1
+        if not (code[p:a - 1].rstrip(" \t~\\").endswith(GOES_ON) or code[a:a + 200].lstrip(" \t").startswith(COMES_ON)):
+            break
+        a = p
+    hi, depth, j = min(len(code), e + MOST_STATEMENT), 0, (start if start < s else e)
+    while j < hi:
+        c = code[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if not depth:
+                break
+            depth -= 1
+        elif not depth and c == ";":
+            break
+        elif not depth and c == "\n":
+            if not (code[code.rfind("\n", 0, j) + 1:j].rstrip(" \t~\\").endswith(GOES_ON)
+                    or code[j + 1:j + 200].lstrip(" \t").startswith(COMES_ON)):
+                break
+        j += 1
+    return max(a, floor), j
+
+
+def _asks(statement: str) -> bool:
+    """Whether a statement holds one thing against another: a comparison that is not one with nothing, a
+    membership test, or a call of a function named for checking (`CHECK_NAMED`, whole words of its last name)."""
+    text = SET_AT_ALL.sub(" ", statement)
+    if HOLDS_AGAINST.search(text) or (IS_AMONG.search(text) and not LOOPS_OVER.search(text)):
+        return True
+    return any(m.group(1) != "require" and CHECK_NAMED.search(segments(m.group(1))) for m in CALLED.finditer(text))
+
+
+def _several_secrets(name: str, js: bool) -> bool:
+    """Whether `name` reads a setting that holds several secrets (`config.PAD_TOKENS`, also with a call on it:
+    `process.env.PAD_TOKENS.split`). A plural is a list and no check by its name (`auth_word`); it stands in a
+    login's place where the request is held against it, like one secret (`_held_against`)."""
+    for read in (name, name.rpartition(".")[0]):
+        if read[-1:] in ("s", "S") and SETTING_READ.match(read) and auth_word(read[:-1], js):
+            return True
+    return False
+
+
+def _held_against(code: str, s: int, e: int) -> bool:
+    """Whether the setting read at code[s:e] is held against something of the request (`SETTING_READ`)."""
+    a, b = _statement(code, s, e)
+    if _asks(code[a:b]):
+        return True
+    m = KEPT_AS.match(code[a:s])
+    if not m:
+        return False
+    word = re.compile(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
+    for n, use in enumerate(word.finditer(code, b, min(len(code), b + MOST_AFTER))):
+        if n >= MOST_USES:
+            return True         # more uses than are read: the older reading stands
+        x, y = _statement(code, use.start(), use.end())
+        if _asks(code[x:y]):
+            return True
+    return False
+
+
 def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signature: str = "") -> tuple[str, str] | None:
     """What a handler's own lines say about checking the caller, read with strings, comments and request data
     blanked out. ("strong", evidence) for the framework's view of the caller (`request.user`), an auth word used
@@ -1043,12 +1164,25 @@ def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signatur
     m = BODY_AUTH_SHAPED.search(code)
     if m:
         return "strong", f"handler mentions `{m.group(0).rstrip(':) ')}`"
+    settings = 0
     for m in IDENT.finditer(code):   # a name built from an auth word, used as a call, attribute or decorator
-        if not auth_word(m.group(0), js):
+        several = not auth_word(m.group(0), js)
+        if several and not _several_secrets(m.group(0), js):
             continue
         shape = _use_shape(code, m.start(), m.end())
         if shape:
             kind, ident = shape
+            read = ident
+            if kind == "call" and not auth_word(ident.rsplit(".", 1)[-1], js):
+                read = ident.rpartition(".")[0]         # `settings.API_TOKEN.get_secret_value()`, `.encode()`
+            if several or ((kind == "attribute" or read != ident) and SETTING_READ.match(read)):
+                if settings >= MOST_SETTINGS:
+                    if several:
+                        continue
+                else:
+                    settings += 1
+                    if not _held_against(code, m.start(), m.end()):
+                        continue    # the server's own secret, read and handed on: nobody was asked for it
             return "strong", f"handler calls `{ident}(...)`" if kind == "call" else f"handler mentions `{ident}`"
     weak = None
     for m in USER_LOOKUP.finditer(chains):   # the lookup's result variable is tested, so read it with names intact

@@ -240,6 +240,24 @@ ROUTES = {
         HEAD + "export async function POST(req: Request, { params }: { params: { key: string } }) {\n"
         f"  if (params.key !== process.env.HOOK_KEY) {{\n    {BAD}\n  }}\n"
         "  const event = await req.json();\n" + TEAM + "}\n", None),
+    "GitHub's signature compared with a plain comparison": (
+        "app/api/webhooks/plain/route.ts",
+        _post(HMAC + f"  if (sig !== want) {{\n    {BAD}\n  }}\n  const event = JSON.parse(body);\n" + TEAM), None),
+    "a library's function named for checking the signature, and its answer asked": (
+        "app/api/webhooks/library/route.ts",
+        'import { NextResponse } from "next/server";\nimport { verifySignature } from "@acme/hooks";\n'
+        'import { prisma } from "@/lib/db";\n\n'
+        "export async function POST(req: Request) {\n  const body = await req.text();\n"
+        '  if (!verifySignature(body, req.headers.get("x-acme-signature"), process.env.ACME_HOOK_SECRET)) {\n'
+        f"    {BAD}\n  }}\n  const event = JSON.parse(body);\n" + TEAM + "}\n", None),
+    "GitHub's own library asked whether the signature holds": (
+        "app/api/webhooks/octokit/route.ts",
+        'import { NextResponse } from "next/server";\nimport { Webhooks } from "@octokit/webhooks";\n'
+        'import { prisma } from "@/lib/db";\n\n'
+        "const webhooks = new Webhooks({ secret: process.env.GITHUB_WEBHOOK_SECRET! });\n\n"
+        "export async function POST(req: Request) {\n  const body = await req.text();\n"
+        '  const held = await webhooks.verify(body, req.headers.get("x-hub-signature-256") ?? "");\n'
+        f"  if (!held) {{\n    {BAD}\n  }}\n  const event = JSON.parse(body);\n" + TEAM + "}\n", None),
     "a bearer text compared with a setting": (
         "app/api/webhooks/bearer/route.ts",
         _post('  if (req.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {\n'
@@ -291,8 +309,13 @@ def test_what_the_finding_says(tmp_path):
 def test_a_route_that_is_no_webhook_is_not_this_rules(tmp_path):
     """The same lines on a route nothing marks as a provider's: whoever sends the request chooses the record, which
     is the older finding about a route with no login, and not this one."""
-    fs = _scan(tmp_path, {**NEXT, "app/api/accounts/route.ts": _post("  const event = await req.json();\n" + TEAM)})
+    rel = "app/api/accounts/route.ts"
+    fs = _scan(tmp_path, {**NEXT, rel: _post(
+        "  const event = await req.json();\n"
+        '  await prisma.user.update({ where: { id: event.id }, data: { plan: "team" } });\n'
+        "  return NextResponse.json({ ok: true });\n")})
     assert _hooks(fs) == []
+    assert [f["rule"] for f in fs if f["file"] == rel] == ["LW-AUTH-MISSING"]
     # ... and the page a provider asks first, to see that the address is the app's (a GET that changes nothing)
     get = HEAD + ('export async function GET(req: Request) {\n'
                   '  return new Response(new URL(req.url).searchParams.get("hub.challenge") ?? "");\n}\n')
@@ -369,6 +392,7 @@ FLASK = {
     "app.py": '''import hashlib
 import hmac
 import os
+import sqlite3
 
 import stripe
 from flask import Flask, abort, jsonify, request
@@ -429,6 +453,32 @@ def github_open():
     return jsonify(ok=True)
 
 
+@app.post("/webhooks/stripe-sql")
+def stripe_sql():
+    event = request.get_json()
+    with sqlite3.connect("app.db") as conn:
+        conn.execute("UPDATE user SET plan = 'pro' WHERE stripe_customer_id = ?", (event["data"]["object"]["customer"],))
+    return jsonify(received=True)
+
+
+@app.post("/webhooks/stripe-sql-new-row")
+def stripe_sql_new_row():
+    event = request.get_json()
+    with sqlite3.connect("app.db") as conn:
+        conn.execute("INSERT INTO payment (customer, amount) VALUES (?, ?)",
+                     (event["data"]["object"]["customer"], event["data"]["object"]["amount"]))
+    return jsonify(received=True)
+
+
+@app.post("/webhooks/stripe-sql-read")
+def stripe_sql_read():
+    event = request.get_json()
+    with sqlite3.connect("app.db") as conn:
+        row = conn.execute("SELECT plan FROM user WHERE stripe_customer_id = ?",
+                           (event["data"]["object"]["customer"],)).fetchone()
+    return jsonify(plan=row[0] if row else None)
+
+
 @app.post("/webhooks/github-worked-out")
 def github_worked_out():
     want = "sha256=" + hmac.new(os.environ["GITHUB_WEBHOOK_SECRET"].encode(), request.data, hashlib.sha256).hexdigest()
@@ -445,7 +495,8 @@ def github_worked_out():
 def test_the_same_in_a_flask_app(tmp_path):
     fs = _scan(tmp_path, FLASK)
     assert sorted(f["webhook"]["route"] for f in fs if f["rule"] == RULE) == [
-        "POST /webhooks/github-open", "POST /webhooks/github-worked-out", "POST /webhooks/stripe-open"]
+        "POST /webhooks/github-open", "POST /webhooks/github-worked-out", "POST /webhooks/stripe-open",
+        "POST /webhooks/stripe-sql", "POST /webhooks/stripe-sql-new-row"]
 
 
 DJANGO = {
