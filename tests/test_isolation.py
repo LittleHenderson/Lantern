@@ -507,6 +507,32 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert any(d.lower().startswith("pyjwt[crypto]") for d in project["optional-dependencies"]["dev"])
 
 
+# the name a library is loaded under, where that is not the name it is installed under
+INSTALLED_AS = {"jwt": "pyjwt", "cryptography": "pyjwt", "PIL": "pillow", "python_multipart": "python-multipart"}
+
+
+def test_every_library_a_test_asks_for_is_one_the_lists_for_the_tests_name():
+    """Found on 2026-11-16 when Lantern ran its own tests in the sandbox, on exactly the libraries its lists name: a
+    new test started the starter notes app, which takes its sign-in as a form, and FastAPI reads a form with a library
+    that the computer the test was written on happened to have and that no list named. A test says which libraries
+    it needs (`pytest.importorskip`), and each must be one pyproject.toml lists for the tests (its own libraries,
+    `scan`, `dev`); a test that starts an app says the libraries the app loads by itself too."""
+    import tomllib
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    extras = project["optional-dependencies"]
+    listed = {re.split(r"[\[<>=!~ ;]", d, maxsplit=1)[0].lower().replace("_", "-")
+              for d in project["dependencies"] + extras["scan"] + extras["dev"]}
+    asked = {}
+    for path in sorted((ROOT / "tests").glob("*.py")):
+        for name in re.findall(r"""importorskip\(\s*["']([\w.]+)["']""", path.read_text(encoding="utf-8")):
+            asked.setdefault(name.split(".")[0], path.name)
+    assert len(asked) >= 8, asked
+    not_listed = {name: where for name, where in asked.items()
+                  if INSTALLED_AS.get(name, name).lower().replace("_", "-") not in listed}
+    assert not not_listed, not_listed
+    assert asked.get("python_multipart") == "test_behave_init.py" and "python-multipart" in listed
+
+
 FAILED_RUN = """\
 ....F...........s....                                                    [100%]
 =================================== FAILURES ===================================

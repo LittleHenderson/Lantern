@@ -8,6 +8,7 @@ code. Keep these tests away from production."
 python bench/behaviour/run_behaviour.py WORKDIR                  # the whole plan against all 33 versions, about 4.5 minutes with 3 side by side (the default)
 python bench/behaviour/run_behaviour.py WORKDIR --own-checks     # for a planted version only the checks written down for it (what the tests do)
 python bench/behaviour/run_behaviour.py WORKDIR --only safe,refused-but-deleted --results FILE
+python bench/behaviour/run_behaviour.py WORKDIR --first-plan     # no plan a person wrote: the plan Lantern writes itself for each version, about 2.5 minutes
 ```
 
 | File | What it is |
@@ -16,6 +17,8 @@ python bench/behaviour/run_behaviour.py WORKDIR --only safe,refused-but-deleted 
 | `plan.py` | The plan (`plan()`: 41 checks, 100 cases asked, 83 outcomes on the safe app) and, written down before the first run, which cases each planted problem must break and with which codes (`EXPECTED`), and which must come out undecided because the planted problem takes their control away (`INCONCLUSIVE`). `differences(planted, record)` says where a run differs from that |
 | `run_behaviour.py` | Runs it: every version in Lantern's test sandbox (`lantern.behave`), isolated by `tools/netguard` (no network at all is needed, so anything tried fails the run) |
 | `results.md` | The last whole run |
+| `first_plan.py` | What the plan Lantern writes by itself (`lantern behave PATH --init`, `lantern/behave_init.py`) must show on Corkboard, written down before its first run: the cases that break for each of the 8 planted problems a first plan is to catch (`CAUGHT`), nothing broken anywhere else, and no undecided case that the plan itself did not name to look at first. `differences(planted, record, plan)` |
+| `first_plan_results.md` | The last whole run of `--first-plan` |
 
 ## What is planted
 
@@ -43,6 +46,31 @@ again when sent again, and one whose half is saved by the next person's request.
 | T5 | Nothing outside this computer is tried, and the runner starts no app without the sandbox's guard | 0 attempts (`tools/netguard`: "0 attempt(s) to reach anything else"); result 97 without the guard (`tests/test_behave.py`) |
 | T6 | Apps that were not written for the runner start under it as they are | Lantern's gateway: 12 held, and the 1 case that must break did (15 held since 2026-11-15, when its plan got a check of the kind `ended`: a sign-in that was signed out is refused straight after, after a restart and on another copy). The shop sample: its planted command seen as a file written where the request said. Both are tests. Three faults of the runner showed and were fixed (below) |
 | T7 | The whole plan on the safe app in under 60 seconds | About 25 seconds (58 starts of the app). The first measurement was 66.9 seconds: missed, until the app's copies were let keep compiled Python in their temp folder |
+
+## The plan nobody wrote (roadmap stage 4, 2026-11-16)
+
+`--first-plan` hands no plan over. For each of the 33 versions Lantern reads that version's own code, writes
+`lantern-behaviour.json` (16 checks, 40 requests, 23 outcomes; 7 routes left out, each with the reason) and runs
+it exactly as written.
+
+| # | Target, written down before the first run | Came out |
+|---|---|---|
+| F1 | The safe app: no case broken | 0 broken; 16 held, 6 undecided, 1 not run |
+| F2 | The planted problems of the three kinds a first plan asks about are caught by the cases written down for them: a visitor let in (`no-login-list`), somebody else's row (`other-team-read`, `other-user-change`, `other-user-delete`, `refused-but-deleted`, `other-team-list`), wrong passwords not counted (`no-login-limit`, `limit-in-memory`) | 8 of 8, with the cases and the codes as written down, on the first run |
+| F3 | On the other 24 planted versions no case comes out broken (those problems take a plan a person wrote: `plan.py` catches all 32) | 0 broken on 24 of 24 |
+| F4 | A case that is not decided belongs to a check the plan itself named to look at first, before anything ran | Missed on the first run for 2 checks, see below; holds on all 33 versions since |
+
+What the first run showed that was wrong, each corrected after a test that failed first:
+
+* One "held" was hollow. Two coupon requests at the same moment, with a coupon code Lantern made up: the app
+  refuses the code, so nothing was ever done once, and "not done twice" read as held. The runner now says
+  undecided for the kind `once` when the request does not work even when it is sent alone (`lantern/behave.py`;
+  the plan a person wrote comes out as before, all 33 versions).
+* Two undecided cases were on no list. The preview route is sent a made-up address, which the app's own list of
+  hosts refuses: the plan now says so for every address it makes up. On `role-in-profile` nothing in the
+  profile's body has to be sent, the plan sent it empty, and a request that changes nothing proves nothing
+  beside a refusal: such a body now carries one field Lantern is sure of, and where it is sure of none the plan
+  says so.
 
 ## What the first pass got wrong
 

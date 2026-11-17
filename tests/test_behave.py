@@ -368,6 +368,31 @@ def test_what_must_stay_hidden_is_looked_for_in_the_answer_and_first_in_the_answ
     assert _judged(check, {"alice (may)": [seen], "amir": [{"status": 500, "body": ""}]}) == {"amir": ("broken", ["crashed"])}
 
 
+REDEEM = {"id": "r", "kind": "once", "who": "alice", "request": {"method": "POST", "path": "/redeem", "json": {"code": "X"}}}
+
+
+def test_two_at_the_same_moment_prove_something_only_where_the_request_works_when_it_is_sent_alone():
+    def came_out(first, second, after_the_race, after_two_in_a_row="one row"):
+        in_a_row = [{"status": first}, {"status": second, "state": {"loud": after_two_in_a_row}}]
+        race = [{"status": first, "paused": True}, {"status": second}, {"state": {"loud": after_the_race}}]
+        return _judged(REDEEM, {"one after the other (1)": in_a_row, "one after the other (2)": in_a_row,
+                                "at the same moment": race})["at the same moment"]
+    assert came_out(200, 409, "one row") == ("held", [])
+    assert came_out(200, 409, "two rows") == ("broken", ["raced"])
+    # a request the app refuses when it is sent alone (a value the app does not take) was never done once, so that
+    # it is not done twice proves nothing: until 2026-11-16 this read "held"
+    assert came_out(409, 409, "one row") == ("inconclusive", [])
+    assert came_out(404, 404, "one row") == ("inconclusive", [])
+    assert came_out(None, 409, "one row") == ("inconclusive", [])
+    # two at the same moment that leave what two in a row never leave are what they are, whatever was answered
+    assert came_out(409, 409, "two rows") == ("broken", ["raced"])
+    # and a request that writes nothing is not run at all, as before
+    quiet = [{"status": 404}, {"status": 404}, {"state": {"loud": "one row"}}]
+    in_a_row = [{"status": 404}, {"status": 404, "state": {"loud": "one row"}}]
+    assert _judged(REDEEM, {"one after the other (1)": in_a_row, "one after the other (2)": in_a_row,
+                            "at the same moment": quiet})["at the same moment"] == ("not-run", [])
+
+
 def test_writing_outside_the_apps_folders_is_broken_whatever_the_check_was_about():
     outside = {"status": 403, "changes": {"outside": {"count": 1, "added": ["../x"], "removed": [], "changed": []}}}
     assert _judged(DELETE, {"alice (may)": [DONE], "amir": [outside], "nobody": [{"status": 401}]})["amir"] \

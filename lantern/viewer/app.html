@@ -435,7 +435,7 @@ body[data-mode=simple] .sub .tabs button.on::after{display:none}
 }
 @media (max-width:1440px){.sub #termbtn span,.sub .newtab span{display:none}}
 @media (max-width:1280px){.sub{gap:8px;padding:0 12px} .sub .tabs button,body[data-mode=simple] .sub .tabs button{padding:0 8px;font-size:13px}}
-@media (max-width:1240px){.sub #watchtests span,.sub #whatchanged span{display:none}}
+@media (max-width:1240px){.sub #watchtests span,.sub #whatchanged span,.sub #behaviourplan span{display:none}}
 .sub .back{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;border:0;background:none;color:var(--muted)}
 .sub .back:hover{background:var(--hover);color:var(--ink)}
 .sub .title{font:650 15px/1 var(--display);letter-spacing:-.012em;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
@@ -533,7 +533,7 @@ body[data-mode=simple] .sub.two .tabs{border-radius:0;background:none;padding:4p
   .sub{flex-wrap:wrap;height:auto;padding:0 8px;gap:0 6px}
   .sub .back,.sub .title,.sub .gchip,.sub .newtab{margin:11px 0}
   .sub .title{max-width:none;flex:1}
-  .sub .spacer,.sub .newtab span,.sub #termbtn span,.sub #watchtests span,.sub #whatchanged span{display:none}
+  .sub .spacer,.sub .newtab span,.sub #termbtn span,.sub #watchtests span,.sub #whatchanged span,.sub #behaviourplan span{display:none}
   .sub .btn.sm{height:32px;padding:0 9px;margin:9px 0}
   .fixgrid{grid-template-columns:1fr}
   .tabs{order:3;width:100%;margin:0 -8px;padding:0 4px;border-top:1px solid var(--line)}
@@ -643,6 +643,7 @@ const ICONS = {
   refresh: '<path d="M15.5 8A6 6 0 0 0 4.6 7M4.5 12a6 6 0 0 0 10.9 1"/><path d="M15.5 3.5V8H11M4.5 16.5V12H9"/>',
   play: '<path d="M6.5 4.5v11l9-5.5z"/>',
   change: '<path d="M4 7h11M12 4l3 3-3 3M16 13H5M8 10l-3 3 3 3"/>',
+  plan: '<path d="m3.5 6 1.2 1.2L7 5M3.5 10.5l1.2 1.2L7 9.5M3.5 15l1.2 1.2L7 14M10 6h6.5M10 10.5h6.5M10 15h6.5"/>',
   info: '<circle cx="10" cy="10" r="7"/><path d="M10 9v4.5M10 6.5h.01"/>',
   warn: '<path d="M10 3.5 17.5 16h-15z"/><path d="M10 8.5v3.5M10 14h.01"/>',
   lock: '<rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V7a3 3 0 0 1 6 0v2"/>',
@@ -1033,6 +1034,30 @@ async function whatChanged(p) {
   }
   await refresh();
 }
+// "Behaviour plan" (lantern/behave_init.py): a first lantern-behaviour.json is written from the project's code, the way
+// `lantern behave --init` writes it. Nothing of the project is run, and a plan that is there is left alone until the
+// person says to write over it. One button; what was written and why nothing was is said by the server.
+async function behaviourPlan(p, force) {
+  const here = () => S.view === 'project' && S.project === p.id;
+  const show = html => { S.toast = {pid: p.id, html}; if (here()) renderProject(document.getElementById('view')); };
+  const none = (why, over) => `<div class="toastin bad"><div><b>No behaviour plan was written.</b> ${esc(why)}</div><span class="spacer"></span>${over ? '<button class="btn ghost sm" data-planover>Write a new one over it</button>' : ''}<button class="btn ghost sm" data-dismiss>Dismiss</button></div>`;
+  let j;
+  try { j = await api(`/api/projects/${p.id}/behaviourplan`, {method: 'POST', body: force ? {force: true} : {}}); }
+  catch (e) { return show(none(e.message)); }
+  S.jobs[p.id] = {id: j.id, kind: 'plan', log: [], status: 'running'};
+  show(`<div class="toastin"><span class="pulse"></span><div><b>Reading your code to write a first behaviour plan.</b> Nothing of your project is run. You can keep browsing; the result shows here when it is done.</div></div>`);
+  for (;;) {
+    try { j = await api('/api/jobs/' + j.id); } catch (e) { await new Promise(r => setTimeout(r, 2000)); continue; }
+    S.jobs[p.id] = j;
+    if (j.status !== 'running') break;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  const r = j.result || {};
+  const first = Array.isArray(r.read_first) ? r.read_first.filter(x => typeof x === 'string' && x).slice(0, 3) : [];
+  if (j.status === 'error' || r.written !== true) S.toast = {pid: p.id, html: none(j.status === 'error' ? (j.error || 'The plan was not finished.') : String(r.why || 'Nothing was written.'), r.exists === true)};
+  else S.toast = {pid: p.id, html: `<div class="toastin ok">${icon('check')}<div><b>A first behaviour plan was written.</b> ${esc(r.line || '')} ${esc(r.next || '')}${first.map(n => `<div class="hint">${esc(n)}</div>`).join('')}</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+  await refresh();
+}
 async function stopTests(p, id) {
   // The message of a running test run is kept as HTML and drawn again on every visit to the project, so the button's
   // state is changed there. The run itself ends in watchTrace, which then says "You stopped the tests." A stop
@@ -1399,7 +1424,7 @@ function drawProject(el) {
   el.innerHTML = `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to ${simple ? 'my apps' : 'projects'}">${icon('back')}<span>${simple ? 'My apps' : 'Projects'}</span></button>${simple ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(p.name)}</span>
     ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100${releaseWord(p.release) ? ', release decision ' + releaseWord(p.release) : ''}">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}${releaseWord(p.release) ? ' · ' + releaseWord(p.release) : ''}</span>` : ''}
     <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>
-    <span class="spacer"></span>${simple ? '' : `<button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>`}${p.has_report ? `<button class="btn ghost sm" id="whatchanged" title="What changed since your last commit" aria-label="What changed since your last commit" ${isRunning(p) ? 'disabled' : ''}>${icon('change')}<span>What changed</span></button><button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="#" data-path="/p/${esc(p.id)}/${S.tab === 'evidence' ? 'evidence' : S.tab === 'change' ? 'change' : 'report'}.html" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
+    <span class="spacer"></span>${simple ? '' : `<button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>`}${p.has_report ? `<button class="btn ghost sm" id="whatchanged" title="What changed since your last commit" aria-label="What changed since your last commit" ${isRunning(p) ? 'disabled' : ''}>${icon('change')}<span>What changed</span></button><button class="btn ghost sm" id="behaviourplan" title="Write a first behaviour plan (lantern-behaviour.json) from your code. Nothing of your project is run." aria-label="Write a first behaviour plan from your code" ${isRunning(p) ? 'disabled' : ''}>${icon('plan')}<span>Behaviour plan</span></button><button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="#" data-path="/p/${esc(p.id)}/${S.tab === 'evidence' ? 'evidence' : S.tab === 'change' ? 'change' : 'report'}.html" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
     <div id="toast"></div>
     <div id="pbody"></div>`;
   const newtab = el.querySelector('.newtab');
@@ -1412,8 +1437,9 @@ function drawProject(el) {
   el.querySelector('#back').onclick = () => go('home');
   const wt = el.querySelector('#watchtests'); if (wt) wt.onclick = () => watchTestsSheet(p);
   { const wc = el.querySelector('#whatchanged'); if (wc) wc.onclick = () => { wc.disabled = true; whatChanged(p); }; }
+  { const bp = el.querySelector('#behaviourplan'); if (bp) bp.onclick = () => { bp.disabled = true; behaviourPlan(p, false); }; }
   { const tb = el.querySelector('#termbtn'); if (tb) tb.onclick = () => termToggle(); }   // Advanced only (the ` key still opens it)
-  if (S.toast && S.toast.pid === p.id) { el.querySelector('#toast').innerHTML = S.toast.html; el.querySelector('#toast').onclick = e => { if (e.target.closest('[data-dismiss]')) { S.toast = null; el.querySelector('#toast').innerHTML = ''; } if (e.target.closest('[data-retry]')) watchTestsSheet(p); const stop = e.target.closest('[data-stop]'); if (stop && !stop.disabled) stopTests(p, stop.dataset.stop); }; }
+  if (S.toast && S.toast.pid === p.id) { el.querySelector('#toast').innerHTML = S.toast.html; el.querySelector('#toast').onclick = e => { if (e.target.closest('[data-dismiss]')) { S.toast = null; el.querySelector('#toast').innerHTML = ''; } if (e.target.closest('[data-planover]')) behaviourPlan(p, true); if (e.target.closest('[data-retry]')) watchTestsSheet(p); const stop = e.target.closest('[data-stop]'); if (stop && !stop.disabled) stopTests(p, stop.dataset.stop); }; }
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; ASK.page = null; if (ASK.open) renderAsk(); renderProject(el); });
   const body = el.querySelector('#pbody');
   if (S.tab === 'guide') return renderGuide(body, p);

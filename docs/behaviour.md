@@ -6,6 +6,7 @@ something all the same is a failure**, whatever the answer said.
 
 ```bash
 lantern behave PATH            # runs PATH/lantern-behaviour.json, writes PATH/.lantern/behaviour.json
+lantern behave PATH --init     # no plan yet? writes a first PATH/lantern-behaviour.json from the code (see below)
 ```
 
 Result `0` only when every case held; `1` when a case is broken, undecided or was not run; `2` when there is no
@@ -84,7 +85,7 @@ databases are not started yet (see Limits).
 | `address` | the app sets out for no address but `may_reach` | one | outside address |
 | `limit` | after `times` tries the next is refused (`limited`, default 429 or 423), straight after, after a restart, and on another copy of the app | three | unlimited; forgotten |
 | `ended` | `request` works for `who`; after the `end` request (a sign-out, an account switched off, an invitation taken back; `{"request": …, "as": …}` when somebody else makes it) the same request is refused (`refused`, default 401 or 403; name 302 where the app sends people to its sign-in page): straight after, after a restart, and on another copy of the app that had answered the request before (`across` picks some of `same`, `restart`, `other-worker`) | three | lived on (the request was accepted again). Inconclusive when the request did not work before, when `end` did not work, or when the answer afterwards is neither a refusal the check names nor accepted |
-| `once` | two of the same request at the same moment end as one after the other does | one | raced |
+| `once` | two of the same request at the same moment end as one after the other does (undecided when the request does not work even when it is sent alone) | one | raced |
 | `retry` | the same request sent again, or sent again after the answer was lost, is not done twice | two | repeated |
 | `faults` | the request is made to fail at each of its database writes and commits, and is cut off before each and before the answer leaves; afterwards all of its work is there or none, and `then` (somebody else's ordinary request) works and saves only its own | one per place | partial; carried over; stuck |
 
@@ -109,6 +110,77 @@ sandbox: an address written as numbers is itself (in any spelling the system rea
 `2130706433`, `::1`), a name in `names` leads where the plan says, any other name gets an address of its own from the
 ranges kept for examples (198.51.100.0/24, 203.0.113.0/24). An app that looks a name up, sees that it leads inside
 and refuses, holds; an app that goes on is refused by the sandbox at the connection and the case is broken.
+
+## A first plan, written from the code
+
+Writing the plan by hand is the slow part. `lantern behave PATH --init` writes a first one from the code, and the
+app has one button for it on a project's screen ("Behaviour plan"):
+
+```bash
+lantern behave PATH --init     # reads the code and writes PATH/lantern-behaviour.json; runs nothing
+lantern behave PATH            # then: start the app in the sandbox and try each case
+```
+
+Result `0` when a plan was written, `2` when none was, with the reason. A `lantern-behaviour.json` that is there is
+left as it is; `--force` writes the new one over it. Nothing of the project is run to write the plan, no model is
+asked, and the same code gives the same plan.
+
+What it reads, and what it writes from it:
+
+* **The app.** A FastAPI app made at the top of a file (`app = FastAPI()`), or by a function with no parameters
+  that hands one back (`"factory": true`), named the way Python loads it (`"asgi"`, with `"cwd"` for a folder that
+  is no package).
+* **Its settings.** The variables the code reads from its surroundings (`os.environ`, `os.getenv`, the fields of a
+  `BaseSettings` class): one named for a database gets a SQLite file in `{data}` and is written under `"state"`,
+  so changed rows are seen; one named for a secret gets `{secret}`; one named for a folder gets a folder in
+  `{data}`.
+* **Two people.** `alice` and `bob`: the request that makes an account (a POST that takes a password) and the
+  sign-in whose answer holds a token are the plan's first steps (`"seed"`).
+* **Without a login.** Every route that changes something, and every route whose code asks who is calling, is asked
+  by `nobody`, beside `alice`, who must be let in. A refusal that turns everybody away proves nothing, and a
+  refusal that changed something all the same is a failure.
+* **Somebody else's row.** A route with one number in its address (`/notes/{note_id}`), whose rows are made by a
+  POST to the same place (`POST /notes`): `alice` makes a row, and `bob` and `nobody` ask for it. For a GET the
+  answer must not hold what alice wrote either.
+* **Limits and repeats.** Wrong passwords at the sign-in (`limit`: as many tries as a limit written on the route
+  says, else ten, and then once more: straight after, after a restart, and on a second copy of the app); a route
+  that reaches a paid service (`limit`); a route named for a payment (`once`: two requests at the same moment); a
+  route that reads an idempotency key (`retry`).
+
+What it does not know, it says. The command prints these, and the file keeps all of them under `"notes"`, which
+the runner does not read:
+
+* `read_first`: what to know before the first run: a database place written in the code, a setting with no value,
+  the tables that may change when a request is refused.
+* `review`: the cases to look at first, each with the reason: a value Lantern made up (a text under a name that
+  told it nothing, the number of another row, a web address), a body sent empty because nothing in it has to be
+  sent and Lantern is sure of none of its fields, a route whose code shows no login (the case will read "let in";
+  take it out if the route is for everyone), rows that may be shared between people by design, a route whose own
+  request cannot finish in the sandbox because it sets out for a paid service.
+* `left_out`: every route with no case, and why: an address made to be open (a sign-in, a webhook, a health page);
+  a page that changes nothing, shows no login and reads nothing the app keeps; a body the code reads itself; an
+  uploaded file; a header Lantern cannot fill in; a row Lantern found no request to make.
+
+It is a first plan: read it once, correct it, and commit it. What `--init` does not do:
+
+* It writes for FastAPI apps whose sign-in answers with a token that is sent as `Authorization: Bearer …`. A
+  sign-in kept in a cookie, an API key in a header of its own and every other framework are written by hand.
+* A made-up value that the app refuses makes its case read undecided, and in the first steps it stops the run
+  ("the plan's set-up failed at step N"): put a value the app accepts.
+* It writes the kinds `refuse`, `limit`, `once` and `retry`. The others (`hide`, `tokens`, `input`, `keeps`,
+  `contain`, `redirect`, `address`, `ended`, `faults`) are written by hand.
+* What it reads from names (which request makes an account, which route is a payment, which table keeps a record
+  of what was tried) can be wrong, which is why each such case is on the review list.
+* The two people it makes are strangers to each other: each makes an account of their own. What two people of one
+  team, or a member and an admin, may do to each other is a case for a person to write.
+
+How far a first plan gets was measured on the benchmark's throw-away app, the safe version and 32 versions with
+one planted problem each, with the plan written from each version's own code and run as written
+(`python bench/behaviour/run_behaviour.py WORKDIR --first-plan`, `bench/behaviour/first_plan_results.md`): on the
+safe app no case is broken; it catches the 8 planted problems of the kinds it asks about (a visitor let in,
+somebody else's row, wrong passwords not counted or the count forgotten); the other 24 (tokens, uploads, archives,
+redirects, addresses the app fetches, a request that fails half-way, two people of one team) it does not, and
+the plan a person wrote for that app catches all 32.
 
 ## Limits
 

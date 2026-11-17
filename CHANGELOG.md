@@ -9,6 +9,32 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- A first behaviour plan written from the code (roadmap stage 4; `lantern/behave_init.py`, `docs/behaviour.md`).
+  New: `lantern behave PATH --init` reads a FastAPI app and writes `PATH/lantern-behaviour.json`; it runs nothing of
+  the project, asks no model, and the same code gives the same plan. A plan that is there is left as it is
+  (`--force` writes a new one over it). The app has one button for it, "Behaviour plan", on a project's screen
+  (`POST /api/projects/<id>/behaviourplan`); running the plan stays `lantern behave` in a terminal.
+- What the plan holds: the app and the settings it reads (a database's place in the sandbox's data folder, a
+  secret); two people, made by the app's own sign-up and sign-in; for every route that changes something or shows
+  a login, a case with no login beside one that must be let in; for a row picked by a number in the address, a
+  case by the other person, who must not read or change it; wrong passwords at the sign-in, straight after, after
+  a restart and on a second copy of the app; a limit on a route that reaches a paid service; two requests at the
+  same moment on a payment route; the same request sent again where the route reads an idempotency key.
+- What it does not know it says, in the file under `notes` and on the terminal: what to read before the first run,
+  the cases to look at first with the reason (a value Lantern made up, a route whose code shows no login, rows
+  that may be shared by design), and every route it left out with the reason.
+- Measured on the benchmark's throw-away app, with what it must show written down before the first run
+  (`bench/behaviour/first_plan.py`, `run_behaviour.py --first-plan`, `first_plan_results.md`): the plan written
+  from each of 33 versions' own code breaks no case on the safe app and catches 8 of the 32 planted problems (a
+  visitor let in, somebody else's row, wrong passwords not counted). The other 24 take a plan a person wrote.
+- **Changed answer** of `lantern behave` for the kind `once`: two requests at the same moment whose request does
+  not work even when it is sent alone (a value the app refuses) come out undecided, where they read "held".
+  Nothing was done once there, so that it was not done twice proved nothing. Found by the first run above.
+- Not in it: other frameworks, a sign-in kept in a cookie, an API key in a header of its own, the other kinds of
+  check, what two people of one team may do to each other, and running the plan from the app or the website.
+- Lantern's own tests need one more library, `python-multipart` (the `dev` extra, pinned in
+  `requirements-lock.txt`): FastAPI reads a form with it, the starter notes app takes its sign-in as a form, and
+  the new tests start that app with the plan written for it. Lantern itself does not use it.
 - The fix contract (roadmap stage 3; `docs/fix.md`, `lantern/fixcheck.py`): Lantern calls a finding fixed only when
   the change shows seven things: the finding is gone and not moved, nothing was hushed with a `# nosec` comment or
   an accepted-risk entry, every scanner still read what it read, no route or link between page and server broke, no
