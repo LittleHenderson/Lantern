@@ -9,9 +9,15 @@ column to a value with a minus sign in it. Two requests sent at the same moment 
 either has written, both pass the check and both are taken: the balance goes below zero, or one write overwrites the
 other and one spend is free.
 
-It says nothing where the write itself names the condition on the field (Prisma's and Sequelize's `where`, MongoDB's
-filter, `.gte('field', …)` and the like of Supabase and knex, Django's `field__gte` and `filter(field=…)`,
-SQLAlchemy's `.where(… .field >= …)`, Drizzle's `gte(table.field, …)`, SQL's `WHERE … field`), where a lock or a
+It says nothing where the write itself carries the check: a condition that holds the field to the value that was
+read (Prisma's and Sequelize's `where: { credits: user.credits }`, `.eq('coins', profile.coins)` of Supabase and
+knex, Django's `filter(points=…)`, SQLAlchemy's `.where(… .credits == …)`, SQL's `WHERE … credits = $1`), or a
+condition that bounds it (`gte`, `__gte`, `>=`, MongoDB's `$gte`, Drizzle's `gte(table.field, …)`) beside a write
+that takes from the value the database holds (`decrement`, `F("credits") - cost`, `Model.credits - cost`,
+`users.c.credits - cost`, `SET credits = credits - $1`). A bound beside a value worked out in the program from the
+balance that was read (`credits: user.credits - cost` under `credits: { gte: cost }`) is named, with `how: "bounded"`:
+both requests pass the bound and write the same value. A write chained over several lines (`.update(…)` on one,
+`.eq(…)` on the next, knex's `.where(…).andWhere(…)`) is read as one statement. It is quiet where a lock or a
 transaction is named in the function before the check, or on the lines that decorate it (`FOR UPDATE`,
 `with_for_update()`, `select_for_update()`, `transaction.atomic`, `$transaction(async …)`, `BEGIN`), where nothing is
 taken away, where the object is never saved, where another field is written, where `LW-LIMIT-COUNTED-LATER` names
