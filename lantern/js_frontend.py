@@ -504,6 +504,26 @@ class HttpCall:
     recv: list[str] | None = None   # what the verb was called on (`router` in router.get(...)), when it has a name
 
 
+TYPED_EXTS = {".ts", ".tsx", ".mts", ".cts"}
+
+
+def _loaded_with(m: "JSModule", mods: dict) -> dict[str, int]:
+    """The files of the project that are loaded when `m` is: file -> the line of `m` that says so (the first). An
+    import that asks only for types is gone when the code is built, and so is one that asks only for names the
+    other file does not give as values (a type, an interface: TypeScript leaves such an import out), so neither
+    loads the file. Where that cannot be told (a file that hands names on from others, a JavaScript file, an
+    import of everything, of the default or for what the file does when loaded) the file counts as loaded."""
+    out: dict[str, int] = {}
+    for tmod, line, names in m.pulls:
+        t = mods.get(tmod)
+        if t is None or t.rel == m.rel or t.rel in out:
+            continue
+        plain = Path(t.rel).suffix not in TYPED_EXTS or bool(t.reexports) or t.cjs_from is not None
+        if plain or any(name in ("default", "*", "!") or name in t.exports for name in names):
+            out[t.rel] = line
+    return out
+
+
 @dataclass
 class JSModule:
     name: str                  # repo-relative path without extension
@@ -528,6 +548,11 @@ class JSModule:
     # the same, for what is handed on from a source that found no file: (specifier, {exp: imp} | None=*)
     handed_on: list[tuple[str, dict | None]] = field(default_factory=list)
     default: str | None = None
+    # what is loaded with this file (roadmap stage 5, `clientpull.py`): (file module, line, names) for each `import`
+    # and `export … from` of a file of the project that is not type-only. names: what is asked for, without the
+    # names marked `type`; "default", "*", and "!" for an import that names nothing (`import "./init"`)
+    pulls: list[tuple[str, int, list[str]]] = field(default_factory=list)
+    server_only: bool = False      # `import "server-only"`: a page file that pulls this file in does not build
     consts: dict[str, str] = field(default_factory=dict)         # module-level string constants
     local_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     var_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)   # scope -> name -> written type
@@ -1275,15 +1300,23 @@ class Walker:
         spec = _string_value(src) or ""
         target = self.resolve_spec(spec)
         clause = next((c for c in n.named_children if c.type == "import_clause"), None)
+        typed = any(c.type == "type" for c in n.children)        # `import type { A } from "x"`: gone when built
         if clause is None:
+            if spec == "server-only":
+                self.m.server_only = True
+            elif target is not None and not typed:
+                self.m.pulls.append((target, n.start_point[0] + 1, ["!"]))
             return
+        asked = []
         for c in clause.named_children:
             if c.type == "identifier":
                 self.m.imports[_text(c)] = (target, "default", spec)
+                asked.append("default")
             elif c.type == "namespace_import":
                 ident = next((x for x in c.named_children if x.type == "identifier"), None)
                 if ident is not None:
                     self.m.imports[_text(ident)] = (target, "*", spec)
+                    asked.append("*")
             elif c.type == "named_imports":
                 for s in c.named_children:
                     if s.type != "import_specifier":
@@ -1291,6 +1324,10 @@ class Walker:
                     nm = s.child_by_field_name("name")
                     al = s.child_by_field_name("alias")
                     self.m.imports[_text(al or nm)] = (target, _text(nm), spec)
+                    if not any(x.type == "type" for x in s.children):       # `import { type A, b }`
+                        asked.append(_text(nm))
+        if target is not None and not typed and asked:
+            self.m.pulls.append((target, n.start_point[0] + 1, asked))
 
     def _export(self, n: TSNode, scope, cls, ui):
         src = n.child_by_field_name("source")
@@ -1301,6 +1338,12 @@ class Walker:
             clause = next((c for c in n.named_children if c.type == "export_clause"), None)
             written = _string_value(src) or ""
             under = any(c.type == "namespace_export" for c in n.named_children)     # `export * as ns from "x"`
+            if target is not None and not any(c.type == "type" for c in n.children):
+                handed = ["*"] if clause is None else [
+                    _text(s.child_by_field_name("name")) for s in clause.named_children
+                    if s.type == "export_specifier" and not any(x.type == "type" for x in s.children)]
+                if handed:
+                    self.m.pulls.append((target, n.start_point[0] + 1, handed))
             if clause is None:
                 self.m.reexports.append((target, None))
                 if target is None and written and not under:
@@ -4738,6 +4781,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     # where each import that found a file of the project led, for the opt-in type-aware pass (typecheck.py)
     g.js_imports = {m.rel: {spec: mods[tmod].rel for tmod, _name, spec in m.imports.values() if spec and tmod in mods}
                     for m in mods.values() if not m.html}
+    # which files of the project are loaded with each file, and where it says so (clientpull.py)
+    g.js_pulls = {m.rel: got for m in mods.values() if not m.html for got in [_loaded_with(m, mods)] if got}
+    g.js_server_only = {m.rel for m in mods.values() if m.server_only}
     return {"files": len(mods), "lines": total, "unresolved": unresolved,
             "components": sum(1 for m in mods.values() for d in m.defs.values() if d.jsx),
             "http_calls": len(http_calls)}

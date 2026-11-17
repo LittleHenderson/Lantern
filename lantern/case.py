@@ -310,6 +310,9 @@ def _claim(f: dict, kind: str) -> str:
     if f.get("rule") == "LW-CLIENT-ENV-SECRET":
         return (f"{base}. Read from one line of the file; whether this file gives its values to the page visitors "
                 "get is not checked.")
+    if f.get("rule") == "LW-SERVER-IMPORT-IN-CLIENT":
+        return (f"{base}. Read from import lines and settings' names; whether the bundler keeps this file's code in "
+                "the page is not checked.")
     if f.get("category") == "dependency":
         return f"{base}. The version is affected; whether the app uses the affected part is not checked."
     return f"{f.get('tool')} says: {base}. A pattern in the code, not a confirmed attack."

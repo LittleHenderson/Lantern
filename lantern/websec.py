@@ -18,6 +18,8 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
   LW-CLIENT-ENV-SECRET  a setting with a browser-exposed prefix whose value is a secret where the name says
                      nothing: an address with a password, a server key, a secret setting passed on
                      (publicvalues.py; heuristic)
+  LW-SERVER-IMPORT-IN-CLIENT  a file that reads a secret setting by name and is loaded with a file that begins
+                     with "use client" (clientpull.py; heuristic)
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
@@ -2295,6 +2297,8 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     from . import publicvalues      # a setting for the browser whose value is a secret, where its name says nothing
     findings += publicvalues.public_values(
         repo, said={(f["file"], f["snippet"]) for f in findings if f["rule"] == "LW-PUBLIC-SECRET"})
+    from . import clientpull        # a file that reads a secret setting, loaded with a file made for the browser
+    findings += clientpull.pulled(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
