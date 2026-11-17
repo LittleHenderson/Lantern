@@ -26,6 +26,9 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
   LW-UNSIGNED-WEBHOOK  a route a payment or message provider calls that writes stored data with no check of who
                      sent the message, a check that lets a failed message on, or one that comes after the write
                      (webhooks.py, from what the flow step notes of every write: `flow.Result.changes`; heuristic)
+  LW-NONATOMIC-BALANCE  a balance (credits, points, coins, a wallet's money) checked and then written down taken
+                     away as a step of its own, with no condition on it in the write and no lock or transaction
+                     before the check (balance.py; heuristic)
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
@@ -2534,6 +2537,8 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += localweb.loopback_cookies(repo) + localweb.keeps_pages(repo)
     from . import countlater        # a limit that is looked at before the work and counted after it
     findings += countlater.counted_later(g)
+    from . import balance           # a balance checked in one step and taken from in another
+    findings += balance.taken_apart(g, {(f["file"], f["line"]) for f in findings if f["rule"] == countlater.RULE})
     from . import sharedconn        # one database connection for every thread, used with no lock held
     findings += sharedconn.shared_connections(g)
     from . import publicvalues      # a setting for the browser whose value is a secret, where its name says nothing

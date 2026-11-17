@@ -130,6 +130,13 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                       "The request is counted in the same step that looks at the limit, before the work starts, "
                       "and the count is put right when the work is done. Requests sent together are let through "
                       "only as far as the limit goes."),
+    "balance-race": (None,
+                     "Every one of those requests reads the same balance before any of them has taken from it, so "
+                     "every one passes the check and every one is taken: the balance goes below zero, or one take "
+                     "overwrites another and a spend is free.",
+                     "The write itself carries the check (it takes from the balance only where enough is left, and "
+                     "the app looks at how many rows it changed), or the row is locked from the read to the write. "
+                     "Requests sent together are taken from only as far as the balance goes."),
     "unsigned-webhook": (None,
                          "Your app takes the message for the provider's and does what it says. What that is depends "
                          "on the route: an account marked as paid that never paid, a subscription ended, a person's "
@@ -375,7 +382,7 @@ RULE_KIND = {
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LW-TOKEN-PICKUP": "pickup", "LW-LOOPBACK-COOKIE": "local-cookie", "LW-SW-KEEPS-PAGES": "kept-pages",
     "LW-LIMIT-COUNTED-LATER": "counted-later", "LW-SHARED-CONNECTION": "shared-connection",
-    "LW-UNSIGNED-WEBHOOK": "unsigned-webhook",
+    "LW-UNSIGNED-WEBHOOK": "unsigned-webhook", "LW-NONATOMIC-BALANCE": "balance-race",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-NOTEBOOK-SECRET": "secret", "LP-DJANGO-DEBUG": "debug",
     "LT-SQL": "sql", "LT-SHELL": "shell", "LT-EVAL": "eval", "LT-XSS": "xss", "LT-DESERIALIZE": "deserialize",
@@ -717,6 +724,10 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
     elif kind == "counted-later":
         steps.append(f"{who} sends the same request many times at the same moment, not one after another.")
         basis.append("the look at the limit, the work and the count come from the function's own lines")
+    elif kind == "balance-race":
+        steps.append(f"{who} has just enough for one: one credit, one coupon, the price of one thing.")
+        steps.append(f"{who} sends the same request many times at the same moment, not one after another.")
+        basis.append("the check of the balance and the write that takes from it come from the function's own lines")
     elif kind == "unsigned-webhook":
         hook = f.get("webhook") or {}
         steps.append(f"{who} learns the address your payment or message provider calls: such addresses look alike "
@@ -953,6 +964,7 @@ FIXED_HEADLINES = {
     "kept-pages": "The browser may keep a signed-in person's pages after they have left",
     "counted-later": "A limit may be passed by requests sent at the same moment",
     "unsigned-webhook": "A made-up message may be taken for your payment or message provider's",
+    "balance-race": "A balance may be spent more than once by requests sent at the same moment",
     "shared-connection": "Requests of the same moment may meet on one database connection",
     "server-code": "Code written for your server may be in the files every visitor downloads",
     "server-key": "A secret key may be written into the files every visitor downloads",

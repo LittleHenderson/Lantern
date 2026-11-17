@@ -348,6 +348,9 @@ def _claim(f: dict, kind: str) -> str:
     if f.get("rule") == "LW-SENSITIVE-COLUMN-RETURNED":
         return (f"{base}. Read from the model file and one function's lines; whether the field's value is a secret, "
                 "and whether other code takes it out first, is not checked.")
+    if f.get("rule") == "LW-NONATOMIC-BALANCE":
+        return (f"{base}. Read from one function's own lines; whether the check and the write are about the same "
+                "record is not checked.")
     if f.get("rule") == "LW-UNSIGNED-WEBHOOK":
         return (f"{base}. Read from the route's own lines and the functions it calls; a signature checked by "
                 "something in front of the app, or in a way Lantern does not follow, is not seen.")

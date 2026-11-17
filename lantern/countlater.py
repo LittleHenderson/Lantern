@@ -29,6 +29,7 @@ MOST_LOOKS = 40             # looks of one function that are tried
 MOST_COUNTS = 40            # counts after the work that are tried for one look
 ABOVE = 6                   # lines from an `if` down to the refusal it leads to
 BEFORE = 400                # lines above a look in which the value it looks at may be given
+STATEMENT = 30              # lines of the work's own statement followed to where its brackets close
 
 REFUSES = re.compile(r"(?<![\w.$])(?:402|429)(?![\w.])|TOO_MANY_REQUESTS|PAYMENT_REQUIRED|TooManyRequests|"
                      r"PaymentRequired")
@@ -44,6 +45,8 @@ SQL_STEP = re.compile(r"(?i)\bupdate\b[^;\n]{0,200}\bset\b[^;\n]{0,200}?\b(\w{3,
 LOCKED = re.compile(r"(?i)(?<![bc])lock|mutex|semaphore|transaction|atomic")
 LOCKED_SQL = re.compile(r"(?i)\bfor\s+update\b|\bserializable\b")
 NAME = re.compile(r"[A-Za-z_$][\w$]*")
+# a function written in a statement: what it does runs when it is called (`.then((answer) => { … })`)
+OPENS = re.compile(r"=>|(?<![\w$])(?:function|lambda)(?![\w$])")
 # a limiter counts in the step in which it is asked: `limiter.take(...)`, `ratelimit.limit(id)`, `bucket.consume()`
 LIMITER = re.compile(r"(?i)(?<![\w$])[\w$.]{0,80}(?:limiter|ratelimit|rate_limit|throttl|bucket)[\w$]{0,20}\s*\.\s*"
                      r"[\w$]{1,40}\s*\(")
@@ -102,6 +105,24 @@ def _statement(code: list[str], at: int, work: int) -> list[str]:
     return code[first:last + 1]
 
 
+def _own_part(code: list[str], work: int) -> int:
+    """The last line of the work's own statement whose lines are the work itself: from the work's line to where the
+    brackets it opens close (`await db.user.updateMany({ where: …, data: { credits: { decrement: 1 } } })` written
+    over several lines is one step, and its `decrement:` line is not a count after it), or to the line before a
+    function written in the statement begins (what `.then((answer) => { … })` holds runs after the work). Where the
+    brackets do not close within `STATEMENT` lines, or the work's own line begins a function, the work's line."""
+    if OPENS.search(code[work]):
+        return work
+    depth = 0
+    for last in range(work, min(len(code), work + STATEMENT)):
+        if last > work and OPENS.search(code[last]):
+            return last - 1
+        depth += sum(code[last].count(c) for c in "([{") - sum(code[last].count(c) for c in ")]}")
+        if depth <= 0:
+            return last
+    return work
+
+
 def _look_names(code: list[str], look: int, refusal: int) -> set[str]:
     """The names a look is about: those of its condition, and those of the line that gave each of them its value
     (`r = remaining(user, day)`, `const { success } = await limiter.limit(id)`)."""
@@ -142,13 +163,14 @@ def _read(code: list[str], raw: list[str]):
         if w == len(works):
             continue
         work = works[w]
+        own = _own_part(code, work)
         h = bisect_left(held, look)
-        if h < len(held) and held[h] < work:        # counted, held or taken before the work: the count comes first
-            continue
+        if h < len(held) and held[h] <= own:        # counted, held or taken before the work or by the work's own
+            continue                                # step: the count comes first
         names = _look_names(code, look, refusal)
-        c = bisect_right(counted, work)
+        c = bisect_right(counted, own)
         for at in counted[c:c + MOST_COUNTS]:
-            said = set().union(*(_names(line) for line in _statement(code, at, work)))
+            said = set().union(*(_names(line) for line in _statement(code, at, own)))
             if SQL_STEP.search(raw[at]):
                 said |= _names(raw[at])
             shared = sorted(names & said)
