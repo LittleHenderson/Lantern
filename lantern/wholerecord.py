@@ -930,12 +930,30 @@ def _a(name: str) -> str:
     return ("An " if name[:1].lower() in "aeio" else "A ") + name
 
 
+def _why(model, fields: list[str]) -> str:
+    """Why these fields hold a secret: their own names say so, or the model's own name does and they keep its value
+    (`Password.hash`, `ApiKey.key`)."""
+    own, many = [f for f in fields if datamodel.secret_column(f)], len(fields) > 1
+    if len(own) == len(fields):
+        return "whose names say a secret" if many else "whose name says a secret"
+    if not own:
+        return (f"which keep{'' if many else 's'} the value in a model whose own name says it holds a secret "
+                f"({model.name})")
+    return f"whose names, or the name of {model.name} itself, say a secret"
+
+
+def _plain(model, most: int) -> list[str]:
+    """Fields of a model that hold no secret and lead nowhere, for an example a person can copy."""
+    secret = set(model.secret())
+    return [f for f in model.fields if f not in secret and f not in model.leads][:most] or ["id"]
+
+
 def _words(rel: str, hit: dict) -> tuple[str, str]:
     """A finding's title and what it says, from what was read."""
     model, fields, via, sent, way = hit["model"], hit["fields"], hit["via"], hit["sent"], hit["way"]
     many = len(fields) > 1
     names = _and(fields, MOST_SHOWN)
-    s, say, it = ("s", "s say", "these fields") if many else ("", " says", "this field")
+    s, it = ("s", "these fields") if many else ("", "this field")
     no_harm = f"This is no problem only where {'a' if many else 'the'} field holds no secret after all, or where "
     if via == "django":
         by = hit["by"]
@@ -947,7 +965,7 @@ def _words(rel: str, hit: dict) -> tuple[str, str]:
         return title, (
             "Heuristic: read from the model file and from this serializer's own lines; nothing was run. "
             f"{by} is a serializer of {model.name} ({model.file} line {model.line}), and {how}. {model.name} has the "
-            f"field{s} {names}, whose name{say} a secret"
+            f"field{s} {names}, {_why(model, fields)}"
             + (" (Django keeps the password's hash there)" if "password" in fields else "") + ". A serializer is "
             f"what a view sends back, so {it} {'are' if many else 'is'} in the answer of every view that uses this "
             f"serializer. Take {'them' if many else 'it'} out of what the serializer sends, or mark "
@@ -968,7 +986,7 @@ def _words(rel: str, hit: dict) -> tuple[str, str]:
         return title, (
             "Heuristic: read from the model file and from this route's own lines; nothing was run. "
             f"{model.name} is the table's own class ({model.file} line {model.line}) and has the field{s} {names}, "
-            f"whose name{say} a secret. {how} So whoever calls the route gets {it}, whether or not a page shows "
+            f"{_why(model, fields)}. {how} So whoever calls the route gets {it}, whether or not a page shows "
             f"{'them' if many else 'it'}. Give the answer a class of its own with only the fields a caller needs "
             f"(`response_model={model.name}Out`), and FastAPI leaves the rest out. "
             + (f"This is no problem only where {'a' if many else 'the'} field holds no secret after all."
@@ -977,7 +995,7 @@ def _words(rel: str, hit: dict) -> tuple[str, str]:
                "them go until they are asked for again); Lantern does not see that."))
     noun, field = ("row", "column") if via == "drizzle" else ("record", "field")
     holds = (f"{'The table ' if via == 'drizzle' else ''}{model.name} is written in {model.file} (line {model.line}) "
-             f"and has the {field}{s} {names}, whose name{say} a secret.")
+             f"and has the {field}{s} {names}, {_why(model, fields)}.")
     led, how = hit.get("led"), hit["how"]
     if led:
         to, inner = led["to"], led["fields"]
@@ -989,9 +1007,9 @@ def _words(rel: str, hit: dict) -> tuple[str, str]:
         brings = f"brings {whole}{what} each {model.name} leads to ({led['path']})"
         if to is not None:
             holds = (f"{to.name} is written in {to.file} (line {to.line}) and has the field"
-                     f"{'s' if len(inner) > 1 else ''} {_and(inner, MOST_SHOWN)}, whose name"
-                     f"{'s say' if len(inner) > 1 else ' says'} a secret.")
-        do = (f"Say which fields of it go back: `{last}: {{ select: {{ id: true }} }}` in place of `{last}: true`, "
+                     f"{'s' if len(inner) > 1 else ''} {_and(inner, MOST_SHOWN)}, {_why(to, inner)}.")
+        keep = _plain(to, 1)[0] if to is not None else "id"
+        do = (f"Say which fields of it go back: `{last}: {{ select: {{ {keep}: true }} }}` in place of `{last}: true`, "
               f"or `{last}: {{ omit: {{ {', '.join(f'{f}: true' for f in inner[:3])} }} }}`, or build the answer "
               "from the fields a page needs.")
     elif via == "prisma":
@@ -1000,17 +1018,18 @@ def _words(rel: str, hit: dict) -> tuple[str, str]:
         brings = {"named": f"asks for {names} by name",
                   "left": f"leaves some fields out and brings every other field of {model.name}",
                   "all": f"names no fields, so it brings every field of {model.name}"}[how]
-        do = ("Say which fields go back: `select: { id: true, name: true }` in the query, or `omit: { "
-              + ", ".join(f"{f}: true" for f in fields[:3] if "." not in f) + " }`, or build the answer from the "
-              "fields a page needs.")
+        do = ("Say which fields go back: `select: { " + ", ".join(f"{f}: true" for f in _plain(model, 2))
+              + " }` in the query, or `omit: { " + ", ".join(f"{f}: true" for f in fields[:3] if "." not in f)
+              + " }`, or build the answer from the fields a page needs.")
     else:
         title = (f"{_a(model.name)} row is sent back with its {_and(fields)}, which the query asks for by name"
                  if how == "named" else f"{_a(model.name)} row is sent back whole, with its {_and(fields)}")
         brings = {"named": f"asks for {names} by name",
                   "left": f"leaves some columns out and brings every other column of {model.name}",
                   "all": f"names no columns, so it brings every column of {model.name}"}[how]
-        do = ("Name the columns that go back (`db.select({ id: users.id })`, `columns: { id: true }`, `.returning({ "
-              "id: users.id })`), or build the answer from the fields a page needs.")
+        c = _plain(model, 1)[0]
+        do = (f"Name the columns that go back (`db.select({{ {c}: {model.name}.{c} }})`, `columns: {{ {c}: true }}`, "
+              f"`.returning({{ {c}: {model.name}.{c} }})`), or build the answer from the fields a page needs.")
     line = "the same line" if sent == hit["line"] else f"line {sent}"
     goes = (f"What it found goes into the answer written on {line} as it came." if way == "answer" else
             f"What it found is returned on {line} {WAYS[way]}.")

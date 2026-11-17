@@ -212,6 +212,82 @@ def test_one_changed_part_makes_a_safe_twin_dangerous(tmp_path, rel, safe, dange
     assert here == ([fields] if fields else []) and len(found) == 9 + bool(fields)
 
 
+# A link to another record whose name says a secret (`password Password?`) is no field of the record: Prisma brings
+# the record it leads to only when the query asks for it (`include`, `select`), and that record keeps the secret in
+# the field that holds the value, where its model's own name says it holds one (`Password.hash`, `ApiKey.key`).
+APART_SCHEMA = '''model Member {
+  id       String    @id @default(cuid())
+  email    String    @unique
+  password Password?
+  apiKeys  ApiKey[]
+}
+
+model Password {
+  hash     String
+  member   Member @relation(fields: [memberId], references: [id])
+  memberId String @unique
+}
+
+model ApiKey {
+  id       String @id @default(cuid())
+  label    String
+  key      String @unique
+  member   Member @relation(fields: [memberId], references: [id])
+  memberId String
+}
+'''
+
+APART = {
+    "package.json": NEXT["package.json"],
+    "tsconfig.json": NEXT["tsconfig.json"],
+    "prisma/schema.prisma": APART_SCHEMA,
+    "lib/db.ts": NEXT["lib/db.ts"],
+    # ---- safe: the member as it came holds no secret of its own, and what it links to is not brought
+    "app/api/members/[id]/route.ts": IMPORTS +
+        "export async function GET(_req: Request, { params }: { params: { id: string } }) {\n"
+        "  const member = await prisma.member.findUnique({ where: { id: params.id } });\n"
+        "  return NextResponse.json(member);\n}\n",
+    # ---- dangerous: the password's own record brought with the member
+    "app/api/members/by-email/route.ts": IMPORTS +
+        "export async function POST(req: Request) {\n"
+        "  const { email } = await req.json();\n"
+        "  const member = await prisma.member.findUnique({ where: { email }, include: { password: true } });\n"
+        "  return NextResponse.json(member);\n}\n",
+    # ---- dangerous: every key of every member brought whole
+    "app/api/members/keys/route.ts": IMPORTS +
+        "export async function GET() {\n"
+        "  const members = await prisma.member.findMany({ include: { apiKeys: true } });\n"
+        "  return NextResponse.json(members);\n}\n",
+    # ---- safe: the keys brought by the fields that hold no secret
+    "app/api/members/labels/route.ts": IMPORTS +
+        "export async function GET() {\n"
+        "  const members = await prisma.member.findMany({\n"
+        "    include: { apiKeys: { select: { id: true, label: true } } },\n  });\n"
+        "  return NextResponse.json(members);\n}\n",
+    # ---- dangerous: the keys asked for themselves
+    "app/api/keys/route.ts": IMPORTS +
+        "export async function GET() {\n"
+        "  return NextResponse.json(await prisma.apiKey.findMany());\n}\n",
+}
+
+
+def test_a_secret_kept_in_a_record_of_its_own_is_named_only_when_it_is_brought(tmp_path):
+    found = ours(_write(tmp_path, APART))
+    assert [(f["file"], f["line"], f["columns"]["model"], f["columns"]["fields"]) for f in found] == [
+        ("app/api/keys/route.ts", 5, "ApiKey", ["key"]),
+        ("app/api/members/by-email/route.ts", 6, "Member", ["password.hash"]),
+        ("app/api/members/keys/route.ts", 5, "Member", ["apiKeys.key"]),
+    ]
+    by = {f["file"]: f for f in found}
+    key, member = by["app/api/keys/route.ts"], by["app/api/members/by-email/route.ts"]
+    assert "the field key, which keeps the value in a model whose own name says it holds a secret (ApiKey)" \
+        in key["more_info"]
+    assert "`select: { id: true, label: true }`" in key["more_info"]          # an example made of its own fields
+    assert member["title"] == "A Member record is sent back with the whole Password it leads to (password), hash " \
+                              "with it"
+    assert "`password: { select: { memberId: true } }`" in member["more_info"]
+
+
 DRIZZLE = {
     "package.json": '{"name": "d", "dependencies": {"next": "15.0.0", "drizzle-orm": "0.36.0"}}\n',
     "tsconfig.json": '{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["./*"]}}}\n',

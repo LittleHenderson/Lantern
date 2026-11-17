@@ -205,6 +205,67 @@ def test_create_table_statements():
     assert got["Invoice"].fields == {"id": 9, "tenant_id": 9, "amount": 9} and got["Invoice"].owner() == ["tenant_id"]
 
 
+KEPT_APART = '''model Member {
+  id       String    @id @default(cuid())
+  email    String    @unique
+  password Password?
+  apiKeys  ApiKey[]
+  tokens   Int       @default(0)
+}
+
+model Password {
+  hash     String
+  member   Member @relation(fields: [memberId], references: [id])
+  memberId String @unique
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  label      String
+  key        String    @unique
+  lastUsedAt DateTime?
+  member     Member    @relation(fields: [memberId], references: [id])
+  memberId   String
+}
+
+model PasswordPolicy {
+  id        Int @id
+  value     Int
+  minLength Int
+}
+
+model TokenUsage {
+  id    Int @id
+  value Int
+}
+'''
+
+KEPT_APART_SQL = '''create table api_keys (id serial primary key, user_id int, key text not null, name text);
+create table passwords (user_id int primary key, hash text not null);
+create table sessions (id text primary key, data text);
+create table password_policies (id int primary key, value int);
+create table signing_keys (id int, `key` varchar(64), KEY idx_key (`key`), PRIMARY KEY (id));
+'''
+
+
+def test_a_secret_kept_in_a_record_of_its_own():
+    """A link to another record is no field of the record: `password Password?` holds no secret, the record it leads
+    to does, and a query brings that record only when it asks for it. A model whose own name says it holds a secret
+    (`Password`, `ApiKey`, `api_keys`) keeps it in the field that holds the value (`hash`, `key`); one whose name only
+    shares a word with a secret (`PasswordPolicy`, `TokenUsage`, `sessions`) keeps none."""
+    got = {m.name: m for m in datamodel.prisma(KEPT_APART, "prisma/schema.prisma")}
+    assert got["Member"].leads == {"password": "Password", "apiKeys": "ApiKey"} and got["Member"].secret() == []
+    assert got["Password"].secret() == ["hash"] and got["ApiKey"].secret() == ["key"]
+    assert got["PasswordPolicy"].secret() == [] and got["TokenUsage"].secret() == []
+    assert got["Member"].owner() == [] and got["Password"].owner() == ["memberId"]
+    tables = {m.name: m for m in datamodel.sql(KEPT_APART_SQL, "db/schema.sql")}
+    assert tables["api_keys"].secret() == ["key"] and tables["passwords"].secret() == ["hash"]
+    assert tables["sessions"].secret() == [] and tables["password_policies"].secret() == []
+    # a column named `key` is a column where a type follows it; `KEY idx (col)` and `PRIMARY KEY (id)` are none
+    assert list(tables["api_keys"].fields) == ["id", "user_id", "key", "name"]
+    assert list(tables["signing_keys"].fields) == ["id", "key"] and tables["signing_keys"].secret() == ["key"]
+
+
 @pytest.mark.parametrize("name,secret", [
     ("password", True), ("passwordHash", True), ("hashed_password", True), ("passwd", True), ("pwd_hash", True),
     ("resetToken", True), ("reset_password_token", True), ("verification_token", True), ("refresh_token", True),

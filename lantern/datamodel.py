@@ -36,6 +36,8 @@ NOT_A_SECRET = frozenset("""count counts used usage limit max min total expires 
 SECRET_WORDS = frozenset("password passwd pwd secret salt otp totp passphrase passcode".split())
 KEY_OF = frozenset("api private secret signing encryption master license licence".split())
 CODE_OF = frozenset("recovery backup".split())
+# in a model whose own name says it holds a secret (`Password`, `ApiKey`, `api_keys`), the fields that keep the value
+HOLDS_VALUE = frozenset("hash hashed digest key value code secret token cipher ciphertext encrypted".split())
 OWNER_FORMS = frozenset({("user",), ("owner",), ("org",), ("organization",), ("organisation",), ("workspace",),
                          ("tenant",), ("team",), ("account",), ("author",), ("member",), ("company",), ("creator",),
                          ("created", "by")})
@@ -54,6 +56,26 @@ def secret_column(name: str) -> bool:
     have = set(got)
     return bool(have & SECRET_WORDS or "token" in have or ("key" in have and have & KEY_OF)
                 or (have & {"code", "codes"} and have & CODE_OF))
+
+
+def _one(word: str) -> str:
+    """A table's name is often a plural: `api_keys`, `passwords`, `password_policies`."""
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
+def secret_model(name: str) -> bool:
+    """Does a model's own name say it holds a secret (`Password`, `ApiKey`, `api_keys`, `RecoveryCode`)? Its last
+    word is read as one; a name that only shares a word with a secret (`PasswordPolicy`, `TokenUsage`) does not."""
+    got = words(name)
+    return bool(got) and secret_column("_".join([*got[:-1], _one(got[-1])]))
+
+
+def keeps_value(name: str) -> bool:
+    """Is a field, by its name, the one that keeps a value (`hash`, `key`, `value`, `hashedKey`)?"""
+    got = words(name)
+    return bool(got) and set(got) <= HOLDS_VALUE
 
 
 def owner_column(name: str) -> bool:
@@ -77,8 +99,13 @@ class Model:
     inherited: list[str] = field(default_factory=list)          # fields a library's base class brings
 
     def secret(self) -> list[str]:
-        """The fields that hold a secret by their names, a base class's first."""
-        return [f for f in [*self.inherited, *self.fields] if secret_column(f)]
+        """The fields that hold a secret by their names, a base class's first. In a model whose own name says it
+        holds a secret, the field that keeps the value is one too (`Password.hash`, `ApiKey.key`). A Prisma field that
+        leads to another model is no column of this one (`password Password?`): what it leads to is fetched apart,
+        and only when a query asks for it, and holds its own."""
+        kept = secret_model(self.name)
+        return [f for f in [*self.inherited, *self.fields] if not (self.kind == "prisma" and f in self.leads)
+                and (secret_column(f) or (kept and keeps_value(f)))]
 
     def owner(self) -> list[str]:
         """The fields that say whose the record is. In a Prisma schema the field that leads to the owner (`org Org`)
@@ -273,8 +300,10 @@ def _settled(classes: list[_Class]) -> list[Model]:
             if b in named and b not in seen:
                 seen.add(b)
                 todo += named[b].bases
+                kept = secret_model(c.model.name)
                 c.model.inherited += [f for f in [*named[b].model.inherited, *named[b].model.fields]
-                                      if secret_column(f) and f not in c.model.inherited and f not in c.model.fields]
+                                      if (secret_column(f) or (kept and keeps_value(f)))
+                                      and f not in c.model.inherited and f not in c.model.fields]
         out.append(c.model)
     return out
 
@@ -348,6 +377,11 @@ _CREATE = re.compile(r"\bcreate\s+(?:(?:global\s+|local\s+)?(?:temp|temporary|un
                      r"(?:\s*\.\s*(?:[\w$]+|\"[^\"\n]+\"|`[^`\n]+`|\[[^\]\n]+\]))*)\s*\(", re.I)
 _COLUMN = re.compile(r"\s*(\"[^\"\n]+\"|`[^`\n]+`|\[[^\]\n]+\]|[A-Za-z_][\w$]*)")
 NO_COLUMN = frozenset("constraint primary foreign unique check exclude like index key fulltext spatial period".split())
+# ... unless a column's type follows the word: `key text not null` is a column named `key`, `KEY idx (col)` is none
+_TYPED = re.compile(r"\s*[A-Za-z_][\w$]*\s+(?:text|varchar|character|char|nchar|nvarchar|int|integer|int2|int4|int8|"
+                    r"bigint|smallint|tinyint|mediumint|serial|bigserial|smallserial|uuid|bool|boolean|timestamp|"
+                    r"timestamptz|date|time|timetz|datetime|json|jsonb|numeric|decimal|real|double|float|float4|"
+                    r"float8|bytea|blob|binary|varbinary|citext|inet|cidr|money|interval|xml)\b", re.I)
 
 
 def sql(text: str, rel: str) -> list[Model]:
@@ -362,7 +396,8 @@ def sql(text: str, rel: str) -> list[Model]:
         model = Model(name, "sql", rel, _line(code, m.start()), table=name)
         for start, part in parts:
             col = _COLUMN.match(part)
-            if not col or col.group(1).lower() in NO_COLUMN or len(model.fields) >= MOST_FIELDS:
+            if not col or (col.group(1).lower() in NO_COLUMN and not _TYPED.match(part)) \
+                    or len(model.fields) >= MOST_FIELDS:
                 continue
             model.fields.setdefault(col.group(1).strip("\"`[]"), _line(code, m.end() + start + col.start(1)))
         out.append(model)
