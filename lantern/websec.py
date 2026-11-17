@@ -20,6 +20,9 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
                      (publicvalues.py; heuristic)
   LW-SERVER-IMPORT-IN-CLIENT  a file that reads a secret setting by name and is loaded with a file that begins
                      with "use client" (clientpull.py; heuristic)
+  LW-SENSITIVE-COLUMN-RETURNED  a record whose model has a secret field (a password's hash, a reset token, a key),
+                     sent back as the query found it: Prisma, Drizzle, a FastAPI route, a DRF serializer
+                     (wholerecord.py, with the models read by datamodel.py; heuristic)
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
@@ -2299,6 +2302,8 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
         repo, said={(f["file"], f["snippet"]) for f in findings if f["rule"] == "LW-PUBLIC-SECRET"})
     from . import clientpull        # a file that reads a secret setting, loaded with a file made for the browser
     findings += clientpull.pulled(g)
+    from . import wholerecord       # a record sent back whole, with a secret field of its model in it
+    findings += wholerecord.sent_whole(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

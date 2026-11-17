@@ -372,6 +372,11 @@ PY_SIGNS = ("Column(", "mapped_column", "Mapped[", "models.", "SQLModel", "Abstr
 JS_ENDS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
 
 
+def of(repo: Path | str) -> Models:
+    """The project's models, read once in a run for every rule that asks (`listing.once`); to read, not to change."""
+    return listing.once(repo, "datamodel", lambda: read(repo))
+
+
 def read(repo: Path | str) -> Models:
     """Every model the project's files write down."""
     repo = Path(repo)

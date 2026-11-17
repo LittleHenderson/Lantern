@@ -143,6 +143,12 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                    "and your bill.",
                    "The file is loaded by the server only and the build no longer hands the setting to the page, "
                    "so the key is in no file a visitor downloads. The old key was replaced."),
+    "whole-record": (None,
+                     "They read what the server sent with the record: a password's hash, a reset token or a key "
+                     "that no page shows. A hash can be tried against lists of common passwords on their own "
+                     "computer, as often as they like; a reset token or a key lets them in as that person.",
+                     "The query names the fields it needs, or the answer is built from them, so the secret field "
+                     "never leaves the server."),
     "shared-connection": (None,
                           "Both requests are on the one database connection together. One of them gets an "
                           "error from the database library, or an answer that is empty or that belongs to "
@@ -358,6 +364,7 @@ RULE_KIND = {
     "LV-EXEC-CONCAT": "shell", "LV-TLS-OFF": "tls-off", "LV-WEAK-HASH": "weak-hash", "LV-DESERIALIZE": "deserialize",
     "LV-CORS-ALL": "cors", "LW-PUBLIC-SECRET": "secret", "LW-SERVICE-ROLE": "service-role", "LW-JWT": "secret",
     "LW-CLIENT-ENV-SECRET": "secret", "LW-SERVER-IMPORT-IN-CLIENT": "server-code",
+    "LW-SENSITIVE-COLUMN-RETURNED": "whole-record",
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LW-TOKEN-PICKUP": "pickup", "LW-LOOPBACK-COOKIE": "local-cookie", "LW-SW-KEEPS-PAGES": "kept-pages",
     "LW-LIMIT-COUNTED-LATER": "counted-later", "LW-SHARED-CONNECTION": "shared-connection",
@@ -709,6 +716,14 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                      + ("the value of the setting written into it." if kind == "server-key" else
                         "the name of the setting it reads."))
         basis.append("which files are loaded with a page's file comes from the import lines Lantern read")
+    elif kind == "whole-record":
+        named = str(((f.get("columns") or {}).get("fields") or ["a secret field"])[0]).rsplit(".", 1)[-1]
+        steps.append(f"{who} uses the app as anyone would, with the browser's developer tools open, which show "
+                     "every answer the server sends in full.")
+        steps.append(f"In one answer they find more than the page shows: the record as it is stored, {named} with "
+                     "it.")
+        basis.append("the model's fields come from the project's own model file; the query and the answer from "
+                     "the lines Lantern read")
     elif kind == "shared-connection":
         steps.append(f"{who} uses the app while somebody else does, or sends several requests at the same "
                      "moment.")
@@ -923,6 +938,7 @@ FIXED_HEADLINES = {
     "shared-connection": "Requests of the same moment may meet on one database connection",
     "server-code": "Code written for your server may be in the files every visitor downloads",
     "server-key": "A secret key may be written into the files every visitor downloads",
+    "whole-record": "An answer may carry a secret field that no page shows",
     "owner": "A signed-in person may be able to reach other people's records",
     "owner-late": "Something is done for a record before the app asks whose it is",
     "role": "An admin route may not ask for an admin",
