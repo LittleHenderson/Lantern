@@ -1071,13 +1071,24 @@ class SinkRec(NamedTuple):
 
 class Az:
     """What one route, or one function for its summary, shows about who may reach what."""
-    __slots__ = ("ev", "pev", "records", "sender")
+    __slots__ = ("ev", "pev", "records", "sender", "wrote")
 
     def __init__(self):
         self.ev: set = set()           # "owner" / "role": checks that were made on who is signed in
         self.sender: int | None = None  # the line from which only a message its provider signed goes on ("sender")
         self.pev: dict = {}            # parameter index -> the checks made on it, should it be who is signed in
         self.records: dict = {}        # (file, line, origin) -> a record reached by a request value
+        # (file, line) of every place stored data is written, here or in what is called from here, whatever picked
+        # the record -> whether only a message its provider signed gets there (`wrote`, `lantern/webhooks.py`)
+        self.wrote: dict = {}
+
+
+def wrote(ctx: "Ctx", file: str, line: int, checked: bool = False) -> None:
+    """Stored data is written at this place on the way through this function: noted with whether a check of who sent
+    the message stood before it (`checked`: in the called function that writes; else by what was asked here so far).
+    A place some request gets to unchecked stays unchecked."""
+    az = ctx.az
+    az.wrote[(file, line)] = az.wrote.get((file, line), True) and (checked or "sender" in az.ev)
 
 
 def at_record(v: "Val | None") -> tuple | None:
@@ -1101,7 +1112,7 @@ def had_marks(az: Az) -> frozenset:
 
 
 class Summary:
-    __slots__ = ("ret", "sinks", "guards", "pred_t", "pred_f", "ev", "pev", "records", "fields")
+    __slots__ = ("ret", "sinks", "guards", "pred_t", "pred_f", "ev", "pev", "records", "fields", "wrote")
 
     def __init__(self):
         self.ret: Val | None = None
@@ -1113,6 +1124,7 @@ class Summary:
         self.ev: frozenset = FIXED0
         self.pev: dict[int, frozenset] = {}
         self.records: dict = {}
+        self.wrote: frozenset = FIXED0         # (file, line, checked) of `Az.wrote`, for the callers
 
     def sig(self):
         r = self.ret
@@ -1124,7 +1136,7 @@ class Summary:
                 tuple(sorted(self.pred_f.items())), self.ev, tuple(sorted(self.pev.items())),
                 frozenset((k, r["unless"], r["had"], r["hadp"]) for k, r in self.records.items()),
                 tuple(sorted((k, frozenset((t.kind, t.key, t.safe, t.drop) for t in v.taints), v.fixed, v.sql,
-                              v.kind == "const") for k, v in self.fields.items())))
+                              v.kind == "const") for k, v in self.fields.items())), self.wrote)
 
 
 class Ctx:
@@ -1213,11 +1225,20 @@ class Soft(NamedTuple):
 
 
 class Result:
-    def __init__(self, flows, stats, errors, engine, authz=(), logins=(), caught=(), soft=None, senders=None):
+    def __init__(self, flows, stats, errors, engine, authz=(), logins=(), caught=(), soft=None, senders=None,
+                 changes=None, tries=None):
         self.flows, self.stats, self.errors, self.engine = flows, stats, errors, engine
         # the routes (the map's nodes) that go on only with a message whose signature the provider's own library
         # checked -> the line of the route's own code that check stands on, or is called from
         self.senders = dict(senders or {})
+        # the routes that write stored data, in their own lines or in what they call -> `{detail, file, line,
+        # wrote: [(file, line, checked)]}`: every such place, and whether only a message its provider signed gets
+        # there (`lantern/webhooks.py`)
+        self.changes = dict(changes or {})
+        # (file, line) of every call that is, by its name, a provider's own check of a message's signature -> "" (it
+        # holds, and every request that goes on was asked), "some" (not every request was), "secret" (made with a
+        # missing or empty secret), "later" (its answer is not waited for), "unknown" (nothing is known of it)
+        self.tries = dict(tries or {})
         self.authz = list(authz)       # per route: records reached with no owner compared, an admin route unasked
         self.logins = set(logins)      # the routes (the map's nodes) whose code turns away whoever is not signed in
         # the routes on whose way a token is checked and a request that fails the check, or that some requests go
@@ -1419,6 +1440,8 @@ class Engine:
         self.handed_on: dict = {}
         self.logins: set = set()           # the map's nodes of the routes whose code turns away who is not signed in
         self.senders: dict = {}            # the map's nodes of the routes of `Result.senders` -> the check's line
+        self.changes: dict = {}            # the map's nodes of the routes of `Result.changes` -> what they write
+        self.tries: dict = {}              # (file, line) of a provider's check of a signature -> `sender_try`'s word
         self.stored_at: dict = {}          # (file, line) of a write of request text into a file -> its `place`
         self.read_at: dict = {}            # (file, line) of a read of a file -> its `place`
         self.read_runs: dict = {}          # (file, line, read) -> a file's text run as code or as a template there
@@ -1648,7 +1671,7 @@ class Engine:
         out = self.read_back_flows(out)
         self.stats["flows"] = len(out)
         return Result(out, self.stats, self.errors, self, self.authz(), self.logins, self.caught, self.soft_side(),
-                      self.senders)
+                      self.senders, self.changes, self.tries)
 
     def soft_side(self) -> Soft:
         """The project's functions that call a token library, themselves or below them, and whose code shows no
@@ -1696,6 +1719,7 @@ class Engine:
                 if f:
                     s.pred_f[i] = f
         s.ev, s.pev = frozenset(ctx.az.ev), {i: frozenset(k) for i, k in ctx.az.pev.items()}
+        s.wrote = frozenset((f, ln, c) for (f, ln), c in ctx.az.wrote.items())
         s.records = dict(ctx.az.records)
         s.fields = dict(ctx.fields)
         self.summ[fn.key] = s
@@ -3172,25 +3196,35 @@ class Engine:
         must make it with the provider's library (`made_by`): a function of the project's own that goes by the
         library's name checks nothing. Not when the secret is missing or fixed empty text (anybody can sign with
         that), nor for a check whose answer comes later and is not waited for."""
+        return self.sender_try(name, callee, e, env) == ""
+
+    def sender_try(self, name: str, callee: Val, e: N, env: Env) -> str | None:
+        """`sender_checked` with the reason. None: by its name this call is no provider's check of a signature. "":
+        it is one, and it fails when the provider did not send the message. Else why it is not taken for one:
+        "secret" (the secret is missing or fixed empty text), "later" (its answer comes later and is not waited
+        for), "unknown" (what it is called on is not shown to be the provider's library, or its arguments are not
+        written out: nothing is known of it either way)."""
         d = name or (callee.data if callee.kind == "ext" and isinstance(callee.data, str) else "")
         if "ebhook" not in d:
-            return False
+            return None
         m = R.SENDER_VERIFIES.match(d)
+        if m is None:
+            return None
         items, kw = e.items or (), e.kw or {}
-        if m is None or "**" in kw or any(x is not None and x.k == "star" for x in items):
-            return False
+        if "**" in kw or any(x is not None and x.k == "star" for x in items):
+            return "unknown"
         client = m.group("client")
         if client is not None:
             if client.startswith("."):
                 if not self.made_by(env.fn.mod, e.a, R.SENDER_PACKAGE):
-                    return False
+                    return "unknown"
             elif not R.SENDER_CLIENT.match(client):
-                return False
+                return "unknown"
             if m.group("later") and e.c != "await":
-                return False
+                return "later"
         elif not m.group("own"):
-            return True     # svix, Standard Webhooks: the secret went to the constructor, which takes no empty one
-        return given(items[2] if len(items) > 2 else kw.get("secret"))
+            return ""       # svix, Standard Webhooks: the secret went to the constructor, which takes no empty one
+        return "" if given(items[2] if len(items) > 2 else kw.get("secret")) else "secret"
 
     @staticmethod
     def sender_held(ctx: Ctx, e: N) -> None:
@@ -3514,6 +3548,8 @@ class Engine:
                             h.add(kind)
                         hp.update((j, kind) for j in mine)
                 return frozenset(h), frozenset(hp)
+            for wf, wl, wc in sorted(s.wrote):      # stored data the called function writes, or what it calls
+                wrote(ctx, wf, wl, wc)
             if s.ev:                      # checks the function makes on its own account
                 got = asked_here(s.ev, ctx)
                 if "sender" in got and az.sender is None:
@@ -3786,6 +3822,13 @@ class Engine:
 
     # ---- who may reach what: records chosen by the request, everything the request sent written onto one
     @staticmethod
+    def text_writes(q: Val) -> bool:
+        """Whether database text adds, changes or removes rows, by its first word (a new row counts here: `wrote`)."""
+        text = q.data if q.kind == "const" and isinstance(q.data, str) else \
+            q.prefix if q.sql and isinstance(q.prefix, str) and not q.prefix.startswith(R.BASE) else ""
+        return bool(text) and bool(R.WRITES_SQL.match(text))
+
+    @staticmethod
     def record_text(q: Val):
         """What database text says about records: (True, whether it changes them) when it reads, changes or removes
         rows that exist (written text needs a WHERE: without one it is every row, nobody's in particular); the index
@@ -3830,6 +3873,10 @@ class Engine:
                 isinstance(a0.data, str) and a0.data.startswith("record("):
             for v in vals[1:]:
                 self.assigned(ctx, env, v, e, what)
+        # --- stored data is written here, whatever picked the record (what a webhook route changes: `wrote`)
+        if (member in R.STORE_MEMBERS and data_recv) or \
+                (bool(member) and d.startswith("record(") and bool(R.HELD_OWN[env.fn.lang].search(member))):
+            wrote(ctx, env.fn.file, e.line)
         # --- a record that was read into an object is changed or removed through that object
         if member and R.HELD_OWN[env.fn.lang].search(member) and at_record(recv) is not None:
             self.changed(ctx, env, at_record(recv), e, what)        # note.delete(), order.deleteOne(), doc.save()
@@ -3849,6 +3896,8 @@ class Engine:
                     qe.items[0].k == "const" and isinstance(qe.items[0].a, str):
                 q = const(qe.items[0].a)        # `text("SELECT ...")`, `sql.SQL("...")`: the text inside
             told = self.record_text(q) if q is not None else None
+            if q is not None and self.text_writes(q):
+                wrote(ctx, env.fn.file, e.line)
             if isinstance(told, tuple):
                 got = self.record(ctx, env, e, what, vals, None, told[1], rls=rls)
                 if got.taints and recv_expr is not None and recv_expr.k == "name":
@@ -3872,6 +3921,8 @@ class Engine:
         the record's owner by the field the data model names (`scoped`: `asks_owner`). Otherwise every request value
         among them is noted for the route to answer for (`authz`), and every parameter for the callers."""
         fn = env.fn
+        if change:
+            wrote(ctx, fn.file, e.line)
         taints: tuple = ()
         for v in vals:
             taints = merge(taints, v.taints)
@@ -4177,6 +4228,13 @@ class Engine:
                 # no token is nobody's owner and has no role
                 self.caught.add(fn.node)
             detail = (self.entry(fn) or {}).get("detail") or fn.name
+            if az.wrote:
+                # every place the route writes stored data, in its own lines or in what it calls, with whether only
+                # a message its provider signed gets there. A check made by what runs before the route (a middleware)
+                # stands before all of them
+                self.changes[fn.node] = {"detail": detail, "file": fn.file, "line": fn.line,
+                                         "wrote": sorted((f, ln, bool(c or "sender" in pre))
+                                                         for (f, ln), c in az.wrote.items())}
             signs_in = sign_in_route(detail)
             records = []
             for r in az.records.values():
@@ -4282,8 +4340,15 @@ class Engine:
         elif name and R.READS_TOKEN.match(name):
             ctx.az.ev.add("caught")     # the token is read and nothing is checked: no login, whatever comes of it
             self.token_lines.add((fn.file, e.line))
-        elif self.sender_checked(name, callee, e, env):
-            self.sender_held(ctx, e)    # a webhook: nothing about the value changes, only who can get past here
+        else:
+            tried = self.sender_try(name, callee, e, env)
+            if tried is not None:
+                if tried == "":
+                    self.sender_held(ctx, e)    # a webhook: nothing about the value changes, only who can get past here
+                    if not sender_counts(ctx):
+                        tried = "some"          # ... and here not every request that goes on was asked
+                # every such call that is written, with what came of it (`Result.tries`, `lantern/webhooks.py`)
+                self.tries[(fn.file, e.line)] = tried
         # a session kept with Remix's or React Router's own storage. A cookie that is not signed, and a session
         # kept whole in one, is the visitor's to write: it is named apart and shows nothing
         if fn.lang == "js" and name:

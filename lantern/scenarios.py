@@ -130,6 +130,13 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                       "The request is counted in the same step that looks at the limit, before the work starts, "
                       "and the count is put right when the work is done. Requests sent together are let through "
                       "only as far as the limit goes."),
+    "unsigned-webhook": (None,
+                         "Your app takes the message for the provider's and does what it says: an account is marked "
+                         "as paid that never paid, a subscription is ended, a person's record is removed. Nobody "
+                         "paid and nobody signed in.",
+                         "The route checks the provider's signature on every message, with the secret only your "
+                         "app and the provider share, before it changes anything. A message nobody signed is "
+                         "turned away."),
     "server-code": (None,
                     "They read the code that was written for your server: which service it calls, how, and the "
                     "name of the setting that holds the key. The key itself is not there, but they now know "
@@ -368,6 +375,7 @@ RULE_KIND = {
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LW-TOKEN-PICKUP": "pickup", "LW-LOOPBACK-COOKIE": "local-cookie", "LW-SW-KEEPS-PAGES": "kept-pages",
     "LW-LIMIT-COUNTED-LATER": "counted-later", "LW-SHARED-CONNECTION": "shared-connection",
+    "LW-UNSIGNED-WEBHOOK": "unsigned-webhook",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-NOTEBOOK-SECRET": "secret", "LP-DJANGO-DEBUG": "debug",
     "LT-SQL": "sql", "LT-SHELL": "shell", "LT-EVAL": "eval", "LT-XSS": "xss", "LT-DESERIALIZE": "deserialize",
@@ -709,6 +717,15 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
     elif kind == "counted-later":
         steps.append(f"{who} sends the same request many times at the same moment, not one after another.")
         basis.append("the look at the limit, the work and the count come from the function's own lines")
+    elif kind == "unsigned-webhook":
+        hook = f.get("webhook") or {}
+        steps.append(f"{who} learns the address your payment or message provider calls: such addresses look alike "
+                     "from app to app, and the provider's own guides show what its messages look like.")
+        steps.append("They send that address a message of their own, written the way the provider writes them, "
+                     + ("and the data is changed before the message is checked." if hook.get("check") == "late" else
+                        "with no signature or a made-up one."))
+        basis.append("where the route writes stored data, and what stands before that, come from the lines "
+                     "Lantern read")
     elif kind in ("server-code", "server-key"):
         steps.append(f"{who} opens your site and looks at the files their browser downloaded (anyone can, with "
                      "the browser's developer tools).")
@@ -935,6 +952,7 @@ FIXED_HEADLINES = {
     "local-cookie": "Another program on this computer may be sent this app's login",
     "kept-pages": "The browser may keep a signed-in person's pages after they have left",
     "counted-later": "A limit may be passed by requests sent at the same moment",
+    "unsigned-webhook": "A made-up message may be taken for your payment or message provider's",
     "shared-connection": "Requests of the same moment may meet on one database connection",
     "server-code": "Code written for your server may be in the files every visitor downloads",
     "server-key": "A secret key may be written into the files every visitor downloads",

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 
-from . import datamodel, flow, scanresult, tenantscope
+from . import datamodel, flow, scanresult, tenantscope, webhooks
 from . import flow_rules as R
 from .graph import route_words
 
@@ -270,6 +270,9 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         out.append(f)
     for _place, c in sorted(claims.items()):
         out.append(_client_role(c, lines_for(c["file"]) if lines_for is not None else []))
+    # a route a provider calls that writes stored data with no check of who sent the message (`lantern/webhooks.py`)
+    hooks, hook_routes = webhooks.unsigned(g, res, lines_for)
+    out.extend(hooks)
     st = res.stats
     notes = []
     if st.get("skipped_files"):
@@ -283,6 +286,8 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
                         "on_other_findings": attached, "not_followed_further": st.get("stopped", 0),
                         "login_read_from_code": len(named_open),
                         "token_check_lets_on": lets_on, "sender_checked": sender_checked}}
+    if hook_routes:     # routes taken for a provider's webhook that write stored data: what LW-UNSIGNED-WEBHOOK read
+        fields["scope"]["webhook_routes"] = hook_routes
     if notes:
         rec = scanresult.record("lantern-flow", "partial", "; ".join(notes), errors=res.errors[:20], **fields)
     else:

@@ -995,6 +995,19 @@ WRITE_MEMBERS = {"update", "create", "insert", "insertOne", "insert_one", "inser
                  "find_one_and_update", "upsert", "set", "setAttributes", "assign", "merge", "bulkCreate",
                  "replaceOne", "replace_one", "findOneAndReplace", "update_or_create", "get_or_create", "patch",
                  "updateAttributes", "update_attributes", "fill", "populate_obj", "from_dict", "updateById"}
+# Calls on stored data that write it by themselves: a row made, changed or removed, a session saved. Not the calls
+# that only fill an object in memory, which is saved by one of these afterwards. Every such place on a route's way is
+# noted whatever picked the record (`flow.wrote`): it is what a webhook route "changes" (`lantern/webhooks.py`).
+STORE_MEMBERS = {"create", "createMany", "insert", "insertOne", "insert_one", "insertMany", "insert_many", "bulkCreate",
+                 "bulk_create", "update", "updateOne", "update_one", "updateMany", "update_many", "upsert", "replaceOne",
+                 "replace_one", "update_or_create", "get_or_create", "updateById", "findByIdAndUpdate",
+                 "findOneAndUpdate", "find_one_and_update", "findOneAndReplace", "find_one_and_replace",
+                 "findByIdAndDelete", "findOneAndDelete", "find_one_and_delete", "findByIdAndRemove",
+                 "findOneAndRemove", "delete", "deleteOne", "delete_one", "deleteMany", "delete_many", "deleteById",
+                 "delete_by_id", "removeById", "remove", "destroy", "del", "add", "add_all", "set", "save", "persist",
+                 "commit", "increment", "decrement"}
+# Database text that adds, changes or removes rows, by its first word.
+WRITES_SQL = re.compile(r"^\W*(insert|update|delete|replace|merge)\b", re.I)
 WHOLE_KEYS = {"...", "$set", "$setOnInsert", "data", "values", "update", "defaults", "create", "attributes", "set"}
 BODY_BAGS = {"json", "body", "form", "data", "get_json", "POST", "payload", "values", "post", "forms"}
 OVERLAY_CALL = re.compile(r"^(Object\.assign|lodash\.(assign|assignIn|extend|merge|defaults)|underscore\.(extend|"

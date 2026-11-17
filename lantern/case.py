@@ -117,6 +117,16 @@ def build(f: dict, g: Graph) -> dict:
                                   "Text that is not fixed is spliced into the SQL") + ": " +
                          "; ".join(f"{x['expr']} ({x['why']})" for x in s.get("spliced", [])[:4]),
                          "from": "context (code)"})
+    hook = f.get("webhook")
+    if isinstance(hook, dict) and hook.get("changes"):
+        evidence.append({"fact": f"{hook.get('route')} is taken for a route a provider calls because "
+                                 f"{hook.get('why')}", "from": "code"})
+        evidence.append({"fact": "Stored data is written at " + ", ".join(
+            f"{c['file']}:{c['line']}" for c in hook["changes"][:4]) + (
+                {"late": f", before the check of who sent the message (line {hook.get('at')})",
+                 "lets-on": f", and the check that is called (line {hook.get('at')}) is not made of every message "
+                            "that gets there"}.get(hook.get("check"), ", with no check of who sent the message "
+                                                                      "before it")), "from": "data flow"})
     fl = f.get("flow")
     if ctx.get("fixed"):
         fx = ctx["fixed"]
@@ -338,6 +348,9 @@ def _claim(f: dict, kind: str) -> str:
     if f.get("rule") == "LW-SENSITIVE-COLUMN-RETURNED":
         return (f"{base}. Read from the model file and one function's lines; whether the field's value is a secret, "
                 "and whether other code takes it out first, is not checked.")
+    if f.get("rule") == "LW-UNSIGNED-WEBHOOK":
+        return (f"{base}. Read from the route's own lines and the functions it calls; a signature checked by "
+                "something in front of the app, or in a way Lantern does not follow, is not seen.")
     if f.get("category") == "dependency":
         return f"{base}. The version is affected; whether the app uses the affected part is not checked."
     return f"{f.get('tool')} says: {base}. A pattern in the code, not a confirmed attack."
