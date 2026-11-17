@@ -9,6 +9,22 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The three AI rules of roadmap stage 5 measured on seven public AI projects (MCP servers in Python and
+  TypeScript, a chat bot with agents, a command-line assistant, a chat over documents), read and never run, with
+  what the runs had to show written down before the first run and every finding read by hand.
+  `LA-UNBOUNDED-AGENT-LOOP` found one loop, real (a function that calls the model and calls itself again while
+  the model asks for tools, with no count, clock or budget): 1 of 1. `LA-MODEL-OUTPUT-TO-TOOL` and
+  `LA-UNSAFE-MCP-TOOL` found nothing, which says little: the model calls of two projects (a model client the
+  project writes itself, a chat model made with `initChatModel`) and the tools of three were not found in the
+  first place, so no precision is known for them and all three rules stay heuristics. On the 30 folders measured
+  before, no finding is gone, new or changed. Fixed from that run: the tool check knows the MCP library's newer
+  names (Python's `MCPServer`; the TypeScript package `@modelcontextprotocol/server`, also its low-level handler
+  of `"tools/call"`) and, in Python, a server a function makes or is handed with its class written, for the tools
+  written inside the function. Run again on the same projects, which is no longer an independent measurement: 18
+  tools found in three servers that had none, none of whose parameters reaches an action the rule names; nothing
+  else changed. Still not read: a server held as a field of a class, a project that puts a function of its own on
+  the library's `registerTool`, and a tool whose function reaches the tool's code through an object of another
+  file (`docs/ai-apps.md`). Tests: `tests/test_ai_tools.py`.
 - New heuristic `LA-UNBOUNDED-AGENT-LOOP` (roadmap stage 5, the AI-app pack's second version; labelled
   heuristic): an agent loop with no cap on its paid calls. An agent asks a paid model, does what the model asks
   for, and asks again until the model says it is done; where only the model's answer ends the rounds, a model

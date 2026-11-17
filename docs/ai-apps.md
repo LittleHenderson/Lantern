@@ -46,6 +46,9 @@ text is said only where the request's text is on the same line, and is otherwise
 The tool rule (`LA-UNSAFE-MCP-TOOL`, the same stage) is a heuristic too. A tool is known by the library's own name for
 making one (a decorator, a call, a class made from the library's tool class, a list handed to an agent, the AI SDK's
 `tools` object), never by a name of the project's: a class of the project with a method called `tool` makes no tool.
+The MCP library's newer names count as its older ones (Python's `MCPServer`, the TypeScript package
+`@modelcontextprotocol/server`), and in Python a server a function makes, or is handed with its class written
+(`server: MCPServer`), counts for the tools written inside that function.
 What the model puts into the tool's parameters is followed like what a request sent (`lantern/flow.py`, with the
 origin `tool`), into helpers and other files, to a shell command, query text, code that is run, or a file the action
 writes, changes or removes. A tool that only reads a file is counted and is no finding; one that keeps to what it is
@@ -70,15 +73,29 @@ where it decides to go on, or where a person says yes to each round. A library's
 settings: LangChain's `AgentExecutor(max_iterations=None)` with no `max_execution_time`, the AI SDK's `stopWhen`
 made only of `hasToolCall(...)`, or `maxSteps: Infinity`. Ranked medium: a cost with no end, not a way in.
 
+On 2026-11-17 the three rules of stage 5 were run on seven public AI projects (MCP servers in Python and TypeScript,
+a chat bot with agents, a command-line assistant, a chat over documents), read and never run, with what the runs had
+to show written down before the first run and every finding read by hand. The agent-loop rule found one loop, a
+function that calls the model and calls itself again while the model asks for tools, with no count, clock or budget:
+real, 1 of 1. The other two rules found nothing there, which says little: the model calls of two projects and the
+tools of three were not found in the first place (see below). The tool rule's blindness to the MCP library's newer
+names and to a server made inside a function was fixed after that run; run again on the same projects, which is no
+longer an independent measurement, it found the 18 tools of three servers, none of whose parameters reaches an action
+the rule names. No precision is known yet for these two rules, and all three stay heuristics.
+
 ## What it does not do yet
 
 * Follow the answer of a model call made through a library the data-flow step does not name (`flow_rules.MODEL_CALL`;
-  a new library is a new line there) or through the project's own HTTP code: only the older reading, inside one
-  function, may still see it.
+  a new library is a new line there; a chat model made with `initChatModel` is not named either) or through the
+  project's own HTTP code: only the older reading, inside one function, may still see it. A model's streamed text
+  handed through a generator and an object of the project's own that prints it is not followed.
 * Read prompt templates for secrets.
 * Tools beyond the ones the tool rule names: a tool registered through a variable or a helper of the project, a
-  JavaScript tool whose function is imported from another file, a server kept on an object (`self.mcp`) or made by a
-  factory, an MCP server's tools in another language than Python
+  JavaScript tool whose function is imported from another file, a server kept on an object (`self.mcp`,
+  `this.server = new Server(...)`) or made by a factory of the project, a tool whose function calls the tool's code
+  through an object of another file (`tool.handler(args)`), a project that puts a function of its own on the
+  library's `registerTool` (the map then withholds the library's name for every such call), a server handed to a
+  function with no class written, an MCP server's tools in another language than Python
   and TypeScript, a JavaScript tool's parameters after the first, and the types a schema gives them (a `z.number()`
   argument is still followed). Reading a file a tool names is not counted as harm, and a file opened with a mode
   Lantern cannot read counts as written. A question is a person's approval by the call's name only: a function of
