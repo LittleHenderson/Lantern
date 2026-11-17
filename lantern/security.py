@@ -37,6 +37,21 @@ SECRET_PATTERNS = [
     ("anthropic-key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b")),
     ("openai-key", re.compile(r"\bsk-(proj-)?[A-Za-z0-9]{32,}\b")),
 ]
+# A key's place kept by filler in an example file is no key (2026-11-16; until then `sk_live_` and 24 times `x` in a
+# `.env.example` was "Possible secret", ranked critical). Filler is only what cannot be a key: after the fixed start
+# of its kind every letter and digit is `x`, or every one is `0`; or the text is the one example key a provider prints
+# in its own guide (written in parts, so that no pattern finds it in this file). Anything else that fits a pattern is
+# still a finding.
+KEY_START = re.compile(r"^(?:AKIA|ASIA|gh[pousr]_|xox[baprs]-|sk_live_|sk-ant-|sk-proj-|sk-)")
+FILLER = ({"x"}, {"0"})
+GUIDE_KEYS = frozenset({"AKIA" + "IOSFODNN7" + "EXAMPLE"})
+
+
+def filler_key(found: str) -> bool:
+    """Is this text, which one of `SECRET_PATTERNS` matched, a key's place kept by filler and no key?"""
+    return found in GUIDE_KEYS or {c for c in KEY_START.sub("", found).lower() if c.isalnum()} in FILLER
+
+
 SECRET_EXTS = {".py", ".env", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json", ".txt", ".sh",
                ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro", ".html",
                ".rb", ".go", ".rs", ".java", ".kt", ".swift", ".php", ".tf", ".properties", ".xml"}
@@ -55,7 +70,7 @@ def _fid(*parts) -> str:
 
 BANDIT_TIMEOUT = 600
 GITLEAKS_TIMEOUT = 300
-SECRETS_VERSION = "2"      # the built-in pattern set (SECRET_PATTERNS); bump when a pattern changes
+SECRETS_VERSION = "3"      # the built-in pattern set (SECRET_PATTERNS, filler_key); bump when what is found changes
 
 
 def _rel(repo: Path, name: str) -> str:
@@ -668,9 +683,10 @@ def _run_gitleaks(repo: Path, gitleaks: str) -> tuple[list[dict], dict]:
 
 def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
     """Lantern's own secret patterns over the files it reads. A file it cannot read is counted and named, and makes
-    the run `partial`."""
+    the run `partial`. A key's place kept by filler (`filler_key`) is no finding and is counted
+    (`scope["placeholders"]`, only when there is one)."""
     from . import scanresult
-    out, errors, files = [], [], 0
+    out, errors, files, fillers = [], [], 0, 0
     for p, parts in listing.files(repo):    # the project's files, walked once for a whole run
         if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
             continue
@@ -689,15 +705,18 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             for rule, rx in patterns:
-                if rx.search(line):
+                hits = [m.group(0) for m in rx.finditer(line)]
+                passed_over = sum(1 for hit in hits if filler_key(hit))
+                fillers += passed_over
+                if len(hits) > passed_over:
                     out.append({
                         "id": _fid("secrets", rule, rel, i), "tool": "lantern-secrets", "rule": rule,
                         "title": f"Possible secret ({rule})", "tool_severity": "HIGH",
                         "tool_confidence": "MEDIUM", "file": rel, "line": i,
                         "snippet": "[redacted]", "category": "secret",
                     })
-    base = {"role": "secrets in files (built-in patterns)", "version": SECRETS_VERSION, "scope": {"files": files},
-            "findings": len(out)}
+    base = {"role": "secrets in files (built-in patterns)", "version": SECRETS_VERSION,
+            "scope": {"files": files, **({"placeholders": fillers} if fillers else {})}, "findings": len(out)}
     if errors:
         return out, scanresult.record("lantern-secrets", "partial", f"{len(errors)} file{'s' if len(errors) != 1 else ''} "
                                       "could not be read", errors=errors, **base)

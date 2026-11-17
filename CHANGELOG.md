@@ -9,6 +9,11 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Fixed: where the gitleaks program is not installed, Lantern's built-in secret patterns called a key's place
+  kept by filler in an example file (`sk_live_` and nothing but `x`) a possible secret, which ranks critical.
+  Filler is now no finding and is counted in the scan's record (`scope.placeholders`). Filler is only what
+  cannot be a key: every letter and digit after the fixed start is `x`, or every one is `0`, or the text is the
+  example key a provider prints in its own guide. Anything else that fits a pattern is still a finding.
 - New heuristic `LW-CLIENT-ENV-SECRET` (roadmap stage 5; labelled heuristic; `lantern/publicvalues.py`): a setting
   that every visitor's browser gets (`NEXT_PUBLIC_`, `VITE_`, `EXPO_PUBLIC_`, `PUBLIC_` and the like) whose value
   is a secret, where the name says nothing: an address that carries a password or a key of a shape only servers

@@ -531,7 +531,9 @@ maven-audit, composer-audit, gem-audit, copied-audit, lantern-web, lantern-ai, l
 `timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
-patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
+patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`; for `lantern-secrets` also
+`placeholders` when the built-in patterns passed over that many keys' places kept by filler, such as `sk_live_` and
+nothing but `x`, which are no findings), `exclusions` (folders a tool was
 told to skip, and for bandit the Python files it was told to leave out because they are not files of the project: a
 link that leads out of it, a pipe), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
 `fallback_for` (the built-in secret scan when gitleaks did not finish), and for gitleaks `way` when it was started on
