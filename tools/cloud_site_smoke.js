@@ -75,6 +75,13 @@ async function until(p, fn, timeout) {
     if (/repositor/i.test(await p.$eval('main', m => m.innerText))) errs.push(`${tag}: the word repository shows in Simple onboarding`);
     await a11y.axe(p, `${tag} onboarding`, errs);
     await p.click('.onb .pick[data-to="github"]'); await p.waitForSelector('.onb details.why');
+    // the person's own projects on GitHub, from the demo's stand-in: a list to pick from, the icon icon-sized
+    await p.waitForSelector('.reporow[data-repo]');
+    if (await p.$$eval('.reporow[data-repo]', a => a.length) !== 2) errs.push(`${tag}: the GitHub screen should list the two projects`);
+    const ghIcon = await p.$eval('.dropzone svg', s => s.getBoundingClientRect().height);
+    if (ghIcon > 40) errs.push(`${tag}: the GitHub icon in the link box is ${ghIcon}px tall`);
+    if (/repositor/i.test(await p.$eval('main', m => m.innerText))) errs.push(`${tag}: the word repository shows on the GitHub screen`);
+    await a11y.axe(p, `${tag} github projects`, errs);
     await p.screenshot({ path: `${out}-${tag}-onboarding-github.png` });
     await p.click('[data-back="where"]'); await p.click('[data-back=""]'); await p.waitForSelector('#showus');
     if (name === 'desk') {
