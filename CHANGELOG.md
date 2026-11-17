@@ -9,6 +9,31 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- New heuristic `LW-NONATOMIC-BALANCE` (roadmap stage 5; labelled heuristic; `lantern/balance.py`): a balance
+  checked in one step and taken from in another. A function that checks a balance (credits, points, coins, a
+  wallet's money, a quota, stock) and after the check writes it down taken away as a step of its own: a store's
+  update that writes the field with a decrement or a minus sign, the object's field set lower and then saved, or
+  SQL that sets the column to a value with a minus sign. Two requests sent at the same moment both read the same
+  balance before either has written, both pass the check and both are taken: the balance goes below zero, or one
+  spend is free. Quiet where the write carries the check: a condition that holds the field to the value that was
+  read, or a condition that bounds it beside a take from the value the database holds (`decrement`, Django's
+  `F()`, `SET credits = credits - $1`). A bound beside a value worked out in the program from what was read
+  (`credits: user.credits - cost` under `gte`) is named, as `how: "bounded"`: both requests pass the bound and
+  write the same value. Quiet too where a lock or a transaction is named before the check, and in JavaScript
+  where nothing is waited for. Medium; on the finding as `balance`; story kind `balance-race`. Not read: counters
+  kept by Redis or another store's own commands, `quantity`, a check and a take in two functions. Inside a
+  transaction it says nothing, as the roadmap asks, which is quiet the wrong way at the usual isolation level of
+  PostgreSQL and MySQL: a transaction alone does not keep two requests from reading the same balance. Measured
+  2026-11-17 on 30 folders (the 12 benchmark projects, the 15 sample apps, Lantern's gateway, website and
+  engine), written down before the first run: 9 functions check a name with a balance word, none of them is a
+  balance and none writes after it, so no finding and nothing to decide; no true case, so no precision is known
+  and it stays a heuristic. Tests: `tests/test_balance_race.py`.
+- Fixed: `LW-LIMIT-COUNTED-LATER` named a limit taken in one step with its own condition, where that step is the
+  first thing waited for after the look and is written over several lines (`await db.user.updateMany({ where: {
+  id, credits: { gt: 0 } }, data: { credits: { decrement: 1 } } })`): the step was taken for the work, and its
+  own `decrement:` line for a count after it. The work's own statement is now one step, to where its brackets
+  close: a take written in it holds, and a count is looked for only after it. Found by the balance rule's safe
+  twin. On the same 30 folders: 0 findings before, 0 after. Tests: `tests/test_countlater.py`.
 - New heuristic `LW-UNSIGNED-WEBHOOK` (roadmap stage 5; labelled heuristic; `lantern/webhooks.py`): a route a
   payment or message provider calls that writes stored data with no check of who sent the message. A provider
   cannot sign in; what stands in a login's place is its signature, checked with a secret only the two share. A
@@ -52,20 +77,24 @@ file. New entries go under `## Unreleased`, on top.
   (a Prisma schema, SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`) name the field
   that says whose a record is (`orgId`, `owner_id`, `created_by`): a query that asks for that field with a value
   the request did not choose, and that field of the record compared after the read, count as asking for the
-  owner, so such a route is no longer listed; a finding names the field to ask for and where the model file
-  says so (`owned` on the finding, a sentence in `more_info`, a fact of the case from "data model"). A read of a
-  record to which the data gives no owner at all (a price plan, a tag) is ranked low, with the place in the
-  model file as the reason; a change or a removal of one keeps its rank, and so does any record with a field
-  that could say whose it is under another name (`customerId`, an e-mail address, a secret). Who is signed in is
-  known for more sign-in libraries (the helper Auth.js version 5 hands out, better-auth, Lucia, Auth0 version 4,
-  Kinde, WorkOS AuthKit, Supabase's `getClaims`): until now a route that asked for the owner through one of the
-  first two was listed twice as one that asks nobody. A query's `join` on a database library's value is a
-  query's join (it was read as text glued together, and a record such a query reached by an id alone was listed
-  nowhere). With no model file in the project nothing changes. Not read: Drizzle's `eq(table.ownerId, x)` and
-  SQLAlchemy's positional comparisons by the field's name (the older reading, by who is signed in, still
-  applies there), a helper function handed the owner's value by a sign-in library Lantern does not know, Django
-  REST framework's ready-made views. The roadmap's name for this is `LAUTH-MISSING-TENANT-SCOPE`; it is the same
-  finding, so the rule keeps its id. Tests: `tests/test_tenant_scope.py`.
+  owner, so such a route is no longer listed; a finding names the field to ask for and where the model file says
+  so (`owned` on the finding, a sentence in `more_info`, a fact of the case from "data model"). A read of a
+  record to which the data gives no owner at all (a price plan, a tag) is ranked low, with the place in the model
+  file as the reason; a change or a removal of one keeps its rank, and so does any record with a field that could
+  say whose it is under another name (`customerId`, an e-mail address, a secret). Who is signed in is known for
+  more sign-in libraries (the helper Auth.js version 5 hands out, better-auth, Lucia, Auth0 version 4, Kinde,
+  WorkOS AuthKit, Supabase's `getClaims`): until now a route that asked for the owner through one of the first
+  two was listed twice as one that asks nobody. A query's `join` on a database library's value is a query's join
+  (it was read as text glued together, and a record such a query reached by an id alone was listed nowhere). With
+  no model file in the project nothing changes. Not read: Drizzle's `eq(table.ownerId, x)` and SQLAlchemy's
+  positional comparisons by the field's name (the older reading, by who is signed in, still applies there), a
+  helper function handed the owner's value by a sign-in library Lantern does not know, Django REST framework's
+  ready-made views. The roadmap's name for this is `LAUTH-MISSING-TENANT-SCOPE`; it is the same finding, so the
+  rule keeps its id. Measured 2026-11-17 on the same 30 folders, before and after: 15 findings of the rules that
+  say who may reach what before and 15 after, none gone, none new, no rank changed. 3 of them, false alarms there
+  before this change, are on a web framework's own repository: in its tutorial app `from <framework> import g`
+  names a folder of the project, so who is signed in is not known there and the tutorial's check of the author is
+  not seen; the same app read in a folder of its own gives no finding. Tests: `tests/test_tenant_scope.py`.
 - Fixed: a pack's `requires` word is looked for in a project's manifest whatever its case. A `requirements.txt`
   that writes `Django==5.1`, as `pip freeze` does, switched the Django pack on nowhere, and none of such a
   project's routes were read.
@@ -83,7 +112,12 @@ file. New entries go under `## Unreleased`, on top.
   `write_only`. Medium; on the finding as `columns`. Quiet for a query that names its fields, a field taken out
   before the answer, an answer with a class of its own, and a record handed to another function of the project
   (which is not followed). Not read: NestJS controllers, GraphQL resolvers, Koa, Flask and Django views, Drizzle
-  relations. Tests: `tests/test_whole_record.py` (17).
+  relations. Measured 2026-11-17 on the same 30 folders: 45 models, 12 with a secret field, 34 places in 15 files
+  that ask for such a record, 9 queries that bring a secret field, 23 Python routes; none hands the record to an
+  answer, so no finding. The first numbers counted 14 such queries, because a Prisma field that leads to another
+  record and whose name says a secret (`password Password?`) was taken for a secret field of the record itself;
+  fixed after a failing test (a record whose own name says a secret keeps it in its `hash`, `key` and `value`
+  fields). No true case, so no precision is known. Tests: `tests/test_whole_record.py` (17).
 - New: `lantern/datamodel.py` reads what a project's data looks like from the files that say so: a Prisma schema,
   SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`. For each record its fields, the
   records it leads to, which fields hold a secret by their names (a password's hash, a token that lets somebody
@@ -98,9 +132,13 @@ file. New entries go under `## Unreleased`, on top.
   of types loads nothing). The way stops at a `"use server"` file and at a file that imports `server-only`. One
   finding for a file, on the line of its first such read, with the way from the page's file (`pulled`). A
   settings file of t3's env libraries (`@t3-oss/env-*`) is made to be imported by pages, and the library keeps
-  the server's settings out of them: a read inside its `createEnv` call is passed over unless the build hands
-  the setting over. Not read: a project with no `"use client"` file, `import()` and `require`, a file that only
-  loads a server library and reads no secret setting. Tests: `tests/test_client_pull.py` (12).
+  the server's settings out of them: a read inside its `createEnv` call is passed over unless the build hands the
+  setting over. Not read: a project with no `"use client"` file, `import()` and `require`, a file that only loads
+  a server library and reads no secret setting. Measured 2026-11-17 on 30 folders (the 12 benchmark projects, the
+  15 sample apps, Lantern's gateway, website and engine): 590 JS/TS files, 75 of them begin with `"use client"`,
+  112 files are loaded with them and 4 of those read a setting by name. The first numbers had 1 finding, a
+  settings file of t3's env library, read by hand as a false alarm and fixed as said above; after the fix none.
+  No true case, so no precision is known and it stays a heuristic. Tests: `tests/test_client_pull.py` (12).
 - Fixed: where the gitleaks program is not installed, Lantern's built-in secret patterns called a key's place
   kept by filler in an example file (`sk_live_` and nothing but `x`) a possible secret, which ranks critical.
   Filler is now no finding and is counted in the scan's record (`scope.placeholders`). Filler is only what

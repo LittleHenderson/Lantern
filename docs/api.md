@@ -681,14 +681,16 @@ list), in a project where some other code file shows that people sign in. Rank `
 The finding stands on the line that stores; `more_info` names the file that shows the login and says that the
 copies stay in the browser after the person has signed out. Its `scenario` is the story kind `kept-pages`.
 `LW-LIMIT-COUNTED-LATER` (367; `lantern/countlater.py`): a Python or JS/TS function that turns a request away with
-402 or 429 where a condition says a limit is reached, then waits for its work (an awaited call, a call to a model
-or another service), and writes the use down only after that (a call named for counting, a number stepped in
-place, `increment:` / `decrement:`, SQL that sets a column to itself plus or minus). Requests sent at the same
-moment all read the number before any is counted. Rank `medium`, `tool_confidence` `LOW`. Quiet where the use is
-counted or held between the look and the work (the look's own condition included), where a limiter takes one in
-the look, where the function names a lock or a transaction, and where the count shares no name with the look or
-with the line that gave the look its value. The finding stands on the look's line; `more_info` names the lines of
-the work and of the count and the name the two share. Its `scenario` is the story kind `counted-later`.
+402 or 429 where a condition says a limit is reached, then waits for its work (an awaited call, a call to a model or
+another service), and writes the use down only after that (a call named for counting, a number stepped in place,
+`increment:` / `decrement:`, SQL that sets a column to itself plus or minus). Requests sent at the same moment all
+read the number before any is counted. Rank `medium`, `tool_confidence` `LOW`. Quiet where the use is counted or
+held between the look and the work (the look's own condition included), where a limiter takes one in the look, where
+the function names a lock or a transaction, and where the count shares no name with the look or with the line that
+gave the look its value. The finding stands on the look's line; `more_info` names the lines of the work and of the
+count and the name the two share. The work's own statement is one step, to where its brackets close: a take written
+in it (an update that takes from the field under its own condition, written over several lines) holds, and a count
+is looked for only after it. Its `scenario` is the story kind `counted-later`.
 `LW-SHARED-CONNECTION` (567; `lantern/sharedconn.py`): a Python file that opens one SQLite connection with the
 library's own guard switched off (`sqlite3.connect(..., check_same_thread=False)`), keeps it on `self`, on its
 class or under a name at the top of the file, and uses it in a function with no lock held. Two requests that
@@ -773,6 +775,26 @@ login. Not seen: a check that is written and whose answer is thrown away, a chec
 app, and what a check by a provider's name does on a client Lantern cannot place (it keeps the rule quiet). Only
 Stripe's, svix's and Standard Webhooks' own checks are followed as code; every other provider's is known by the
 written signs above. Its `scenario` is the story kind `unsigned-webhook`.
+`LW-NONATOMIC-BALANCE` (362; `lantern/balance.py`, roadmap stage 5): a Python or JS/TS function that checks a
+balance (an `if` that compares it, negates it or looks for zero; a balance is a name with one of the words balance,
+credits, coins, points, quota, funds, wallet, allowance, stock, inventory, also through the line that gave a name of
+the condition its value) and after the check writes it down taken away as a step of its own: a store's update call
+that writes the field with a decrement or a minus sign, SQL that sets the column to a value with a minus sign and
+names no condition on it, or the object's field set lower and the object then saved or committed. Requests sent at
+the same moment all read the same balance before any has written. Rank `medium`, `tool_confidence` `LOW`. The
+finding stands on the check's line and carries `balance`: `{field, check, write, how}`, the lines of the check and
+of the write, and `how`: `update`, `sql`, `saved`, or `bounded` (an update that writes back a value worked out from
+the balance that was read, under a condition that only bounds the field: both requests pass the bound and write the
+same value). Quiet where the write carries the check: a condition that holds the field to the value that was read
+(`where: { credits: user.credits }`, `.eq('coins', profile.coins)`, `filter(points=profile.points)`), or a condition
+that bounds it (`gte`, `__gte`, `>=`, `$gte`) beside a take from the value the database holds (`decrement`,
+`F("credits") - cost`, `Model.credits - cost`, `SET credits = credits - $1`); where a lock or a transaction is named
+before the check or on the lines that decorate the function; in JavaScript where the function waits for nothing; and
+where `LW-LIMIT-COUNTED-LATER` names the same check. A chain written over several lines is one statement. Not read:
+counters kept by Redis or another store's own commands, a field named `quantity`, a check and a take in two
+functions; that the check and the take are about the same record is not checked (they share the field's name).
+Inside a transaction it is quiet, which is quiet the wrong way at the usual isolation level of PostgreSQL and MySQL.
+Its `scenario` is the story kind `balance-race`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
