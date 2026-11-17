@@ -16,6 +16,12 @@ Everything here is deterministic pattern work on the graph and the source, like 
                         step's (`from_flows`, roadmap of 2026-11-14, stage 5), which follows what a model call gives
                         back across functions and files, and into the input of a tool call the model asked for. One
                         line is one finding: a flow that ends on a line the older reading flagged is written on it.
+  * `LA-UNSAFE-MCP-TOOL` — a function a library is told is a tool a model may call (an MCP server's tool, LangChain's,
+                        CrewAI's, smolagents', OpenAI's Agents SDK's, Pydantic AI's, the AI SDK's) runs what the model
+                        puts into it as a shell command, a query or code, or writes, changes or removes the file it
+                        names, with no person asked first. HIGH, heuristic: whoever can put words into what the model
+                        reads chooses the arguments. Made from the data-flow step's flows with the origin "tool"
+                        (`from_tool_flows`; the tools are found by `flow.Engine.find_tools`).
   * `LA-PROMPT-FROM-INPUT` — visitor text goes straight into a model call in a function that also has tool-like
                         sinks. LOW, informational: normal for a chat app, but the system prompt and tools must
                         assume the text is hostile.

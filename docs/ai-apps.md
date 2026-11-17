@@ -26,6 +26,7 @@ vector store. Not told apart yet: a JavaScript template that runs over several l
 | `LA-WALLET-DRAIN` | A route reaches a paid call and has **no login check and no rate limit that covers it**. One script in a loop runs up the bill. | high |
 | `LA-WALLET-DRAIN` | …has one of the two but not the other (logged-in users with no limit, or a limit but no login) | medium |
 | `LA-MODEL-OUTPUT-TO-TOOL` | Text a model wrote is run as a shell command, sent to the database as query text, run with `eval`, fetched as an address or opened as a file path: in the same function, or after a helper hands it back, in another file, or out of a tool call the model asked for. Prompt injection becomes code execution. | critical when a route reaches it; medium where a step of the way is a guess |
+| `LA-UNSAFE-MCP-TOOL` | A tool handed to a model (an MCP server's tool, LangChain's, CrewAI's, smolagents', OpenAI's Agents SDK's, Pydantic AI's, the AI SDK's) runs what the model puts into it as a shell command, a query or code, or writes, changes or removes the file it names, and no person is asked first. Whoever can put words into what the model reads chooses the arguments. | high; medium where a step of the way is a guess |
 | `LA-PROMPT-FROM-INPUT` | Visitor text goes into a model call in a function that also calls tool-like APIs. Normal for a chat app; informational. | low |
 | `LA-NOTEBOOK-SECRET` | An API key or token in a `.ipynb` code cell or a saved output (OpenAI, Anthropic, Google, Hugging Face, GitHub, AWS, Stripe, Slack, Replicate, or `api_key = "…"`). Placeholders are skipped. | critical (a secret) |
 
@@ -41,11 +42,31 @@ one finding, and a line where the model's text arrives checked against a list of
 every way there is no finding. Lantern does not know what the prompt holds, so whether someone outside can steer the
 text is said only where the request's text is on the same line, and is otherwise "not known". The notebook rule is exact.
 
+The tool rule (`LA-UNSAFE-MCP-TOOL`, the same stage) is a heuristic too. A tool is known by the library's own name for
+making one (a decorator, a call, a class made from the library's tool class, a list handed to an agent, the AI SDK's
+`tools` object), never by a name of the project's: a class of the project with a method called `tool` makes no tool.
+What the model puts into the tool's parameters is followed like what a request sent (`lantern/flow.py`, with the
+origin `tool`), into helpers and other files, to a shell command, query text, code that is run, or a file the action
+writes, changes or removes. A tool that only reads a file is counted and is no finding; one that keeps to what it is
+for is quiet: values handed to the database as parameters, a program the code names with the value as one argument,
+a path checked to stay in a folder of the code's own, a value checked against the code's own list. A person asked
+first is read from the code: the library's approval flag where the tool is made (`needs_approval=True`,
+`needsApproval: true`), or a question in the function before the action (an MCP elicitation, a confirmation,
+LangGraph's `interrupt`), by the call's name and not by what is done with the answer. An MCP annotation such as
+`destructiveHint` asks nobody and counts for nothing.
+
 ## What it does not do yet
 
 * Follow the answer of a model call made through a library the data-flow step does not name (`flow_rules.MODEL_CALL`;
   a new library is a new line there) or through the project's own HTTP code: only the older reading, inside one
   function, may still see it.
-* Read prompt templates for secrets, or tool definitions for over-broad permissions (an agent with a shell tool).
+* Read prompt templates for secrets.
+* Tools beyond the ones the tool rule names: a tool registered through a variable or a helper of the project, a
+  JavaScript tool whose function is imported from another file, a server kept on an object (`self.mcp`) or made by a
+  factory, an MCP server's tools in another language than Python
+  and TypeScript, a JavaScript tool's parameters after the first, and the types a schema gives them (a `z.number()`
+  argument is still followed). Reading a file a tool names is not counted as harm, and a file opened with a mode
+  Lantern cannot read counts as written. A question is a person's approval by the call's name only: a function of
+  the project called `confirm` counts.
 * Cost estimates (tokens × price) per route; `max_tokens` is mentioned in the fix text, not checked.
 * Training and evaluation pipelines: they map as Python, nothing AI-specific is said about them.

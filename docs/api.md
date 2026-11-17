@@ -582,7 +582,12 @@ finding names the same route: a provider cannot sign in, so that finding points 
 when there is one, since stage 5 of the roadmap of 2026-11-14: text a model wrote followed to an action, `{flows,
 findings` (new `LA-MODEL-OUTPUT-TO-TOOL` findings), `on_older_findings` (lines written on a finding of the older
 reading of that rule, inside one function), `checked_by_code` (findings of the older reading not kept because the
-model's text arrives on that line checked on every way)`}`)`}`; `partial` when a file could not be read, a function could not be followed or the
+model's text arrives on that line checked on every way)`}`), `tool_text` (only when a tool is found, since the same
+stage: what a model puts into a function of the project it is handed as a tool, followed to an action, `{tools`
+(functions a library is told are tools a model may call), `flows`, `findings` (new `LA-UNSAFE-MCP-TOOL` findings),
+`approval_asked` (flows not kept because a person is asked first: the library's approval flag, or a question in the
+function before the action), `reads_only` (flows to a file that is only read), `on_model_findings` (flows to a line
+an `LA-MODEL-OUTPUT-TO-TOOL` finding already names)`}`)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
 (22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
@@ -840,13 +845,17 @@ stays test code and the reason says so), `test_file_stood_in` (true where only t
 test run leads from the app into the test file, a call to a stand-in, a callback or a double that a test handed
 the app: it stays test code, as it is with no test run, and the reason says so), `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
-`{"via": <the words of the flow's first step>, "flow": true}`; not for a flow of text a model wrote), `flow` (optional,
+`{"via": <the words of the flow's first step>, "flow": true}`; not for a flow of text a model wrote, nor of what a
+model puts into a tool), `flow` (optional,
 `flowscan.py`: request data, or text a model wrote, followed to this line across functions and files, on a
 `lantern-flow` finding or attached to another tool's finding for the same kind of problem on the same line; a flow of
-text a model wrote is on an `LA-MODEL-OUTPUT-TO-TOOL` finding only: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
+text a model wrote is on an `LA-MODEL-OUTPUT-TO-TOOL` finding only, and one of what a model puts into a tool on an
+`LA-UNSAFE-MCP-TOOL` finding only: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
 `redirect`, `nosql`, `pollution`, `record`, `assign`), `"confidence"` (`HIGH`, or `LOW` when a step is a likely link),
 `"severity"`, `"origin"` (`server`: what a request sent; `dom`: the page's own address in the browser; `model`: text a
-model wrote, from the call that gave it back), `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
+model wrote, from the call that gave it back; `tool`: what a model puts into a function of the project it is handed
+as a tool, from the function's parameter), `"writes"` (optional, `true` where the action writes, changes or removes
+the file it names; a file that is only read has none), `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
 request to the sensitive action, in order; `what` is a sentence with code names between backticks), `"others"` (up to
 five other starting points that reach the same line), `"count"}`; the viewer's box "How the value gets there" lists
 the steps, every value escaped), `claim` (`LT-AUTHZ-CLIENT-ROLE` only: `{"name"` (the cookie, header or field as

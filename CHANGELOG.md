@@ -9,6 +9,27 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- New heuristic `LA-UNSAFE-MCP-TOOL` (roadmap stage 5, the AI-app pack's second version; labelled heuristic): a
+  tool handed to a model that runs what the model puts into it. A model chooses a tool's arguments, and whoever
+  can put words into what it reads (a message, a web page, a file, another tool's answer) can choose them through
+  it. The data-flow step now finds the functions a library is told are tools, by the library's own name for that
+  and never by a name of the project's: an MCP server's tools (FastMCP; the MCP SDK's server in Python and
+  TypeScript, also its low-level handler of every call), LangChain's, CrewAI's and smolagents' tools as
+  decorators, calls and classes made from their tool class, OpenAI's Agents SDK, Pydantic AI, the AI SDK (with
+  `tool()` and as plain objects) and functions handed to an agent in a list. What the model puts into such a tool
+  is followed like what a request sent, to a shell command, a query, code that is run, or a file the action
+  writes, changes or removes, also in a helper of another file; a tool that only reads a file is counted and is
+  no finding. None where a person is asked first: the library's approval flag where the tool is made, or a
+  question (an MCP elicitation, a confirmation, LangGraph's `interrupt`) in the function before the action, read
+  by the call's name. Such a flow makes no other rule's finding. The flow step's record counts it apart
+  (`scope.tool_text`). Measured on 30 folders before and after, written down before the first run: 478 findings,
+  none gone, none new, none changed; none of the 30 folders writes a tool, so no precision is known. Tests:
+  `tests/test_ai_tools.py`.
+- Fixed: what `x.write_text(text)` or `x.write_bytes(data)` writes was taken for the file's place where Lantern
+  does not know what `x` is (a helper's parameter), so request text kept in a file the server names read as a
+  path the request chose, and a path the request chose, handed to such a helper, was not followed. The place is
+  `x`. Found while writing `LA-UNSAFE-MCP-TOOL`; none of the 30 measured folders changed. Tests:
+  `tests/test_flow.py`.
 - `LA-MODEL-OUTPUT-TO-TOOL` follows text a model wrote across functions and files (roadmap stage 5, the AI-app
   pack's second version; labelled heuristic as before). Until now the rule read one function's own lines, so a
   helper that hands back the model's answer and a caller that runs it were not connected. The data-flow step now
