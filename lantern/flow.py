@@ -3877,6 +3877,9 @@ class Engine:
         if (member in R.STORE_MEMBERS and data_recv) or \
                 (bool(member) and d.startswith("record(") and bool(R.HELD_OWN[env.fn.lang].search(member))):
             wrote(ctx, env.fn.file, e.line)
+        elif (member or last) in R.ACCOUNT_MEMBERS and bool(
+                R.ACCOUNT_SIDE.search(rtext) or R.ACCOUNT_LIB.match(d) or R.ACCOUNT_LIB.match(name or "")):
+            wrote(ctx, env.fn.file, e.line)     # ... or an account is, at the service that signs people in
         # --- a record that was read into an object is changed or removed through that object
         if member and R.HELD_OWN[env.fn.lang].search(member) and at_record(recv) is not None:
             self.changed(ctx, env, at_record(recv), e, what)        # note.delete(), order.deleteOne(), doc.save()

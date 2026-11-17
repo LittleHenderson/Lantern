@@ -17,7 +17,8 @@ from lantern.security import scan
 
 RULE = "LW-UNSIGNED-WEBHOOK"
 PKG = ('{"name": "books", "dependencies": {"next": "15.0.0", "react": "19.0.0", "@prisma/client": "6.0.0", '
-       '"stripe": "17.0.0", "svix": "1.40.0", "twilio": "5.3.0", "express": "4.19.0"}}\n')
+       '"stripe": "17.0.0", "svix": "1.40.0", "twilio": "5.3.0", "express": "4.19.0", "next-auth": "4.24.0", '
+       '"@supabase/supabase-js": "2.45.0", "@clerk/nextjs": "6.0.0"}}\n')
 SCHEMA = '''datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -36,6 +37,8 @@ NEXT = {
     "prisma/schema.prisma": SCHEMA,
     "lib/db.ts": 'import { PrismaClient } from "@prisma/client";\nexport const prisma = new PrismaClient();\n',
     "lib/stripe.ts": 'import Stripe from "stripe";\n\nexport const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);\n',
+    "lib/billing.ts": ('import { prisma } from "@/lib/db";\n\nexport async function upgrade(customer: string) {\n'
+                       '  await prisma.user.update({ where: { stripeCustomerId: customer }, data: { plan: "pro" } });\n}\n'),
     "lib/verify.ts": '''import { stripe } from "@/lib/stripe";
 
 export async function stripeEvent(req: Request) {
@@ -65,6 +68,15 @@ SIGNED = ('  const body = await req.text();\n  const sig = req.headers.get("stri
 HMAC = ('  const body = await req.text();\n  const sig = req.headers.get("x-hub-signature-256") ?? "";\n'
         '  const want = "sha256=" + createHmac("sha256", process.env.GITHUB_WEBHOOK_SECRET!).update(body)'
         '.digest("hex");\n')
+
+
+SERVICE = ('import { NextResponse } from "next/server";\nimport { createClient } from "@supabase/supabase-js";\n'
+           'import { clerkClient } from "@clerk/nextjs/server";\nimport { Webhook } from "svix";\n'
+           'import { prisma } from "@/lib/db";\n\n'
+           "const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);\n\n"
+           "export async function POST(req: Request) {\n")
+PLAN = ('  await prisma.user.update({ where: { stripeCustomerId: event.data.object.customer }, '
+        'data: { plan: "pro" } });\n')
 
 
 def _post(body):
@@ -149,6 +161,89 @@ ROUTES = {
         "app/api/webhooks/log/route.ts",
         _post('  const event = await req.json();\n  console.log("got", event.type);\n'
               "  return NextResponse.json({ received: true });\n"), None),
+    # --- written after the first twenty passed, by reading the rule as somebody who wants it to fail
+    "a signature compared after the record was changed": (
+        "app/api/webhooks/compared-late/route.ts",
+        _post(HMAC + "  const event = JSON.parse(body);\n"
+              '  await prisma.user.update({ where: { id: String(event.sender.id) }, data: { plan: "team" } });\n'
+              "  if (sig.length !== want.length || !timingSafeEqual(Buffer.from(sig), Buffer.from(want))) {\n"
+              f"    {BAD}\n  }}\n  return NextResponse.json({{ ok: true }});\n"), "late"),
+    "the helper's check, and the route goes on when it fails": (
+        "app/api/webhooks/helper-caught/route.ts",
+        _post("  const copy = req.clone();\n  let event;\n  try {\n    event = await stripeEvent(req);\n"
+              "  } catch (err) {\n    event = await copy.json();\n  }\n" + UPGRADE), "lets-on"),
+    "the helper's check, after the record was changed": (
+        "app/api/webhooks/helper-late/route.ts",
+        _post("  const event = await req.clone().json();\n" + PLAN
+              + f"  try {{\n    await stripeEvent(req);\n  }} catch (err) {{\n    {BAD}\n  }}\n"
+              "  return NextResponse.json({ received: true });\n"), "late"),
+    "the record is changed by a helper in another file": (
+        "app/api/webhooks/far/route.ts",
+        'import { NextResponse } from "next/server";\nimport { upgrade } from "@/lib/billing";\n\n'
+        "export async function POST(req: Request) {\n  const event = await req.json();\n"
+        "  await upgrade(event.data.object.customer);\n  return NextResponse.json({ received: true });\n}\n", "none"),
+    "a route of the older pages folder": (
+        "pages/api/webhooks/stripe.ts",
+        'import type { NextApiRequest, NextApiResponse } from "next";\nimport { prisma } from "@/lib/db";\n\n'
+        "export default async function handler(req: NextApiRequest, res: NextApiResponse) {\n"
+        "  const event = req.body;\n" + PLAN + "  res.json({ received: true });\n}\n", "none"),
+    "two names of the event compared, which is no check of the sender": (
+        "app/api/webhooks/assignee/route.ts",
+        _post("  const event = await req.json();\n  if (event.issue.assignee === event.sender.login) {\n"
+              '    await prisma.user.update({ where: { id: String(event.sender.id) }, data: { plan: "team" } });\n'
+              "  }\n  return NextResponse.json({ ok: true });\n"), "none"),
+    "a row of a Supabase table changed with the server's own key": (
+        "app/api/webhooks/table/route.ts",
+        SERVICE + "  const event = await req.json();\n"
+        '  await supabase.from("users").update({ plan: "pro" }).eq("stripe_customer_id", event.data.object.customer);\n'
+        "  return NextResponse.json({ received: true });\n}\n", "none"),
+    "an account changed through the sign-in service's admin side, beside the record": (
+        "app/api/webhooks/account/route.ts",
+        SERVICE + "  const event = await req.json();\n"
+        "  await supabase.auth.admin.updateUserById(event.data.object.client_reference_id, "
+        '{ user_metadata: { plan: "pro" } });\n' + PLAN + "  return NextResponse.json({ received: true });\n}\n",
+        "none"),
+    "only the account at the sign-in service is changed": (
+        "app/api/webhooks/account-only/route.ts",
+        SERVICE + "  const event = await req.json();\n"
+        '  await clerkClient.users.updateUserMetadata(event.data.id, { publicMetadata: { plan: "free" } });\n'
+        "  return NextResponse.json({ received: true });\n}\n", "none"),
+    "the same change of an account, with the message checked first": (
+        "app/api/webhooks/account-signed/route.ts",
+        SERVICE + "  const body = await req.text();\n  const wh = new Webhook(process.env.CLERK_WEBHOOK_SECRET!);\n"
+        "  let event: any;\n  try {\n"
+        '    event = wh.verify(body, { "svix-id": req.headers.get("svix-id")!, '
+        '"svix-timestamp": req.headers.get("svix-timestamp")!, '
+        '"svix-signature": req.headers.get("svix-signature")! });\n'
+        f"  }} catch {{\n    {BAD}\n  }}\n"
+        '  await clerkClient.users.updateUserMetadata(event.data.id, { publicMetadata: { plan: "free" } });\n'
+        "  return NextResponse.json({ received: true });\n}\n", None),
+    "a route of the app's own people under the same word, who sign in": (
+        "app/api/webhooks/route.ts",
+        'import { NextResponse } from "next/server";\nimport { getServerSession } from "next-auth";\n'
+        'import { prisma } from "@/lib/db";\n\n'
+        "export async function POST(req: Request) {\n  const session = await getServerSession();\n"
+        '  if (!session) {\n    return NextResponse.json({ error: "sign in" }, { status: 401 });\n  }\n'
+        "  const { plan } = await req.json();\n"
+        "  await prisma.user.update({ where: { id: session.user.id }, data: { plan } });\n"
+        "  return NextResponse.json({ ok: true });\n}\n", None),
+    "a check by the provider's name on a client Lantern cannot place": (
+        "app/api/webhooks/unplaced/route.ts",
+        'import { NextResponse } from "next/server";\nimport { prisma } from "@/lib/db";\n'
+        'import { billing } from "@/lib/generated";\n\n'
+        "export async function POST(req: Request) {\n  const body = await req.text();\n  let event;\n  try {\n"
+        '    event = billing.webhooks.constructEvent(body, req.headers.get("stripe-signature")!, '
+        "process.env.STRIPE_WEBHOOK_SECRET!);\n"
+        f"  }} catch (err) {{\n    {BAD}\n  }}\n" + UPGRADE + "}\n", None),
+    "a secret in the address, compared with a setting": (
+        "app/api/webhooks/[key]/route.ts",
+        HEAD + "export async function POST(req: Request, { params }: { params: { key: string } }) {\n"
+        f"  if (params.key !== process.env.HOOK_KEY) {{\n    {BAD}\n  }}\n"
+        "  const event = await req.json();\n" + TEAM + "}\n", None),
+    "a bearer text compared with a setting": (
+        "app/api/webhooks/bearer/route.ts",
+        _post('  if (req.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {\n'
+              f"    {BAD}\n  }}\n  const event = await req.json();\n" + TEAM), None),
 }
 
 
@@ -229,13 +324,44 @@ app.post("/webhooks/checked", express.raw({ type: "application/json" }), async (
   res.json({ received: true });
 });
 
+function signed(req, res, next) {
+  try {
+    req.event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    return res.status(400).send("bad signature");
+  }
+  next();
+}
+
+function signedOrNot(req, res, next) {
+  try {
+    req.event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    req.event = JSON.parse(req.body);
+  }
+  next();
+}
+
+app.post("/webhooks/before", express.raw({ type: "application/json" }), signed, async (req, res) => {
+  await prisma.user.update({ where: { stripeCustomerId: req.event.data.object.customer }, data: { plan: "pro" } });
+  res.json({ received: true });
+});
+
+app.post("/webhooks/before-or-not", express.raw({ type: "application/json" }), signedOrNot, async (req, res) => {
+  await prisma.user.update({ where: { stripeCustomerId: req.event.data.object.customer }, data: { plan: "pro" } });
+  res.json({ received: true });
+});
+
 module.exports = app;
 '''
 
 
 def test_the_same_in_an_express_app(tmp_path):
+    """Also with the check in a function put before the route: one that turns a failed message away, and one that
+    takes the message as it came when the check fails."""
     fs = _scan(tmp_path, {"package.json": PKG, "prisma/schema.prisma": SCHEMA, "server/app.js": EXPRESS})
-    assert [f["webhook"]["route"] for f in fs if f["rule"] == RULE] == ["POST /webhooks/open"]
+    assert sorted((f["webhook"]["route"], f["webhook"]["check"]) for f in fs if f["rule"] == RULE) == [
+        ("POST /webhooks/before-or-not", "lets-on"), ("POST /webhooks/open", "none")]
 
 
 FLASK = {
@@ -320,3 +446,64 @@ def test_the_same_in_a_flask_app(tmp_path):
     fs = _scan(tmp_path, FLASK)
     assert sorted(f["webhook"]["route"] for f in fs if f["rule"] == RULE) == [
         "POST /webhooks/github-open", "POST /webhooks/github-worked-out", "POST /webhooks/stripe-open"]
+
+
+DJANGO = {
+    "requirements.txt": "Django==5.1\nstripe==11.0.0\n",
+    "manage.py": "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shop.settings')\n",
+    "shop/__init__.py": "",
+    "shop/settings.py": "INSTALLED_APPS = ['billing']\nROOT_URLCONF = 'shop.urls'\n",
+    "shop/urls.py": ("from django.urls import path\n\nfrom billing import views\n\n"
+                     "urlpatterns = [\n    path('billing/notify/', views.notify),\n"
+                     "    path('billing/notify-checked/', views.notify_checked),\n]\n"),
+    "billing/__init__.py": "",
+    "billing/models.py": ("from django.db import models\n\n\nclass Account(models.Model):\n"
+                          "    plan = models.CharField(max_length=20)\n"
+                          "    stripe_customer_id = models.CharField(max_length=40)\n"),
+    "billing/views.py": '''import json
+
+import stripe
+from django.conf import settings
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+
+from .models import Account
+
+
+@csrf_exempt
+@require_POST
+def notify(request):
+    signature = request.META.get("HTTP_STRIPE_SIGNATURE")
+    event = json.loads(request.body)
+    Account.objects.filter(stripe_customer_id=event["data"]["object"]["customer"]).update(plan="pro")
+    return JsonResponse({"received": True, "signed": bool(signature)})
+
+
+@csrf_exempt
+@require_POST
+def notify_checked(request):
+    try:
+        event = stripe.Webhook.construct_event(request.body, request.META["HTTP_STRIPE_SIGNATURE"],
+                                               settings.STRIPE_WEBHOOK_SECRET)
+    except Exception:
+        return HttpResponse(status=400)
+    Account.objects.filter(stripe_customer_id=event["data"]["object"]["customer"]).update(plan="pro")
+    return JsonResponse({"received": True})
+''',
+}
+
+
+def test_the_same_in_a_django_app_where_only_the_header_says_whose_route_it_is(tmp_path):
+    fs = [f for f in _scan(tmp_path, DJANGO) if f["rule"] == RULE]
+    assert [(f["webhook"]["route"], f["webhook"]["check"]) for f in fs] == [("ANY /billing/notify/", "none")]
+    assert "STRIPE_SIGNATURE" in f"{fs[0]['webhook']['why']}"
+
+
+def test_where_a_check_in_another_file_stands_is_said_with_its_file(tmp_path):
+    rel, text, _check = ROUTES["the helper's check, and the route goes on when it fails"]
+    f = next(f for f in _scan(tmp_path, {**NEXT, rel: text}) if f["rule"] == RULE)
+    line = NEXT["lib/verify.ts"].split("\n").index(next(x for x in NEXT["lib/verify.ts"].split("\n")
+                                                        if "constructEvent" in x)) + 1
+    assert (f["webhook"]["at_file"], f["webhook"]["at"]) == ("lib/verify.ts", line)
+    assert f"lib/verify.ts:{line}" in f["more_info"]

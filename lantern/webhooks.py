@@ -68,7 +68,8 @@ COMPARISON = re.compile(r"[!=]==?")
 SECRET_SETTING = re.compile(r"(?i)(?:process\.env|import\.meta\.env|Deno\.env|os\.environ|getenv|settings|config|env|"
                             r"secrets)\W{1,8}\w*(?:secret|token|key|signature|password)\w*")
 # ... or with something named like a signature or a secret, on either side, and not with nothing
-_NAME = r"[\w$.]*(?:secret|signature|sig|hmac|digest|expected|token|api_?key)[\w$]*"
+# (`sig`, `sigHeader`, `expectedSig`, and not the same three letters inside `assignee`, `design` or `signup`)
+_NAME = r"[\w$.]*(?:secret|signature|sig(?-i:(?![a-z]))|hmac|digest|expected|token|api_?key)[\w$]*"
 _NOTHING = r"(?!(?:null|undefined|None|true|false|True|False)\b)"
 NAMED = re.compile(rf"(?i)\b{_NAME}\s*[!=]==?\s*{_NOTHING}[A-Za-z_$]|"
                    rf"\b{_NOTHING}[A-Za-z_$][\w$.\[\]()]*\s*[!=]==?\s*{_NAME}\b")
@@ -169,7 +170,7 @@ def unsigned(g, res, lines_for) -> tuple[list[dict], int]:
             continue            # every write stands behind the provider's own check
         entry = n.entry if isinstance(n.entry, dict) else {}
         js = not n.file.endswith((".py", ".rb"))
-        at = None
+        at = at_file = None
         if node in res.senders:
             check, at = "late", res.senders[node]       # the check holds, and these writes came before it
             said = f"The check of who sent the message stands on line {at}, after data was already written."
@@ -184,6 +185,7 @@ def unsigned(g, res, lines_for) -> tuple[list[dict], int]:
                 check = "lets-on"
                 f0, at, w0 = next((t for t in sure if t[2]), sure[0])
                 where = f"line {at}" if f0 == n.file else f"{f0}:{at}"
+                at_file = f0 if f0 != n.file else None
                 said = (f"The provider's own check is called ({where}), but {WHY_NOT.get(w0) or WHY_NOT['some']}. "
                         "So a message nobody signed gets to the change.")
             elif tries:
@@ -222,6 +224,8 @@ def unsigned(g, res, lines_for) -> tuple[list[dict], int]:
         f["webhook"] = {"route": route, "why": why, "check": check, "changes": places}
         if at is not None:
             f["webhook"]["at"] = at
+        if at_file:
+            f["webhook"]["at_file"] = at_file       # the check stands in another file than the route
         if len(open_) > MOST_SAID:
             f["webhook"]["more"] = len(open_) - MOST_SAID
         out.append(f)

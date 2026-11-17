@@ -1008,6 +1008,20 @@ STORE_MEMBERS = {"create", "createMany", "insert", "insertOne", "insert_one", "i
                  "commit", "increment", "decrement"}
 # Database text that adds, changes or removes rows, by its first word.
 WRITES_SQL = re.compile(r"^\W*(insert|update|delete|replace|merge)\b", re.I)
+# An account made, changed or removed through the management side of a sign-in service is stored data written too
+# (it is kept at the service): Supabase's admin API, Clerk's backend client, Firebase's admin library. The same
+# three as `websec.MANAGES_ACCOUNTS`, here by the call's own name and what it is called on.
+ACCOUNT_MEMBERS = {"createUser", "updateUser", "updateUserById", "updateUserMetadata", "updateUserProfileImage",
+                   "deleteUser", "deleteUsers", "inviteUserByEmail", "banUser", "unbanUser", "lockUser", "unlockUser",
+                   "setCustomUserClaims", "revokeRefreshTokens", "importUsers", "createOrganization",
+                   "updateOrganization", "updateOrganizationMetadata", "deleteOrganization",
+                   "createOrganizationMembership", "updateOrganizationMembership", "deleteOrganizationMembership",
+                   "createInvitation", "revokeInvitation", "revokeSession", "create_user", "update_user",
+                   "update_user_by_id", "delete_user", "delete_users", "invite_user_by_email",
+                   "set_custom_user_claims", "revoke_refresh_tokens", "import_users"}
+ACCOUNT_SIDE = re.compile(r"(?:(?<![\w$])auth\.admin|[cC]lerk[\w$]{0,40}(?:\(\))?\)?\.(?:users|organizations|invitations|"
+                          r"sessions)|(?<![\w$])(?:getAuth|auth)\([^()]{0,200}\))$")
+ACCOUNT_LIB = re.compile(r"^(?:@supabase/[\w-]+|supabase|@clerk/[\w-]+|firebase-admin|firebase_admin)(?![\w-])")
 WHOLE_KEYS = {"...", "$set", "$setOnInsert", "data", "values", "update", "defaults", "create", "attributes", "set"}
 BODY_BAGS = {"json", "body", "form", "data", "get_json", "POST", "payload", "values", "post", "forms"}
 OVERLAY_CALL = re.compile(r"^(Object\.assign|lodash\.(assign|assignIn|extend|merge|defaults)|underscore\.(extend|"

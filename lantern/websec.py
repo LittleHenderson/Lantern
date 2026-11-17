@@ -1036,7 +1036,9 @@ def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signatur
     name = own_name(signature)
     if name:      # the line that defines the handler: what it is called is not something it asks or calls
         raw = re.sub(rf"(?<![\w$.]){re.escape(name)}(?=\s*\()", lambda m: "_" * len(m.group(0)), raw, count=1)
-    chains = DATA_CHAIN.sub(_blank_data, code_only(raw, js))   # strings, comments (~), request data and what hangs off it (^)
+    # strings, comments (~), request data and what hangs off it (^); a call into the management side of a sign-in
+    # service asks nobody who is calling (`MANAGES_ACCOUNTS`) and is no name here
+    chains = DATA_CHAIN.sub(_blank_data, blank_managed(code_only(raw, js)))
     code = _blank_names(chains, signature)                 # ...and the names that hold it (all the same length)
     m = BODY_AUTH_SHAPED.search(code)
     if m:
@@ -1078,11 +1080,105 @@ ROUTE_DOC_KWARGS = re.compile(r"\b(?:response_model|response_class|responses|tag
                               r"response_model_exclude\w*)\s*=\s*(?:\[[^\]]*\]|\{[^}]*\}|[^,)]+)")
 
 
+class Calls(dict):
+    """`{caller: [callee, …]}`, and for the login check the lines each call into a library stands on (`lines`:
+    `(caller, callee)` -> lines of the caller's file) and the files it has read for them (`code`)."""
+    __slots__ = ("lines", "code")
+
+    def __init__(self):
+        super().__init__()
+        self.lines: dict = {}
+        self.code: dict = {}
+
+
 def call_adjacency(g: Graph) -> dict[str, list[str]]:
-    adj: dict[str, list[str]] = {}
+    adj = Calls()
     for e in g.call_edges():
         adj.setdefault(e.src, []).append(e.dst)
+        if e.lines and e.dst.startswith("ext:"):
+            adj.lines.setdefault((e.src, e.dst), []).extend(e.lines)
     return adj
+
+
+# The management side of a sign-in service: accounts made, changed and removed with the server's own key, for
+# whichever account the call is handed. Nobody is asked who is calling, so such a call is no sign of a login,
+# though it is a call into a library named for signing in. Three services, each by the way its own guide writes
+# the call: Supabase's admin API (`supabase.auth.admin.deleteUser(id)`, the same in Python), Clerk's backend client
+# (`clerkClient.users.updateUserMetadata(id, …)`; the client only made, `await clerkClient()`), Firebase's admin
+# library (`getAuth().setCustomUserClaims(uid, …)`, `admin.auth().deleteUser(uid)`, Python's
+# `auth.set_custom_user_claims(uid, …)`). Their other side, which does ask, is not here (`supabase.auth.getUser()`,
+# Clerk's `auth()`, `verifyIdToken`), and neither is a call that works only with the caller's own session
+# (`supabase.auth.updateUser`).
+_CLERK_PARTS = (r"(?:users|organizations|invitations|allowlistIdentifiers|emailAddresses|phoneNumbers|signInTokens|"
+                r"sessions)")
+_FIREBASE_CHANGES = (r"createUser|updateUser|deleteUser|deleteUsers|setCustomUserClaims|importUsers|"
+                     r"revokeRefreshTokens|createCustomToken|create_user|update_user|delete_user|delete_users|"
+                     r"set_custom_user_claims|import_users|revoke_refresh_tokens|create_custom_token")
+_FIREBASE_READS = (r"getUser|getUserByEmail|getUserByPhoneNumber|getUsers|listUsers|generatePasswordResetLink|"
+                   r"generateEmailVerificationLink|generateSignInWithEmailLink")
+MANAGES_ACCOUNTS = re.compile(
+    r"\.auth\.admin\.[A-Za-z_$][\w$]*"
+    r"|(?<![\w$])[\w$]{0,40}[cC]lerk[\w$]{0,40}(?:\s*\(\s*\))?\s*\)?\s*\." + _CLERK_PARTS +
+    r"\.(?!verify|authenticate)[A-Za-z_$][\w$]*"
+    r"|(?<![\w$.])[cC]lerkClient\s*\(\s*\)(?!\s*\)?\s*\.)"
+    r"|(?<![\w$])(?:getAuth|auth)\s*\([^()]{0,200}\)\s*\.(?:" + _FIREBASE_CHANGES + "|" + _FIREBASE_READS + r")(?![\w$])"
+    r"|(?<![\w$.])auth\.(?:" + _FIREBASE_CHANGES + r")(?![\w$])")
+# what hangs on Clerk's client once it is kept under a name of the code's own (`const client = await clerkClient()`)
+CLERK_PART = re.compile(r"(?i)clerk[\w$]*(?:\(\))?\." + _CLERK_PARTS + r"$")
+CLERK_CALL = re.compile(r"\." + _CLERK_PARTS + r"\.(?!verify|authenticate)[A-Za-z_$][\w$]*")
+MOST_NAME_BACK = 200        # characters of a name read back from such a call's first dot
+
+
+def _managed_spans(code: str, loose: bool = False) -> list[tuple[int, int]]:
+    """Where `code` calls the management side of a sign-in service: each call from the start of its name."""
+    out = []
+    for m in (*MANAGES_ACCOUNTS.finditer(code), *(CLERK_CALL.finditer(code) if loose else ())):
+        a = m.start()
+        low = max(0, a - MOST_NAME_BACK)
+        while a > low and (code[a - 1].isalnum() or code[a - 1] in "_$.)]"):
+            a -= 1
+        out.append((a, m.end()))
+    return out
+
+
+def blank_managed(code: str) -> str:
+    """`code` with every call into the management side of a sign-in service made no name at all."""
+    for a, b in _managed_spans(code):
+        code = code[:a] + "_" * (b - a) + code[b:]
+    return code
+
+
+def _only_manages(g: Graph, adj, u: str, v: str) -> bool:
+    """Whether every place the project's function `u` calls the library's `v` is a call into the management side
+    of a sign-in service (`MANAGES_ACCOUNTS`). Read from the lines the map holds for that call; where it holds none,
+    or the file cannot be read, the answer is no and the older reading stands."""
+    lines = getattr(adj, "lines", {}).get((u, v))
+    n = g.nodes.get(u)
+    if not lines or n is None or not n.file:
+        return False
+    if n.file not in adj.code:
+        try:
+            text = project_text(Path(g.repo_root) / n.file, g.repo_root)
+        except (OSError, UnicodeDecodeError, ValueError):
+            text = None
+        adj.code[n.file] = None if text is None else code_only(text, js=not n.file.endswith((".py", ".rb"))).split("\n")
+    rows = adj.code[n.file]
+    if rows is None:
+        return False
+    name = _func_name(g, v)
+    last = re.split(r"[./]", name.replace("()", ""))[-1]
+    if not last:
+        return False
+    word = re.compile(r"(?<![\w$])" + re.escape(last) + r"(?![\w$])")
+    for ln in lines:
+        if not 0 < ln <= len(rows):
+            return False
+        row = rows[ln - 1][:4000]
+        spans = _managed_spans(row, loose=bool(CLERK_PART.search(name)))
+        at = [m.start() for m in word.finditer(row)]
+        if not at or not all(any(a <= i < b for a, b in spans) for i in at):
+            return False
+    return True
 
 
 # npm packages that are a login check and nothing else: whatever they hand a route turns away a request that does
@@ -1234,6 +1330,9 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doub
                 if not _in_doubt(v, doubt) and _func_name(g, v).split("(")[0].rsplit(".", 1)[-1] not in skip and \
                         auth_word(_func_name(g, v),
                                   v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
+                    if v.startswith("ext:") and _only_manages(g, adj, u, v):
+                        seen.discard(v)     # accounts are changed here and nobody is asked: another caller may ask
+                        continue
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -1254,6 +1353,9 @@ def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, stop=No
                 seen.add(v)
                 name = _func_name(g, v)
                 if auth_word(name, v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
+                    if v.startswith("ext:") and _only_manages(g, adj, u, v):
+                        seen.discard(v)
+                        continue
                     out.append(name)
                 if stop is None or not stop(name):
                     nxt.append(v)
