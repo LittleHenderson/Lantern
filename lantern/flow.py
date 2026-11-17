@@ -1635,7 +1635,9 @@ class Engine:
     def find_tools(self) -> None:
         """Every function of the project that a library is told is a tool a model may call, known by the library's
         own name for that (`R.TOOL_MAKER_PY`, `TOOL_SERVER_PY`, `TOOL_LIST_PY`, `TOOL_REG_JS`, `TOOL_LOW_JS`), never by
-        a name of the project's: a class of the project with a method called `tool` makes no tool. Also the methods a
+        a name of the project's: a class of the project with a method called `tool` makes no tool. In Python also a
+        server a function makes or is handed with its class written, for the functions written inside it
+        (`py_units`, `py_scope`). Also the methods a
         call of the tool runs of a class made from a library's tool class (`R.TOOL_CLASS_PY`), functions handed to an
         agent in a list (`R.TOOL_LIST_PY`, `TOOL_LIST_ARG_PY`) and the AI SDK's tools written as plain objects
         (`R.TOOL_OBJECTS_JS`). What the model puts into such a function is its parameters (`tool_param`, origin
@@ -1654,16 +1656,22 @@ class Engine:
         if isinstance(fn, Fn):
             self.tools.setdefault(id(fn), tool)
 
-    def py_canon(self, mod: Mod, dotted: str, depth: int = 0) -> str | None:
+    def py_canon(self, mod: Mod, dotted: str, depth: int = 0, scopes=()) -> str | None:
         """What a dotted name written in a Python file stands for, by the file's imports: a library's name
         (`function_tool` -> `agents.function_tool`), or `<class>()` and what follows it for an object that a file of
         the project makes at its top with a library's class (`mcp.tool` -> `mcp.server.fastmcp.FastMCP().tool`), also
-        where that object is imported from the file that makes it. None for a name of the project's own and for one
-        Lantern cannot place."""
+        where that object is imported from the file that makes it. `scopes`: the names of the function the name is
+        written in and of the functions around that, innermost first (`py_scope`): such a name hides the file's own
+        (`server.tool` -> `mcp.server.MCPServer().tool` where the function set `server = MCPServer(...)`). None for a
+        name of the project's own and for one Lantern cannot place."""
         if depth > 3 or not dotted:
             return None
         head, _, rest = dotted.partition(".")
         tail = "." + rest if rest else ""
+        for scope in scopes:
+            if head in scope:
+                made = scope[head]
+                return made + tail if made else None
         origin = mod.imports.get(head)
         if origin is not None:
             if not origin.startswith("."):
@@ -1702,15 +1710,19 @@ class Engine:
                     return fills, every
         return None
 
-    def py_fn(self, mod: Mod, x: N | None) -> Fn | None:
+    def py_fn(self, mod: Mod, x: N | None, inner=()) -> Fn | None:
         """The function of the project `x` names in a Python file: one of the file, one it imports from another
-        file, or a function written in place (`lambda`)."""
+        file, a function written in place (`lambda`), or one written inside the function the call is in or a
+        function around that (`inner`: name -> function, innermost first)."""
         if x is None:
             return None
         if x.k == "fn" and isinstance(x.a, Fn):
             return x.a
         if x.k != "name":
             return None
+        for names in inner:
+            if x.name in names:
+                return names[x.name]
         here = mod.names.get(x.name)
         if isinstance(here, Fn):
             return here
@@ -1766,12 +1778,60 @@ class Engine:
                 out.setdefault(x.items[0].name, []).append(x.a)
         return out
 
+    def py_scope(self, mod: Mod, fn: Fn) -> dict:
+        """The names a function is handed or sets in its own lines, as `py_canon` reads them: an object of a
+        library's class where the code shows the class (a parameter written with it, `server: MCPServer`; a name set
+        from a call of it, `server = MCPServer("notes")`) -> `<class>()`; any other such name -> None, which hides the
+        file's name."""
+        out: dict = {}
+        for p in fn.params:
+            ann = (p.ann or "").strip()
+            made = self.py_canon(mod, ann) if _re.fullmatch(r"[A-Za-z_][\w.]*", ann) else None
+            out[p.name] = made + "()" if made and "()" not in made else None
+        for x in every_node(fn.body):
+            if x.k != "assign" or x.a is None or x.name:
+                continue
+            v = x.a
+            made = self.py_canon(mod, text_of(v.a)) if v.k == "call" and v.a is not None and \
+                v.a.k in ("name", "attr") else None
+            for t in x.items or ():
+                if t is not None and t.k == "name":
+                    if made and "()" not in made:
+                        out[t.name] = made + "()"
+                    else:
+                        out.setdefault(t.name, None)
+        return out
+
+    def py_units(self, mod: Mod) -> list:
+        """Every function of a Python file, those written inside another one too, with what the code around it shows:
+        [(function, the scopes around it for `py_canon`, the functions written around it by name for `py_fn`)],
+        innermost first. A decorator is read with the scopes around its function, a call with its function's own
+        scope in front of them."""
+        out: list = []
+        stack: list = [(f, (), ()) for f in reversed([mod.top] + mod.fns) if f is not None]
+        while stack:
+            f, around, inner = stack.pop()
+            out.append((f, around, inner))
+            if f is mod.top:
+                continue
+            nested = [x.a for x in every_node(f.body) if x.k == "def" and isinstance(x.a, Fn)]
+            if not nested:
+                continue
+            own = (self.py_scope(mod, f),) + around
+            names = ({g.name: g for g in nested},) + inner
+            stack.extend((g, own, names) for g in reversed(nested))
+        return out
+
     def _py_tools(self, mod: Mod) -> None:
         classes: dict = {}
-        for fn in mod.fns:
+        units = self.py_units(mod)
+        top_level = {id(f) for f in mod.fns}
+        for fn, around, _inner in units:
+            if fn is mod.top:
+                continue
             for d in fn.decorators:
                 m = R.DECORATOR.match(d or "")
-                way = self.py_tool_way(self.py_canon(mod, m.group(1))) if m else None
+                way = self.py_tool_way(self.py_canon(mod, m.group(1), scopes=around)) if m else None
                 if way is None:
                     continue
                 said = m.group(2) or ""
@@ -1781,28 +1841,36 @@ class Engine:
                 self.add_tool(fn, Tool("" if every else n.group(2) if n else fn.name, m.group(1), mod.file, fn.line,
                                        fills, bool(ok and ok.group(1) not in R.TOOL_NO_APPROVAL), every))
                 break
-            if fn.cls and fn.cls in mod.bases:      # a method of a class made from a library's tool class
+            # a method of a class made from a library's tool class
+            if id(fn) in top_level and fn.cls and fn.cls in mod.bases:
                 if fn.cls not in classes:
                     classes[fn.cls] = self.py_tool_class(mod, fn.cls)
                 got = classes[fn.cls]
                 if got is not None and fn.name in got[0]:
                     self.add_tool(fn, Tool(fn.cls, got[1], mod.file, fn.line, "all", False))
         agents = any(R.TOOL_LIST_PY.match(o) for o in mod.imports.values() if o and not o.startswith("."))
-        seen: set = set()
-        for unit in [mod.top] + mod.fns:
+        for unit, around, inner in units:
             kept = None         # the lists this function keeps under a name, read when first asked for
-            for x in all_nodes(unit.body):
-                if not isinstance(x, N) or x.k != "call" or x.a is None or id(x) in seen:
+            scopes = around if unit is mod.top else (self.py_scope(mod, unit),) + around
+            here = inner
+            mine = [x.a for x in every_node(unit.body) if x.k == "def" and isinstance(x.a, Fn)]
+            if mine:
+                here = ({g.name: g for g in mine},) + inner
+            lines = list(every_node(unit.body))
+            for x in lines:
+                if x.k == "fn" and isinstance(x.a, Fn):     # a `lambda` written in these lines: read with them
+                    lines.extend(every_node(x.a.body))
+                if x.k != "call" or x.a is None:
                     continue
-                seen.add(id(x))
                 via = text_of(x.a)
-                canon = self.py_canon(mod, via)
+                canon = self.py_canon(mod, via, scopes=scopes)
                 kw = x.kw or {}
                 way = self.py_tool_way(canon)
                 if way is not None:     # `mcp.add_tool(f)`, `Tool(f)`, `StructuredTool.from_function(func=f)`
                     handed = next((kw[k] for k in ("func", "fn", "function", "handler", "coroutine") if k in kw),
-                                  None) or next((it for it in x.items or () if self.py_fn(mod, it) is not None), None)
-                    f = self.py_fn(mod, handed)
+                                  None) or next((it for it in x.items or () if self.py_fn(mod, it, here) is not None),
+                                                None)
+                    f = self.py_fn(mod, handed, here)
                     if f is not None:
                         name = kw.get("name")
                         asked = next((kw[k] for k in ("needs_approval", "requires_approval", "require_approval")
@@ -1828,7 +1896,7 @@ class Engine:
                                                      if isinstance(v, N) and v.k == "seq"]
                 for seq in seqs:
                     for it in seq.items or ():
-                        f = self.py_fn(mod, it)
+                        f = self.py_fn(mod, it, here)
                         if f is not None:
                             self.add_tool(f, Tool(f.name, via, mod.file, x.line, "all", False))
 
@@ -1908,8 +1976,9 @@ class Engine:
                     self._js_tool_objects(mod, x)
                     break
                 where = next((w for rx, w in R.TOOL_REG_JS if rx.match(canon)), None)
-                every = where is None and bool(R.TOOL_LOW_JS.match(canon)) and bool(items) and \
-                    bool(R.TOOL_LOW_SCHEMA.search(mod.imports.get(text_of(items[0]), text_of(items[0]))))
+                every = where is None and bool(R.TOOL_LOW_JS.match(canon)) and bool(items) and (
+                    bool(R.TOOL_LOW_SCHEMA.search(mod.imports.get(text_of(items[0]), text_of(items[0])))) or
+                    (items[0].k == "const" and items[0].a == R.TOOL_LOW_METHOD))     # the newer package's name
                 if where is None and not every:
                     continue
                 if every or where == "last":

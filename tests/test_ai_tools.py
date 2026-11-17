@@ -675,3 +675,173 @@ def test_tools_written_as_classes_and_handed_over_in_lists(tmp_path):
                                        '{ stdio: "pipe" }).toString(),', "shell")):
         what = by[(file, _at(text, line))]["flow"]["source"]["what"]
         assert f"the tool `{name}`" in what and "`command`" in what, what
+
+
+# ---- the MCP library's newer names (its Python `MCPServer` and its TypeScript package `@modelcontextprotocol/server`),
+# a server made inside a function, and a function handed the server with its class written
+NEWER_PY = """import os
+import sqlite3
+import subprocess
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import MCPServer as NotesServer
+
+app = MCPServer("plain")
+
+
+@app.tool()
+def erase(path: str) -> str:
+    os.remove(path)
+    return "erased"
+
+
+@app.tool()
+def peek(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
+
+def serve(folder: str) -> NotesServer:
+    server = NotesServer("notes")
+
+    @server.tool()
+    def run(command: str) -> str:
+        return subprocess.run(command, shell=True, capture_output=True, text=True).stdout
+
+    @server.tool(name="search")
+    def search(term: str) -> list:
+        db = sqlite3.connect("notes.db")
+        return db.execute("select title from notes where body like ?", (f"%{term}%",)).fetchall()
+
+    def drop(title: str) -> str:
+        db = sqlite3.connect("notes.db")
+        db.execute(f"delete from notes where title = '{title}'")
+        return "gone"
+
+    server.add_tool(drop)
+    return server
+
+
+def register(server: NotesServer) -> None:
+    @server.tool()
+    def shell(command: str) -> str:
+        return subprocess.getoutput(command)
+
+    @server.tool()
+    def status() -> str:
+        return subprocess.getoutput("git status")
+"""
+
+LOOKALIKE_PY = """import subprocess
+
+from mcp.server.mcpserver import MCPServer
+
+server = MCPServer("top")
+
+
+class Registry:
+    def tool(self):
+        return lambda f: f
+
+
+def build():
+    server = Registry()
+
+    @server.tool()
+    def run_local(command: str) -> str:
+        return subprocess.getoutput(command)
+
+    return run_local
+
+
+def attach(server):
+    @server.tool()
+    def run_any(command: str) -> str:
+        return subprocess.getoutput(command + " --dry-run")
+
+    return run_any
+"""
+
+NEWER_TS = """import { McpServer, Server } from "@modelcontextprotocol/server";
+import { execSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+const ROOT = path.resolve("/srv/files");
+
+export function createServer(): McpServer {
+  const server = new McpServer({ name: "files", version: "1.0.0" });
+  server.registerTool("run", { description: "Run a command" }, async ({ command }) => {
+    return { content: [{ type: "text", text: execSync(command).toString() }] };
+  });
+  server.registerTool("save", { description: "Save a note" }, async ({ name, text }) => {
+    const target = path.resolve(ROOT, name);
+    if (!target.startsWith(ROOT + path.sep)) throw new Error("outside the files folder");
+    fs.writeFileSync(target, text);
+    return { content: [{ type: "text", text: "saved" }] };
+  });
+  return server;
+}
+
+export const registerWipe = (server: McpServer) => {
+  server.registerTool("wipe", { description: "Remove a folder" }, async ({ folder }) => {
+    fs.rmSync(folder, { recursive: true });
+    return { content: [] };
+  });
+};
+
+export function lowLevel() {
+  const low = new Server({ name: "low", version: "1.0.0" }, { capabilities: { tools: {} } });
+  low.setRequestHandler("tools/call", async (request, ctx) => {
+    const args = request.params.arguments ?? {};
+    execSync(String(args.command));
+    return { content: [] };
+  });
+  low.setRequestHandler("prompts/get", async (request) => {
+    execSync("echo " + String(request.params.name).length);
+    return { messages: [] };
+  });
+  return low;
+}
+"""
+
+NEWER_FILES = {"srv/__init__.py": "", "srv/newer.py": NEWER_PY, "srv/lookalike.py": LOOKALIKE_PY,
+               "web/package.json": '{"dependencies": {"@modelcontextprotocol/server": "^2.0.0"}}',
+               "web/src/newer.ts": NEWER_TS}
+
+
+def test_the_mcp_librarys_newer_names_and_a_server_made_inside_a_function(tmp_path):
+    """The MCP library's newer names: its Python server class `MCPServer` (imported from `mcp.server` or
+    `mcp.server.mcpserver`, also under another name) and its TypeScript package `@modelcontextprotocol/server`
+    (`McpServer.registerTool`; the low-level `Server`, whose handler for `"tools/call"` is handed every call). A
+    server is also found where a function makes it (`server = MCPServer(...)` in `serve()`, tools written inside the
+    function with `@server.tool()` or handed to `server.add_tool(f)`) and where a function is handed it with its class
+    written (`def register(server: MCPServer)`, `(server: McpServer) =>`). Dangerous: a tool that runs a command, a
+    query built with the value, a file removed or written at a path the model names. Safe twins: a tool that only
+    reads a file, hands the value to the database as a parameter, runs a command the code fixes, or keeps the path
+    inside a folder of the code's own; the low-level server's handler of another kind of request. Look-alikes: a
+    function's own `server` that is a registry of the project's (it hides the file's MCP server of that name) and a
+    function handed a `server` whose class is not written (Lantern cannot tell whose it is: no tool)."""
+    sec = scan(build_graph(_write(tmp_path, NEWER_FILES)))
+    found = sorted((f["file"], f["line"]) for f in sec["findings"] if f["rule"] == RULE)
+    expected = [("srv/newer.py", _at(NEWER_PY, line)) for line in (
+        "os.remove(path)",
+        "return subprocess.run(command, shell=True, capture_output=True, text=True).stdout",
+        "db.execute(f\"delete from notes where title = '{title}'\")",
+        "return subprocess.getoutput(command)")]
+    expected += [("web/src/newer.ts", _at(NEWER_TS, line)) for line in (
+        'return { content: [{ type: "text", text: execSync(command).toString() }] };',
+        "fs.rmSync(folder, { recursive: true });",
+        "execSync(String(args.command));")]
+    assert found == sorted(expected), found
+    rec = next(r for r in sec["tools"] if r["tool"] == "lantern-flow")
+    # Python: erase, peek, run, search, drop, shell, status; TypeScript: run, save, wipe, the low-level handler
+    assert rec["scope"]["tool_text"]["tools"] == 11, rec["scope"]
+    assert rec["scope"]["tool_text"]["findings"] == 7 and rec["scope"]["tool_text"]["reads_only"] == 1, rec["scope"]
+    by = {(f["file"], f["line"]): f for f in sec["findings"] if f["rule"] == RULE}
+    for line, name in (("return subprocess.run(command, shell=True, capture_output=True, text=True).stdout", "run"),
+                       ("return subprocess.getoutput(command)", "shell")):
+        what = by[("srv/newer.py", _at(NEWER_PY, line))]["flow"]["source"]["what"]
+        assert f"the tool `{name}`" in what and "`command`" in what, what
+    low = by[("web/src/newer.ts", _at(NEWER_TS, "execSync(String(args.command));"))]["flow"]["source"]["what"]
+    assert "a call of any tool of the server" in low, low

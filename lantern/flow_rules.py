@@ -655,12 +655,14 @@ TOOL_MAKER_PY = re.compile(
     r"llama_index\.core\.tools\.FunctionTool(?:\.from_defaults)?|google\.adk\.tools\.FunctionTool|"
     r"autogen_core\.tools\.FunctionTool|strands\.tool)$")
 # ... and the classes of a library whose objects do it with one of their members: an MCP server (FastMCP, in the MCP
-# SDK and on its own), Pydantic AI's agent, and the MCP SDK's low-level server, whose one handler gets every call's
-# tool name and arguments. (class, members, which parameters the model fills: "all" or "after-first", and whether
-# the function is handed the calls of every tool of the server, so that no one tool's name is said for it)
+# SDK and on its own, and the SDK's newer name for it, `MCPServer`), Pydantic AI's agent, and the MCP SDK's low-level
+# server, whose one handler gets every call's tool name and arguments. (class, members, which parameters the model
+# fills: "all" or "after-first", and whether the function is handed the calls of every tool of the server, so that no
+# one tool's name is said for it)
 TOOL_SERVER_PY = (
     (re.compile(r"^(?:mcp\.server\.fastmcp(?:\.server)?|fastmcp(?:\.server(?:\.server)?)?)\.FastMCP$"),
      frozenset({"tool", "add_tool"}), "all", False),
+    (re.compile(r"^mcp\.server(?:\.mcpserver(?:\.server)?)?\.MCPServer$"), frozenset({"tool", "add_tool"}), "all", False),
     (re.compile(r"^pydantic_ai(?:\.agent)?\.Agent$"), frozenset({"tool_plain"}), "all", False),
     (re.compile(r"^pydantic_ai(?:\.agent)?\.Agent$"), frozenset({"tool"}), "after-first", False),
     (re.compile(r"^mcp\.server(?:\.lowlevel(?:\.server)?)?\.Server$"), frozenset({"call_tool"}), "all", True),
@@ -685,11 +687,13 @@ TOOL_CLASS_PY = (
 )
 # JavaScript and TypeScript, by the map's name for the call (`ext:` taken off): where the function is and which of
 # its parameters the model fills (the second is the library's own: the request's extra, the call's options).
-# "last": the last function in the call (the MCP SDK's `server.tool(name, ..., handler)` and `registerTool`);
+# "last": the last function in the call (the MCP SDK's `server.tool(name, ..., handler)` and `registerTool`, also from
+# its newer package `@modelcontextprotocol/server`);
 # "first": the first (LangChain's `tool(fn, {...})`); "execute" / "func": that key of the object handed over (the AI
 # SDK's and the Agents SDK's `tool({ execute })`, Mastra's `createTool`, LangChain's `DynamicStructuredTool`).
 TOOL_REG_JS = (
-    (re.compile(r"^@modelcontextprotocol/sdk/server/mcp(?:\.js)?\.McpServer\.(?:tool|registerTool)$"), "last"),
+    (re.compile(r"^@modelcontextprotocol/(?:sdk/server/mcp(?:\.js)?|server)\.McpServer\.(?:tool|registerTool)$"),
+     "last"),
     (re.compile(r"^fastmcp\.FastMCP\.addTool$"), "execute"),
     (re.compile(r"^(?:ai|@openai/agents(?:-core)?|@mastra/core(?:/tools)?)\.(?:tool|createTool)$"), "execute"),
     (re.compile(r"^@langchain/core/tools\.tool$"), "first"),
@@ -701,9 +705,11 @@ TOOL_REG_JS = (
 TOOL_OBJECTS_JS = re.compile(r"^(?:new )?ai\.(?:generateText|streamText|generateObject|streamObject|ToolLoopAgent|"
                              r"Experimental_Agent)(?:\(\))?$")
 # ... and the MCP SDK's low-level server: `server.setRequestHandler(CallToolRequestSchema, async (request) => ...)`,
-# whose handler is handed the whole call (`request.params.name`, `request.params.arguments`)
-TOOL_LOW_JS = re.compile(r"^@modelcontextprotocol/sdk/server(?:/index(?:\.js)?)?\.Server\.setRequestHandler$")
+# whose handler is handed the whole call (`request.params.name`, `request.params.arguments`); the newer package's
+# names the request by its method: `server.setRequestHandler("tools/call", async (request, ctx) => ...)`
+TOOL_LOW_JS = re.compile(r"^@modelcontextprotocol/(?:sdk/server(?:/index(?:\.js)?)?|server)\.Server\.setRequestHandler$")
 TOOL_LOW_SCHEMA = re.compile(r"(?:^|\.)CallToolRequestSchema$")
+TOOL_LOW_METHOD = "tools/call"
 # A parameter the library fills itself and the model does not: the call's context, the agent's state, settings
 TOOL_CONTEXT = re.compile(r"\b(?:Context|RunContext|RunContextWrapper|ToolContext|InjectedToolArg|InjectedState|"
                           r"InjectedStore|InjectedToolCallId|RunnableConfig|CallbackManagerForToolRun|"
