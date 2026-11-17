@@ -703,6 +703,42 @@ for an address with no password, a password that is the user name or a placehold
 type, a comparison, a comment, a build argument with no value, and a name `LW-PUBLIC-SECRET` already names in that
 file. A key the secret scan lists on the same line is one finding, the secret scan's, which then carries `public`
 and one more sentence in `more_info`. Its `scenario` is the story kind `secret`.
+`LW-SERVER-IMPORT-IN-CLIENT` (200; `lantern/clientpull.py`, roadmap stage 5): a file that begins with `"use client"`
+is handed to every visitor's browser with every file it imports and every file those import (`Graph.js_pulls`,
+written by the JS/TS reader: value imports, imports for what a file does when loaded, re-exports; an import of types
+loads nothing). One finding for each file reached that way whose code reads a secret setting by its name
+(`process.env.NAME`, `process.env["NAME"]`, `import.meta.env.NAME`, `Bun.env.NAME`, `Deno.env.get("NAME")`,
+`const { NAME } = process.env`; a name that says a secret, or a database's address; never a public-prefixed name),
+on the line of its first such read. The server's code is then in what visitors download: rank `medium`. Where `env`
+in the `next.config.*` file nearest above the page's file names that setting, its value is in the page too: rank
+`high`, and `pulled.handed` says where. `tool_confidence` `LOW`: a bundler leaves out code that nothing calls, which
+import lines do not show. The way stops at a file that begins with `"use server"` and at a file that imports
+`server-only`. A remark, a text, a pattern and the words of a page that name a setting are no read. Not read: a
+project with no `"use client"` file, `import()` and `require`, a file that only loads a server library and reads no
+secret setting. Its `scenario` is the story kind `server-code`, or `server-key` where the build hands the setting on.
+`LW-SENSITIVE-COLUMN-RETURNED` (200; `lantern/wholerecord.py`, roadmap stage 5): a record sent back whole, with a
+secret field in it. Which fields a record has, and which of them hold a secret by their names (a password's hash, a
+reset token, a key), is read from the project's own model files (`lantern/datamodel.py`: a Prisma schema,
+SQLAlchemy, SQLModel and Django classes, Drizzle tables). JS/TS, one function at a time: a Prisma query
+(`<client>.<model>.findUnique|findFirst|findMany|create|update|upsert|delete`) that names no fields, selects a secret
+one, leaves one in beside an `omit`, or brings a record that has one with `include`; a Drizzle query that names no
+columns (`.select().from(<table>)`, `.query.<table>.findMany()`, `.insert|update|delete(<table>)….returning()`). It
+is a finding where what the query found goes out as it came: the query, or the name it was given, stands in an
+answer (`res.json(x)`, `NextResponse.json({ user })`, `new Response(JSON.stringify(x))`, `json(x)`), also inside an
+object or a list written there, or is returned by a function whose result goes to the caller (a file or a function
+that begins with `"use server"`, a tRPC procedure, `getServerSideProps`, a route's `loader`). Python: a FastAPI
+route that returns the table's own object (a parameter written with the model's class, what a query for it gave, a
+function of the project written to return one) with no `response_model` and no return type that names another
+class, or whose `response_model` is the table's own class; a Django REST framework `ModelSerializer` whose `fields`
+are `"__all__"` or list the secret field, or whose `exclude` leaves it in, and that does not mark it `write_only`.
+Rank `medium`, `tool_confidence` `LOW`: a name says a secret or it does not, and code in another function that takes
+the field out first is not followed. The finding stands on the query's line (a route: where it has the object; a
+serializer: where it says which fields) and carries `columns`; `snippet` is the first field's name, never a value.
+Quiet for a query that names its fields and none of them a secret, a field taken out in the same function (`delete
+user.passwordHash`, `user.passwordHash = undefined`), a record handed to a function of the project, an answer with a
+class of its own (`response_model=UserOut`). Not read: NestJS controllers, GraphQL resolvers, Koa, Flask and Django
+views, Drizzle relations (`with:`), and whether a FastAPI object's fields are still loaded when it is returned. Its
+`scenario` is the story kind `whole-record`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -777,6 +813,14 @@ non-security hash or SQL splicing only fixed text → `low`, a hash of unknown p
 `public` (`LW-CLIENT-ENV-SECRET`, and a secret-scan finding on a line that gives its key to a public setting:
 `{"name"` (the setting), `"why"`: `address-with-password`|`key`|`from-secret`, `"from"` (the other setting, where
 there is one), `"kind"` (which key, for `key`)`}`; never the value),
+`pulled` (`LW-SERVER-IMPORT-IN-CLIENT`: `{"settings"` [the secret settings the file reads by name, at most 12, the
+one the build hands on first], `"path"` [the files from the page's file to this one; a way of more than 12 files is
+listed by its two ends], `"not_shown"` (how many files of the way are not listed), `"clients"` (how many files that
+begin with `"use client"` reach it, null when that was not counted), `"handed"` (null, or `{"file", "line"}`: where a
+`next.config` file's `env` names the setting)`}`),
+`columns` (`LW-SENSITIVE-COLUMN-RETURNED`: `{"model"`, `"fields"` [the secret fields that go back, at most 12; one
+that a record brought with it is written `author.passwordHash`], `"via"`: `prisma`|`drizzle`|`sqlalchemy`|`sqlmodel`|
+`django`, `"defined"`: `{"file", "line"}` (where the model is written), `"sent"` (the line it goes back on)`}`),
 `row_rules` (`LW-NO-RLS` only, since 2026-11-14, `websec.row_rules`: what the project's SQL files, replayed in the
 order they are applied (`lantern/rowrules.py`), leave open on one table: `{"table"` (`<schema>.<name>`), `"state"`:
 `off` (the files create the table and never switch row-level security on), `off-in-the-files` (the same, and code

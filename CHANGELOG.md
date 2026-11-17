@@ -9,6 +9,36 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- New heuristic `LW-SENSITIVE-COLUMN-RETURNED` (roadmap stage 5; labelled heuristic; `lantern/wholerecord.py`): a
+  record sent back whole, with a secret field in it. A query that asks for every field of a record whose model
+  holds a password's hash, a reset token or a key, and an answer that hands the record on as it came: whoever
+  gets the answer gets the field, whether or not a page shows it. Read from the project's own model files and
+  from one function's code at a time; nothing is run. JS/TS: a Prisma query with no `select`, one that selects a
+  secret field, an `omit` that leaves one in, an `include` of a record that has one; a Drizzle query that names
+  no columns. A finding where the query, or the name it was given, stands in an answer (`res.json`,
+  `NextResponse.json`, `new Response(JSON.stringify(x))`, `json(x)`) or is returned by a Server Action, a tRPC
+  procedure, `getServerSideProps` or a route's loader. Python: a FastAPI route that returns the table's own
+  object with no `response_model` and no return type that names another class, or whose `response_model` is the
+  table's own class; a Django REST framework `ModelSerializer` that sends the field and does not mark it
+  `write_only`. Medium; on the finding as `columns`. Quiet for a query that names its fields, a field taken out
+  before the answer, an answer with a class of its own, and a record handed to another function of the project
+  (which is not followed). Not read: NestJS controllers, GraphQL resolvers, Koa, Flask and Django views, Drizzle
+  relations. Tests: `tests/test_whole_record.py` (17).
+- New: `lantern/datamodel.py` reads what a project's data looks like from the files that say so: a Prisma schema,
+  SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`. For each record its fields, the
+  records it leads to, which fields hold a secret by their names (a password's hash, a token that lets somebody
+  in, a key) and which say whose the record is (`userId`, `org_id`, `tenant`, `created_by`). It is read once in a
+  run and runs nothing of the project. Tests: `tests/test_datamodel.py` (88).
+- New heuristic `LW-SERVER-IMPORT-IN-CLIENT` (roadmap stage 5; labelled heuristic; `lantern/clientpull.py`): a
+  file written for the server that reads a secret setting by its name (`process.env.STRIPE_SECRET_KEY`) and is
+  loaded with a page's file. A file that begins with `"use client"` is handed to every visitor's browser with
+  every file it imports and every file those import, so the server's code is in what visitors download: medium,
+  and high where `env` in a `next.config` file also hands that setting to the page, because then its value is
+  there too. The JS/TS reader now writes down which files are loaded with each file (`Graph.js_pulls`; an import
+  of types loads nothing). The way stops at a `"use server"` file and at a file that imports `server-only`. One
+  finding for a file, on the line of its first such read, with the way from the page's file (`pulled`). Not
+  read: a project with no `"use client"` file, `import()` and `require`, a file that only loads a server library
+  and reads no secret setting. Tests: `tests/test_client_pull.py` (11).
 - Fixed: where the gitleaks program is not installed, Lantern's built-in secret patterns called a key's place
   kept by filler in an example file (`sk_live_` and nothing but `x`) a possible secret, which ranks critical.
   Filler is now no finding and is counted in the scan's record (`scope.placeholders`). Filler is only what
