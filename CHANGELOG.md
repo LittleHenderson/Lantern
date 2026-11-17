@@ -23,8 +23,10 @@ file. New entries go under `## Unreleased`, on top.
   provider's own check, and where a check is written that Lantern cannot follow as code (a comparison that takes
   the same time whatever the text, a call named for checking a signature, a value compared with a secret
   setting): it then cannot tell. Not seen: a check whose answer is thrown away, a gateway in front of the app;
-  only Stripe's, svix's and Standard Webhooks' own checks are followed as code. Tests:
-  `tests/test_webhook_unsigned.py`.
+  only Stripe's, svix's and Standard Webhooks' own checks are followed as code. Measured 2026-11-17 on 30
+  folders (the 12 benchmark projects, the 15 sample apps, Lantern's gateway, website and engine): 3 webhook
+  routes that write stored data, each only after Stripe's own check, and no finding; no true case, so no
+  precision is known and it stays a heuristic. Tests: `tests/test_webhook_unsigned.py`.
 - Fixed: a call into the management side of a sign-in service is no longer read as a login. Such a call makes,
   changes or removes whichever account it is handed, with the server's own key (Supabase's `auth.admin.*`,
   Clerk's backend client, Firebase's admin library), and asks nobody who is calling; the check by names took it
@@ -42,8 +44,9 @@ file. New entries go under `## Unreleased`, on top.
   was kept under. A comparison with nothing (`=== undefined`) only asks whether the setting is set. A setting
   that lists several secrets counts where the request is looked for in it. **Changed answer** of
   `LA-WALLET-DRAIN` on such a route that pays a service: high, "anyone can call it as often as they like", where
-  it was medium, "with no rate limit", as if somebody had to sign in for it. Tests:
-  `tests/test_setting_is_no_login.py`.
+  it was medium, "with no rate limit", as if somebody had to sign in for it. Measured with the fix above and
+  the webhook rule on the same 30 folders: none of the 28 findings of the rules they can move there moved.
+  Tests: `tests/test_setting_is_no_login.py`.
 - The ownership check reads the project's data model (roadmap stage 5; `LT-AUTHZ-OWNER`, still labelled
   heuristic; `lantern/tenantscope.py`, `flow.Engine.asks_owner`, `owner_field`). Where the project's model files
   (a Prisma schema, SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`) name the field
