@@ -148,6 +148,17 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
     if named_open:
         findings[:] = [f for f in findings if not any(f is x for x in named_open)]
     sender_checked = _senders(g, findings, res, paid_calls)
+    # a route a provider calls that writes stored data with no check of who sent the message (`lantern/webhooks.py`).
+    # One problem is one finding: a provider cannot sign in, so on such a route the finding that says "no login"
+    # points to the wrong fix, and the webhook finding, which names the writes, stands in its place: the routes it
+    # stands for are counted in the record (`webhook_for_no_login`)
+    hooks, hook_routes = webhooks.unsigned(g, res, lines_for)
+    hook_places = {(f["file"], f["line"]) for f in hooks}
+    stood_for = {(f.get("file"), f.get("line")) for f in findings
+                 if f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in hook_places}
+    if stood_for:
+        findings[:] = [f for f in findings
+                       if not (f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in stood_for)]
     groups: dict[tuple, list[dict]] = {}
     for fl in res.flows:
         groups.setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
@@ -221,7 +232,9 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         if not a.get("login"):
             if not sign or sign[0] != "strong":
                 f = _open_route(a, n, sign, findings, src, let_on)
-                if f is not None:
+                if f is not None and (f["file"], f["line"]) in hook_places:
+                    stood_for.add((f["file"], f["line"]))
+                elif f is not None:
                     out.append(f)
                     lets_on += let_on
                 continue
@@ -247,7 +260,9 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         from .websec import missing_auth
         have = {(f.get("file"), f.get("line")) for f in [*findings, *out] if f.get("rule") == "LW-AUTH-MISSING"}
         for f in missing_auth(g, only=res.caught, doubt=res.soft):
-            if (f["file"], f["line"]) not in have:
+            if (f["file"], f["line"]) in hook_places:
+                stood_for.add((f["file"], f["line"]))
+            elif (f["file"], f["line"]) not in have:
                 f["tool"] = "lantern-flow"
                 out.append(f)
                 lets_on += 1
@@ -270,9 +285,7 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         out.append(f)
     for _place, c in sorted(claims.items()):
         out.append(_client_role(c, lines_for(c["file"]) if lines_for is not None else []))
-    # a route a provider calls that writes stored data with no check of who sent the message (`lantern/webhooks.py`)
-    hooks, hook_routes = webhooks.unsigned(g, res, lines_for)
-    out.extend(hooks)
+    out.extend(hooks)       # the webhook findings, read before the routes above (`hook_places`)
     st = res.stats
     notes = []
     if st.get("skipped_files"):
@@ -288,6 +301,8 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
                         "token_check_lets_on": lets_on, "sender_checked": sender_checked}}
     if hook_routes:     # routes taken for a provider's webhook that write stored data: what LW-UNSIGNED-WEBHOOK read
         fields["scope"]["webhook_routes"] = hook_routes
+    if stood_for:       # ... and the routes whose "no login" finding a webhook finding stands for
+        fields["scope"]["webhook_for_no_login"] = len(stood_for)
     if notes:
         rec = scanresult.record("lantern-flow", "partial", "; ".join(notes), errors=res.errors[:20], **fields)
     else:

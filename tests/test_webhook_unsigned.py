@@ -265,7 +265,8 @@ ROUTES = {
 }
 
 
-def _scan(root, files):
+def _scanned(root, files):
+    """The findings outside tests, and the flow step's record."""
     for rel, text in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -273,7 +274,11 @@ def _scan(root, files):
     sec = scan(build_graph(root), offline=True)
     flow = next(t for t in sec["tools"] if t["tool"] == "lantern-flow")
     assert flow["state"] == "ok", flow
-    return [f for f in sec["findings"] if not f["in_tests"]]
+    return [f for f in sec["findings"] if not f["in_tests"]], flow
+
+
+def _scan(root, files):
+    return _scanned(root, files)[0]
 
 
 def _hooks(fs):
@@ -320,6 +325,31 @@ def test_a_route_that_is_no_webhook_is_not_this_rules(tmp_path):
     get = HEAD + ('export async function GET(req: Request) {\n'
                   '  return new Response(new URL(req.url).searchParams.get("hub.challenge") ?? "");\n}\n')
     assert _hooks(_scan(tmp_path / "get", {**NEXT, "app/api/webhooks/meta/route.ts": get})) == []
+
+
+def test_a_route_taken_for_a_providers_is_listed_once(tmp_path):
+    """One problem is one finding. A provider cannot sign in, so on a route taken for a provider's the older finding
+    "no login" points to the wrong fix: the webhook finding, which names the writes, stands in its place. A `webhook`
+    in the address kept the older finding away before this rule; here only the `hooks` of the address, or a header a
+    provider sends read in the route's lines, says whose the route is, and in the third a page of the project calls
+    the route too. The same lines on a route nothing marks as a provider's keep the older finding (the test above)."""
+    body = ("  const event = await req.json();\n"
+            '  await prisma.user.update({ where: { id: event.id }, data: { plan: "team" } });\n'
+            "  return NextResponse.json({ ok: true });\n")
+    header = '  const sig = req.headers.get("stripe-signature");\n'
+    page = ('"use client";\n\nexport default function Page() {\n  return (\n'
+            '    <button onClick={() => fetch("/api/hooks/stripe", { method: "POST", body: "{}" })}>Pay</button>\n'
+            "  );\n}\n")
+    cases = [("app/api/hooks/stripe/route.ts", _post(body), {}),
+             ("app/api/billing/route.ts", _post(header + body), {}),
+             ("app/api/hooks/stripe/route.ts", _post(body), {"app/page.tsx": page})]
+    for i, (rel, text, more) in enumerate(cases):
+        fs, flow = _scanned(tmp_path / str(i), {**NEXT, **more, rel: text})
+        assert [(f["rule"], f["tool"]) for f in fs if f["file"] == rel] == [(RULE, "lantern-flow")], (i, rel)
+        assert flow["scope"]["webhook_for_no_login"] == 1, (i, flow["scope"])
+    # where nothing was in its place, the record does not say so
+    fs, flow = _scanned(tmp_path / "plain", {**NEXT, "app/api/webhooks/stripe/route.ts": _post(body)})
+    assert _hooks(fs) == [("app/api/webhooks/stripe/route.ts", "none")] and "webhook_for_no_login" not in flow["scope"]
 
 
 EXPRESS = '''const express = require("express");

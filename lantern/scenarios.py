@@ -131,9 +131,9 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                       "and the count is put right when the work is done. Requests sent together are let through "
                       "only as far as the limit goes."),
     "unsigned-webhook": (None,
-                         "Your app takes the message for the provider's and does what it says: an account is marked "
-                         "as paid that never paid, a subscription is ended, a person's record is removed. Nobody "
-                         "paid and nobody signed in.",
+                         "Your app takes the message for the provider's and does what it says. What that is depends "
+                         "on the route: an account marked as paid that never paid, a subscription ended, a person's "
+                         "record changed or removed. Nobody paid and nobody signed in.",
                          "The route checks the provider's signature on every message, with the secret only your "
                          "app and the provider share, before it changes anything. A message nobody signed is "
                          "turned away."),

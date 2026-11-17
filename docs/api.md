@@ -575,7 +575,10 @@ to code Lantern does not read), `login_read_from_code` (findings "no login check
 because the route's own code turns away whoever is not signed in), `token_check_lets_on` (routes that change data
 on whose way a login token is read and nothing turns away a request whose token does not hold), `sender_checked`
 (`LA-WALLET-DRAIN` findings that were not kept because the route goes on only with a message its provider signed
-and pays for nothing before that check)`}`; `partial` when a file could not be read, a function could not be followed or the
+and pays for nothing before that check), `webhook_routes` (only when there is one: the routes taken for a
+provider's webhook that write stored data, which is what `LW-UNSIGNED-WEBHOOK` read), `webhook_for_no_login` (only
+when there is one: the routes whose finding "no login check was found" was not kept because an `LW-UNSIGNED-WEBHOOK`
+finding names the same route: a provider cannot sign in, so that finding points to the wrong fix)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
 (22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
@@ -603,7 +606,15 @@ answer is not waited for), the name of that check is no sign, and a route that c
 the title "... changes data, and Lantern found nothing that turns away a request whose login token does not hold".
 `more_info` names what looked like a login on the route and was not taken for one, in sentences that begin "Not
 taken for a login check:" (a library's login made optional with `optional=True`; a FastAPI security scheme whose
-token the handler never looks at). A Server Action has no verb and no request to read, so it is asked in a way of
+token the handler never looks at). Two things that are named like a login ask nobody who is calling and are no
+sign by names (since 2026-11-16): a call into the management side of a sign-in service, which makes, changes or
+removes whichever account it is handed with the server's own key (`websec.MANAGES_ACCOUNTS`: Supabase's
+`auth.admin.*`, Clerk's `clerkClient.users.*` and its like, Firebase's `getAuth().setCustomUserClaims(…)` and its
+like; the calls that do ask, `getUser()`, `auth()`, `verifyIdToken()`, count as before), and a secret setting of
+the server that is read and handed on (`websec.SETTING_READ`: `process.env.NOTES_API_TOKEN`, `settings.API_TOKEN`),
+which stands in a login's place only where the statement it is in compares something or calls a function named for
+checking, or a later statement does so with the name it was kept under (a comparison with nothing, `=== undefined`,
+only asks whether it is set). A Server Action has no verb and no request to read, so it is asked in a way of
 its own (since 2026-11-14, `websec._actions_unasked`): an action that code of the project outside its tests uses,
 that is not open by its name (sign-in, a webhook), that changes data and in which no strong sign of a login is
 found gets `LW-AUTH-MISSING` with the title "The Server Action <name> changes data, the app uses it, and no login
@@ -739,6 +750,26 @@ user.passwordHash`, `user.passwordHash = undefined`), a record handed to a funct
 class of its own (`response_model=UserOut`). Not read: NestJS controllers, GraphQL resolvers, Koa, Flask and Django
 views, Drizzle relations (`with:`), and whether a FastAPI object's fields are still loaded when it is returned. Its
 `scenario` is the story kind `whole-record`.
+`LW-UNSIGNED-WEBHOOK` (345; `lantern/webhooks.py`, roadmap stage 5; made by the flow step, so `tool` is
+`lantern-flow`): a route a payment or message provider calls that writes stored data with no check of who sent the
+message. A route is taken for a provider's when it takes a POST, shows no login, and its address has the word
+`webhook` or `hook` or its own lines name a header or an event a provider sends (`stripe-signature`,
+`x-hub-signature-256`, `svix-id`, `checkout.session.completed`). What it writes is read by the flow step, in the
+route and in the functions it calls: a row made, changed or removed through a database library or by SQL text, and
+an account made, changed or removed through the management side of a sign-in service (Supabase's admin API, Clerk's
+backend client, Firebase's admin library). Three answers, `webhook.check`: `none` (no check was found), `lets-on`
+(the provider's own check is called and a message that fails it, or never gets to it, still goes on: its failure is
+caught and passed over, it is made for some requests only, its secret is missing or empty) and `late` (data was
+written before the check). Quiet where every write stands behind the provider's own check of the signature (Stripe's
+`constructEvent`, svix, Standard Webhooks), and where a check is written that Lantern cannot follow as code: a
+comparison that takes the same time whatever the text (`timingSafeEqual`, `compare_digest`), a call named for
+checking a signature, a webhook or a sender, a value compared with a secret setting or with something named like a
+signature or a secret. It then cannot tell, and says nothing. Rank `medium`, `tool_confidence` `LOW`. The finding
+stands on the route's first line and carries `webhook`; such a route is not listed a second time as one with no
+login. Not seen: a check that is written and whose answer is thrown away, a check made by a gateway in front of the
+app, and what a check by a provider's name does on a client Lantern cannot place (it keeps the rule quiet). Only
+Stripe's, svix's and Standard Webhooks' own checks are followed as code; every other provider's is known by the
+written signs above. Its `scenario` is the story kind `unsigned-webhook`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -830,6 +861,12 @@ begin with `"use client"` reach it, null when that was not counted), `"handed"` 
 `columns` (`LW-SENSITIVE-COLUMN-RETURNED`: `{"model"`, `"fields"` [the secret fields that go back, at most 12; one
 that a record brought with it is written `author.passwordHash`], `"via"`: `prisma`|`drizzle`|`sqlalchemy`|`sqlmodel`|
 `django`, `"defined"`: `{"file", "line"}` (where the model is written), `"sent"` (the line it goes back on)`}`),
+`webhook` (`LW-UNSIGNED-WEBHOOK`: `{"route"` (`POST /api/webhooks/stripe`), `"why"` (what made Lantern take the route
+for a provider's: the word of its address, or the header or event name in its lines), `"check"`: `none`|`lets-on`|
+`late`, `"changes"` [`{"file", "line"}`: where stored data is written with no check before it, at most 6], `"more"`
+(how many such places are not listed, only when there are more), `"at"` (the line of the check that lets a failed
+message on, or that comes after the write; absent for `none`), `"at_file"` (the file that line is in, only when it
+is not the route's own)`}`),
 `row_rules` (`LW-NO-RLS` only, since 2026-11-14, `websec.row_rules`: what the project's SQL files, replayed in the
 order they are applied (`lantern/rowrules.py`), leave open on one table: `{"table"` (`<schema>.<name>`), `"state"`:
 `off` (the files create the table and never switch row-level security on), `off-in-the-files` (the same, and code
@@ -852,7 +889,7 @@ open (`met` true, or null for `off-in-the-files`), "The database is as the proje
 null: a change made in the dashboard is in no file), and "A visitor has the table's name and the public key"
 (true where `client` is not empty, else null, never false). A finding without `row_rules` (Firebase's rules,
 results an older Lantern wrote) is told as before),
-`case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`, `SQL files`, `data model`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
+`case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`, `SQL files`, `data model`, `data flow`, `code`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
 `status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted; with `"how": "nosec"`, and `by`
 and `date` null, when the acceptance is a `# nosec` comment with a written reason on the line),
 `nosec` (Bandit findings only, when the line carries a `# nosec` comment about this finding: `{"state", "reason"}`.

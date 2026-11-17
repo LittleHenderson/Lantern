@@ -9,6 +9,41 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- New heuristic `LW-UNSIGNED-WEBHOOK` (roadmap stage 5; labelled heuristic; `lantern/webhooks.py`): a route a
+  payment or message provider calls that writes stored data with no check of who sent the message. A provider
+  cannot sign in; what stands in a login's place is its signature, checked with a secret only the two share. A
+  route is taken for a provider's when it takes a POST, shows no login, and its address has the word `webhook` or
+  `hook` or its lines name a header or an event a provider sends. What it writes is read by the step that follows
+  data through the code, in the route and in the functions it calls. Three answers: nothing checks the message;
+  the provider's own check is called and a message that fails it still goes on (the failure is caught, the check
+  is made for some requests only, its secret is empty); data is written before the check. The finding names the
+  lines where data is written and the line of a check that comes too late (`webhook` on the finding, story kind
+  `unsigned-webhook`), in place of the finding "no login check was found" on the same route, which points to the
+  wrong fix (counted in the record as `webhook_for_no_login`). Quiet where every write stands behind the
+  provider's own check, and where a check is written that Lantern cannot follow as code (a comparison that takes
+  the same time whatever the text, a call named for checking a signature, a value compared with a secret
+  setting): it then cannot tell. Not seen: a check whose answer is thrown away, a gateway in front of the app;
+  only Stripe's, svix's and Standard Webhooks' own checks are followed as code. Tests:
+  `tests/test_webhook_unsigned.py`.
+- Fixed: a call into the management side of a sign-in service is no longer read as a login. Such a call makes,
+  changes or removes whichever account it is handed, with the server's own key (Supabase's `auth.admin.*`,
+  Clerk's backend client, Firebase's admin library), and asks nobody who is calling; the check by names took it
+  for a login because it is a call into a library named for signing in. A route that removes the account the
+  request names, with nothing asked, is now listed (`LW-AUTH-MISSING`); the same route with the caller asked
+  first (`getUser()`, `auth()`, `verifyIdToken()`) stays unlisted. An account changed that way also counts as
+  stored data written, which the webhook rule reads. Three services are known. Still not listed: such a route
+  that no page of the project calls and that picks no record by an id of the request. Tests:
+  `tests/test_manages_accounts.py`.
+- Fixed: a secret setting of the server that is read and handed on is no longer read as a login. A route that
+  calls another service reads its token from the settings (`process.env.NOTES_API_TOKEN`, `settings.API_TOKEN`);
+  the check by names took the word "token" in the setting's name for a sign of a login. Such a read now stands in
+  a login's place only where the request is held against it: the statement it is in compares something or calls
+  a function named for checking, on however many lines, or a later statement does so with the name the setting
+  was kept under. A comparison with nothing (`=== undefined`) only asks whether the setting is set. A setting
+  that lists several secrets counts where the request is looked for in it. **Changed answer** of
+  `LA-WALLET-DRAIN` on such a route that pays a service: high, "anyone can call it as often as they like", where
+  it was medium, "with no rate limit", as if somebody had to sign in for it. Tests:
+  `tests/test_setting_is_no_login.py`.
 - The ownership check reads the project's data model (roadmap stage 5; `LT-AUTHZ-OWNER`, still labelled
   heuristic; `lantern/tenantscope.py`, `flow.Engine.asks_owner`, `owner_field`). Where the project's model files
   (a Prisma schema, SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`) name the field
