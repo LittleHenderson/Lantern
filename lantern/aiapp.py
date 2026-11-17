@@ -10,8 +10,12 @@ Everything here is deterministic pattern work on the graph and the source, like 
                         app: one script in a loop spends the owner's money. HIGH when neither protection is visible,
                         MEDIUM when only rate limiting is missing. Heuristic (`tool_confidence: LOW`): it reuses the
                         login check's name-based reading and the rate-limit library search.
-  * `LA-MODEL-OUTPUT-TO-TOOL` — inside one function, text the model wrote is later run as a shell command, SQL,
-                        `eval`, or fetched as a URL. HIGH: a prompt injection becomes code execution.
+  * `LA-MODEL-OUTPUT-TO-TOOL` — text the model wrote is run as a shell command, SQL, `eval`, fetched as a URL or
+                        opened as a file. HIGH: a prompt injection becomes code execution. Two readings: the older
+                        one inside one function, by the names of the lines (`model_output_sinks`), and the data-flow
+                        step's (`from_flows`, roadmap of 2026-11-14, stage 5), which follows what a model call gives
+                        back across functions and files, and into the input of a tool call the model asked for. One
+                        line is one finding: a flow that ends on a line the older reading flagged is written on it.
   * `LA-PROMPT-FROM-INPUT` — visitor text goes straight into a model call in a function that also has tool-like
                         sinks. LOW, informational: normal for a chat app, but the system prompt and tools must
                         assume the text is hostile.
@@ -371,6 +375,89 @@ def model_output_sinks(g: Graph, calls: list[dict], cache: dict[str, list[str]])
                       "restrict what tools can do, and never let the model's text choose a target by itself."),
                 snippet=lines[call_line - 1].strip()[:200] if 0 < call_line <= len(lines) else ""))
     return out
+
+
+def from_flows(shaped: dict, by_file: dict, lines_for=None, safe=frozenset()) -> tuple[list[dict], int]:
+    """`LA-MODEL-OUTPUT-TO-TOOL` from the data-flow step (`flowscan.run`): `shaped` holds, for each (kind of action,
+    file, line), the flows of text a model wrote that end there (`flow_rules.MODEL_CALL`, `flowscan._shape`). One line
+    is one finding. A flow that ends on the very line the older reading flagged for the same action is written on that
+    finding, whose words stay; so is one that ends near such a finding that no flow ends on exactly and that the
+    data-flow step did not see checked (`safe`: one statement over several lines, where the older reading names the
+    line the model's text meets the action and the engine the line the call starts on). A finding that already shows
+    what a request sent reaching its line keeps that flow, which says more. Any other line gets a finding of its own.
+    Returns (the new findings, how many lines were written on older ones). Heuristic like the older reading: the call
+    is known as a model's by the library's name for it, and what the prompt holds is not known."""
+    from .flowscan import NEAR
+    from .flow_rules import MODEL_RULE, MODEL_WHAT
+    from .websec import _finding
+    titles = {cls: f"Text the model wrote is used as {what}" for cls, what in MODEL_WHAT.items()}
+
+    def older(file: str, cls: str) -> list[dict]:
+        return [f for f in by_file.get(file, ()) if f.get("rule") == MODEL_RULE and f.get("title") == titles[cls]
+                and f.get("line")]
+
+    made: list[dict] = []
+    on_older = 0
+    left = []
+    exact: set[int] = set()
+    for (cls, file, line), fl in sorted(shaped.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
+        at = [f for f in older(file, cls) if f["line"] == line]
+        if not at:
+            left.append(((cls, file, line), fl))
+            continue
+        exact.add(id(at[0]))
+        if at[0].get("flow") is None:       # a request's own flow written there by the step before stays
+            at[0]["flow"] = fl
+        on_older += 1
+    for (cls, file, line), fl in left:
+        near = [f for f in older(file, cls) if abs(f["line"] - line) <= NEAR and id(f) not in exact
+                and f.get("flow") is None and (file, f["line"], cls) not in safe]
+        if near:
+            min(near, key=lambda f: (abs(f["line"] - line), f["line"]))["flow"] = fl
+            on_older += 1
+            continue
+        what = MODEL_WHAT[cls]
+        src = fl["source"]
+        text = ""
+        if lines_for is not None:
+            lines = lines_for(file)
+            text = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+        files = len({s["file"] for s in fl["steps"]})
+        more = (f"Text a model wrote is followed to this line from {src['file']}:{src['line']} ({src['what']}) in "
+                f"{len(fl['steps'])} steps" + (f" through {files} files" if files > 1 else "") +
+                (f", and {fl['count'] - 1} more model call(s) reach it too" if fl["count"] > 1 else "") +
+                f", and used as {what} here. Anything that can put words into the prompt (a visitor's message, a page "
+                "or a file the model is asked to read) can steer that text: a prompt injection. Check it against a "
+                "list the code holds, or never let the model's text choose a command, a query, an address or a file "
+                "by itself: pass fields the code chooses. Heuristic: the call is known as a model's by the library's "
+                "name for it, and Lantern does not know what the prompt holds.")
+        f = _finding(MODEL_RULE, titles[cls], "HIGH", file, line, category="code", conf="LOW", cwe=94, more=more,
+                     snippet=text[:200], fixed_rank="medium" if fl["confidence"] == "LOW" else None)
+        f["tool"] = "lantern-flow"
+        f["flow"] = fl
+        made.append(f)
+        by_file.setdefault(file, []).append(f)
+    return made, on_older
+
+
+def made_safe(findings: list[dict], safe: set) -> int:
+    """The older reading's `LA-MODEL-OUTPUT-TO-TOOL` findings (inside one function, by the names of the lines) on a
+    line where the data-flow step saw the model's text arrive made safe for that action on every way (`safe`:
+    (file, line, kind of action), `flow.Engine.model_safe`) and none arrive unchecked (no flow is written on the
+    finding): they are taken out of `findings`. Only on that very line: a finding near it may be another action, and a
+    finding is never taken out on a guess. How many: the return value, for the record."""
+    from .flow_rules import MODEL_RULE, MODEL_WHAT
+    if not safe:
+        return 0
+    kinds = {f"Text the model wrote is used as {what}": cls for cls, what in MODEL_WHAT.items()}
+    drop = []
+    for f in findings:
+        cls = kinds.get(f.get("title")) if f.get("rule") == MODEL_RULE and not f.get("flow") else None
+        if cls and f.get("line") and (f["file"], f["line"], cls) in safe:
+            drop.append(f)
+    if drop:
+        findings[:] = [f for f in findings if not any(f is x for x in drop)]
+    return len(drop)
 
 
 def _said(value) -> str:

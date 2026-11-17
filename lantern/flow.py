@@ -50,6 +50,10 @@ MOST_ASKED = 400     # parts of one query that are looked at for the field that 
 # in the project) made every later run "incomplete" when this was 600,000.
 MAX_FILE = 2_000_000
 DOM_OK = {"xss", "redirect"}
+# A value that did not come with a request does harm only in some kinds of action (`Taint.origin`): the page's own
+# address in the browser in a page or a redirect, text a model wrote (`flow_rules.MODEL_CALL`) and what a model hands a
+# tool where it is run, asked of the database, fetched or names a file. A request's own data ("server") in all of them.
+ORIGIN_KINDS = {"dom": DOM_OK, "model": R.MODEL_OK, "tool": R.MODEL_OK}
 URL_NEEDS = {"nohost", "nolocal"}
 URL_OPEN = URL_NEEDS | {"based"}        # ... and "based": the value follows a start of the server's own (`R.BASE`)
 FIXED0: frozenset = frozenset()
@@ -119,7 +123,8 @@ class Taint(NamedTuple):
     key: object          # src: (file, line, words) | param: index | ident: name
     safe: frozenset      # the kinds of action this value has been made safe for (and marks such as "path:resolved")
     steps: tuple         # ((file, line, words), ...)
-    origin: str | None   # "server" | "dom"
+    origin: str | None   # "server" | "dom" (the page's address) | "model" (text a model wrote) | "tool" (what a model
+    #                      hands a tool it was given); see `ORIGIN_KINDS`
     drop: frozenset      # kinds whose earlier safety no longer holds (the name of an entry inside an uploaded archive)
 
 
@@ -776,6 +781,17 @@ def with_step(t: Taint, step: tuple) -> Taint:
     return t._replace(steps=t.steps + (step,))
 
 
+def leads_to(t: Taint, cls: str) -> bool:
+    """Whether a value of this origin does harm in an action of kind `cls` (`ORIGIN_KINDS`)."""
+    kinds = ORIGIN_KINDS.get(t.origin)
+    return kinds is None or cls in kinds
+
+
+def from_request(t: Taint) -> bool:
+    """Whether this is what a request sent: not the page's own address, and not text a model wrote."""
+    return t.kind == "src" and t.origin not in ORIGIN_KINDS
+
+
 def stepped(v: Val, step: tuple) -> Val:
     return v.but(taints=tuple(with_step(t, step) for t in v.taints)) if v.taints else v
 
@@ -1183,7 +1199,7 @@ class Ctx:
         top = self.top
         key = (cls, file, line, t.key)
         f = {"class": cls, "file": file, "line": line, "sink": what, "confidence": conf, "node": node,
-             "source": {"file": t.key[0], "line": t.key[1], "what": t.key[2]},
+             "origin": t.origin or "server", "source": {"file": t.key[0], "line": t.key[1], "what": t.key[2]},
              "steps": [{"file": a, "line": b, "what": c} for a, b, c in steps]}
         if cls == "record":
             # no finding by itself: the route it is reached from decides, with every check it makes (`Engine.authz`).
@@ -1445,6 +1461,9 @@ class Engine:
         self.stored_at: dict = {}          # (file, line) of a write of request text into a file -> its `place`
         self.read_at: dict = {}            # (file, line) of a read of a file -> its `place`
         self.read_runs: dict = {}          # (file, line, read) -> a file's text run as code or as a template there
+        # (file, line, kind of action) where text a model wrote arrived made safe for it (`hit`): the older reading of
+        # `LA-MODEL-OUTPUT-TO-TOOL`, inside one function and by the names of the lines, is not kept there
+        self.model_safe: set = set()
         self._assigned: dict = {}          # function key -> {name: what it is set to in the function's own lines}
         self.before: dict = {}             # route function key -> {dependency name: its function's key or None}
         self.sent: dict = {}               # a request value's key (file, line, words) -> (its name, the part it is in)
@@ -2810,8 +2829,13 @@ class Engine:
                 if src is not None and mod.picked[name] in src.consts:
                     got = self.modval(src, mod.picked[name])
                     if got.kind == "ext" and isinstance(got.data, str) and (R.SESSION_MADE.match(got.data) or
-                                                                              R.SIGN_IN_MADE.match(got.data)):
+                                                                              R.SIGN_IN_MADE.match(got.data) or
+                                                                              R.MODEL_CLIENT.match(got.data)):
                         return got
+            if mod.lang == "py" and d.startswith("."):
+                got = self.model_client(mod, d)
+                if got is not None:
+                    return got
             return Val(kind="ext", data=d)
         if name in ("this", "self") and mod.lang == "js":
             return Val(kind="self", data=env.fn.cls)
@@ -2820,6 +2844,23 @@ class Engine:
             mark = R.PAGE_MARK if name in R.PAGE_ADDRESS else FIXED0
             return Val((self.source(env.fn, env.fn.line, words, mark, origin="dom"),), kind="ext", data=name)
         return Val(kind="ext", data=name)        # a name of the language or the environment: `open`, `parseInt`
+
+    def model_client(self, mod: Mod, d: str) -> Val | None:
+        """A model's client that another Python file of the project made at its top (`claude = anthropic.Anthropic()`
+        in `app/llm.py`), imported by its name here: that very value, so that a call on it is known by the library's
+        name (`flow_rules.MODEL_CLIENT`). Any other value of another file is not followed this way."""
+        target, _dot, name = self.absolute(mod, d).rpartition(".")
+        m2 = self.py_mods.get(target)
+        if m2 is None or m2 is mod or not m2.consts.get(name):
+            return None
+        for x in m2.consts[name]:       # made by a call into a model's library there, and nothing else
+            root = x.a if x.k == "call" else None
+            while root is not None and root.k == "attr":
+                root = root.a
+            if root is None or root.k != "name" or not R.MODEL_LIB.match(m2.imports.get(root.name) or ""):
+                return None
+        got = self.modval(m2, name)
+        return got if got.kind == "ext" and isinstance(got.data, str) and R.MODEL_CLIENT.match(got.data) else None
 
     def modval(self, mod: Mod, name: str) -> Val:
         if name in mod.cvals:
@@ -3628,8 +3669,7 @@ class Engine:
                 hand = (fn.file, e.line, f"handed to `{shown}()` as `{t.params[rec.param].name}`")
                 for ta in av.taints:
                     safe = norm((ta.safe - rec.drop) | rec.safe, fn.lang)
-                    if ta.kind == "ident" or safe_for(rec.cls, safe) or \
-                            (ta.origin == "dom" and rec.cls not in DOM_OK):
+                    if ta.kind == "ident" or safe_for(rec.cls, safe) or not leads_to(ta, rec.cls):
                         continue
                     steps = cut(ta.steps + (hand,) + rec.steps)
                     conf = "LOW" if guess else rec.conf
@@ -3952,7 +3992,7 @@ class Engine:
         if not own:
             step = (fn.file, e.line, f"`{what}`: here it {R.ACTION['record']}")
             for t in taints:
-                if t.kind == "src" and t.origin != "dom":
+                if from_request(t):
                     if not more:
                         ctx.flow("record", t, cut(t.steps + (step,)), "LOW", what, fn.file, e.line, fn.node, params,
                                  change)
@@ -3966,7 +4006,7 @@ class Engine:
             return proven_val("a record found by what the request carries to say who is calling", "record()")
         # a record noted here says where: the object it is read into may be removed or saved later (`changed`).
         # A later call of the same chain (`.filter_by(id=x).first_or_404()`) hands on the record of the first
-        noted = not own and any(t.kind == "param" or (t.kind == "src" and t.origin != "dom") for t in taints)
+        noted = not own and any(t.kind == "param" or from_request(t) for t in taints)
         return Val(whose, kind="ext", data=f"record()@{fn.file}:{e.line}" if noted else
                    recv.data if at_record(recv) is not None else "record()")
 
@@ -4036,7 +4076,7 @@ class Engine:
         params = frozenset(t.key for t in taints if t.kind == "param")
         step = (fn.file, e.line, f"`{what}`: here {R.ACT[kind]} for it")
         for t in taints:
-            if t.kind == "src" and t.origin != "dom":
+            if from_request(t):
                 if ("record", fn.file, e.line, t.key) not in ctx.az.records:
                     ctx.flow("record", t, cut(t.steps + (step,)), "LOW", what, fn.file, e.line, fn.node, params, True,
                              act=kind)
@@ -4052,7 +4092,7 @@ class Engine:
         if v is None:
             return
         fn = env.fn
-        sent = tuple(t for t in v.taints if t.kind == "src" and t.origin != "dom")
+        sent = tuple(t for t in v.taints if from_request(t))
         if whole(v) or (named and sent):
             if sent:
                 self.hit(ctx, env, "assign", Val(sent), e, what, "LOW")
@@ -4402,6 +4442,12 @@ class Engine:
         got = self.reached(e, env, ctx, name, member, recv, recv_expr, args, kw, a0, what)
         if got is not None:
             return got
+        if name and R.MODEL_CALL.match(name):
+            # text a model wrote (roadmap of 2026-11-14, stage 5): followed from here like what a request sent, as
+            # the model's own (`ORIGIN_KINDS`). Whatever went into the prompt ends here: what comes back is the
+            # model's text, however the prompt was put together
+            words = f"`{what}` gives back text the model wrote"
+            return Val((self.source(fn, e.line, words, origin="model"),), kind="ext", data=name + "()")
         if name and R.OVERLAY_CALL.match(name) and vals:
             # `Object.assign({}, a, b)`: one object holding what each of them holds
             data: dict = {}
@@ -5566,7 +5612,11 @@ class Engine:
         step = (file, line, f"`{what}`: here it {R.ACTION[cls]}")
         need_sql = "sql" in needs and not val.sql
         for t in val.taints:
-            if t.kind == "ident" or safe_for(cls, t.safe) or (t.origin == "dom" and cls not in DOM_OK):
+            if t.kind == "ident" or not leads_to(t, cls):
+                continue
+            if safe_for(cls, t.safe):
+                if t.kind == "src" and t.origin == "model":
+                    self.model_safe.add((file, line, cls))
                 continue
             if cls == "nosql" and t.kind == "src" and "nosql" in t.safe:
                 continue

@@ -23,6 +23,15 @@ CONF_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 SEV_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 LANGS = ("python", "typescript/javascript")      # as `engine.build_graph` names them in `g.meta["languages"]`
 RAW_PLACE = "LW-XSS-RAW"                         # websec.template_rules: a template prints a value without escaping
+# where a flow starts that is not what a request sent: text a model wrote, and what a model hands a tool. Such flows
+# are the AI pack's (`aiapp.from_flows`, `LA-MODEL-OUTPUT-TO-TOOL`), never another tool's finding or an `LT-` one
+MODEL_ORIGINS = frozenset({"model", "tool"})
+
+
+def from_request(fl: dict | None) -> bool:
+    """Whether a flow starts at what a request sent (and not at text a model wrote): only such a flow says that a
+    caller's own text reaches the line (`security.rank`, `case.py`)."""
+    return bool(fl) and fl.get("origin", "server") not in MODEL_ORIGINS
 
 
 def _same(f: dict, cls: str) -> bool:
@@ -56,7 +65,7 @@ def _shape(group: list[dict]) -> dict:
     main = group[0]
     others = [dict(fl["source"]) for fl in group[1:6]]
     return {"class": main["class"], "confidence": main["confidence"], "severity": R.SEVERITY[main["class"]],
-            "source": dict(main["source"]),
+            "origin": main.get("origin", "server"), "source": dict(main["source"]),
             "sink": {"file": main["file"], "line": main["line"], "what": main["sink"]},
             "steps": [dict(s) for s in main["steps"]], "others": others, "count": len(group)}
 
@@ -160,8 +169,9 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         findings[:] = [f for f in findings
                        if not (f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in stood_for)]
     groups: dict[tuple, list[dict]] = {}
+    model: dict[tuple, list[dict]] = {}     # text a model wrote, followed to an action: the AI pack's own findings
     for fl in res.flows:
-        groups.setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
+        (groups if from_request(fl) else model).setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
     by_file: dict[str, list[dict]] = {}
     for f in findings:
         if f.get("file"):
@@ -205,6 +215,13 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         f["flow"] = shaped
         out.append(f)
         by_file.setdefault(file, []).append(f)
+    from .aiapp import from_flows, made_safe
+    made, on_older = from_flows({k: _shape(v) for k, v in model.items()}, by_file, lines_for,
+                                res.engine.model_safe)
+    out.extend(made)
+    # the older reading of that rule, inside one function by the names of its lines, on a line where this step saw the
+    # model's text arrive made safe on every way (checked against a list of the code's own, made a number): not kept
+    checked = made_safe(findings, res.engine.model_safe)
     _raw_places(findings, res)
     # who may reach what, route by route: only where the route shows that someone has to be signed in (a route with
     # no login at all is LW-AUTH-MISSING's business, and "another person's record" means nothing there)
@@ -301,6 +318,9 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
                         "token_check_lets_on": lets_on, "sender_checked": sender_checked}}
     if hook_routes:     # routes taken for a provider's webhook that write stored data: what LW-UNSIGNED-WEBHOOK read
         fields["scope"]["webhook_routes"] = hook_routes
+    if model or checked:    # text a model wrote, followed to a command, a query, `eval`, an address or a file
+        fields["scope"]["model_text"] = {"flows": sum(len(v) for v in model.values()), "findings": len(made),
+                                         "on_older_findings": on_older, "checked_by_code": checked}
     if stood_for:       # ... and the routes whose "no login" finding a webhook finding stands for
         fields["scope"]["webhook_for_no_login"] = len(stood_for)
     if notes:
@@ -469,6 +489,7 @@ def raised_severity(f: dict) -> str:
     line and that kind is graver (a query built from request data is high whatever the pattern alone was rated)."""
     sev = f["tool_severity"]
     fl = f.get("flow")
-    if fl and fl.get("confidence") != "LOW" and SEV_ORDER.get(fl.get("severity"), 0) > SEV_ORDER.get(sev, 0):
+    if from_request(fl) and fl.get("confidence") != "LOW" and \
+            SEV_ORDER.get(fl.get("severity"), 0) > SEV_ORDER.get(sev, 0):
         return fl["severity"]
     return sev

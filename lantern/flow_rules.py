@@ -571,6 +571,67 @@ POLLUTION_CALL = re.compile(r"^(lodash|underscore|lodash\.merge|lodash\.mergewit
                             r"zipObjectDeep|extend|applyToDefaults|ensureExists))?$")
 POLLUTION_PLAIN = re.compile(r"^(lodash|underscore|jquery|hoek|object-path|dot-prop)$")
 
+# ---- what a model wrote (roadmap of 2026-11-14, stage 5: the AI-app pack, second version)
+# A call that hands back text a model wrote, by the library's own name for it (`Engine.canon_at`). What comes back is
+# followed like what a request sent, with the origin "model" (`flow.ORIGIN_KINDS`): whoever can put words into the
+# prompt, or into what the model reads, can steer it. Embeddings, images, speech and moderation hand back no text to
+# run and are not named; neither is another service's `messages.create` (Twilio's sends a text message).
+MODEL_CALL = re.compile(
+    r"^(?:"
+    # OpenAI, and the clients that speak its words (Azure's, Groq's)
+    r"(?:openai(?:\.(?:OpenAI|AsyncOpenAI|AzureOpenAI|AsyncAzureOpenAI))?\(\)|openai|"
+    r"groq\.(?:Groq|AsyncGroq)\(\)|groq-sdk(?:\.Groq)?\(\))"
+    r"\.(?:beta\.)?(?:chat\.completions\.(?:create|parse|stream)|completions\.create|responses\.(?:create|parse|stream))|"
+    r"openai\.(?:ChatCompletion|Completion)\.a?create|"
+    # Anthropic
+    r"(?:anthropic\.(?:Anthropic|AsyncAnthropic|AnthropicBedrock|AsyncAnthropicBedrock|AnthropicVertex|"
+    r"AsyncAnthropicVertex)|@anthropic-ai/sdk(?:\.Anthropic)?)\(\)\.(?:beta\.)?(?:messages\.(?:create|stream)|"
+    r"completions\.create)|"
+    # Google
+    r"google\.generativeai\.GenerativeModel\(\)\.generate_content(?:_async)?|"
+    r"google\.genai\.Client\(\)\.(?:aio\.)?models\.generate_content|"
+    r"@google/generative-ai\.GoogleGenerativeAI\(\)\.getGenerativeModel\(\)\.generateContent|"
+    r"@google/genai\.GoogleGenAI\(\)\.models\.generateContent|"
+    # Mistral, Cohere, Ollama, LiteLLM, Hugging Face, Replicate
+    r"(?:mistralai|@mistralai/mistralai)\.Mistral\(\)\.chat\.complete(?:_async)?|"
+    r"(?:cohere\.(?:Client|ClientV2|AsyncClient|AsyncClientV2)|cohere-ai\.(?:CohereClient|CohereClientV2))\(\)"
+    r"\.(?:chat|generate)|"
+    r"ollama(?:\.(?:Client|AsyncClient|Ollama)\(\))?\.(?:chat|generate)|"
+    r"litellm\.a?(?:completion|text_completion)|"
+    r"huggingface_hub\.(?:InferenceClient|AsyncInferenceClient)\(\)\.(?:text_generation|chat_completion|"
+    r"chat\.completions\.create)|"
+    r"replicate(?:\(\))?\.run|"
+    # the AI SDK's own calls, and LangChain's chat models
+    r"ai\.(?:generateText|generateObject|streamText|streamObject)|"
+    r"(?:langchain[\w.]*|@langchain/[\w-]+)\.Chat\w+\(\)\.a?invoke|"
+    # Amazon Bedrock's runtime
+    r"boto3\.(?:client|Session\(\)\.client)\(\)\.(?:invoke_model|converse)"
+    r")$")
+# A client a model call is made on, as a value another file of the project made at its top (`claude =
+# anthropic.Anthropic()` in `app/llm.py`): handed to the file that imports it by name (`Engine.lookup`), so that a call
+# on it there is known by the library's name too. Only these: other values of other files are not followed that way.
+MODEL_CLIENT = re.compile(
+    r"^(?:openai(?:\.(?:OpenAI|AsyncOpenAI|AzureOpenAI|AsyncAzureOpenAI))?|groq\.(?:Groq|AsyncGroq)|groq-sdk(?:\.Groq)?|"
+    r"anthropic\.(?:Anthropic|AsyncAnthropic|AnthropicBedrock|AsyncAnthropicBedrock|AnthropicVertex|"
+    r"AsyncAnthropicVertex)|@anthropic-ai/sdk(?:\.Anthropic)?|google\.generativeai\.GenerativeModel|"
+    r"google\.genai\.Client|@google/generative-ai\.GoogleGenerativeAI|@google/genai\.GoogleGenAI|"
+    r"(?:mistralai|@mistralai/mistralai)\.Mistral|cohere\.(?:Client|ClientV2|AsyncClient|AsyncClientV2)|"
+    r"cohere-ai\.(?:CohereClient|CohereClientV2)|ollama\.(?:Client|AsyncClient|Ollama)|"
+    r"huggingface_hub\.(?:InferenceClient|AsyncInferenceClient)|replicate|"
+    r"(?:langchain[\w.]*|@langchain/[\w-]+)\.Chat\w+|boto3\.(?:client|Session\(\)\.client))\(\)"
+    r"(?:\.getGenerativeModel\(\))?$")
+# ... and the libraries such a client comes from, as a Python file imports them: only a value made by a call into one
+# of these is worked out for another file (worked out earlier than its own file would, nothing else may be)
+MODEL_LIB = re.compile(r"^(?:openai|anthropic|google\.generativeai|google\.genai|google|mistralai|cohere|ollama|"
+                       r"huggingface_hub|replicate|langchain[\w.]*|boto3|groq)(?:\.|$)")
+# The kinds of action in which text a model wrote is this rule's business (`LA-MODEL-OUTPUT-TO-TOOL`): it is run as a
+# command or as code, asked of the database as query text, fetched as an address, or names a file. Not a page it is
+# written into, a record it picks, or a field it sets: those are other rules' words, and they say "the request".
+MODEL_OK = frozenset({"shell", "sql", "eval", "ssrf", "path"})
+MODEL_RULE = "LA-MODEL-OUTPUT-TO-TOOL"
+MODEL_WHAT = {"shell": "a shell command", "sql": "a database query", "eval": "code (eval / exec)",
+              "ssrf": "a web request", "path": "a file path"}
+
 # a finding another tool made on the same line is the same problem: the flow is attached to it, not listed twice
 SAME_PROBLEM = {
     "sql": re.compile(r"^(B608|B610|B611|LJ-SQL-CONCAT|LV-SQL|LN-SQL|LP-.*SQL)"),

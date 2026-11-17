@@ -61,6 +61,7 @@ def _entry_text(g: Graph, r: dict | None) -> str:
 
 
 def build(f: dict, g: Graph) -> dict:
+    from .flowscan import from_request
     from .scenarios import TYPED, kind_of, row_words
     from .security import rank_reason
     kind = kind_of(f)
@@ -146,6 +147,18 @@ def build(f: dict, g: Graph) -> dict:
                                      if fl["count"] > 1 else ""), "from": "data flow"})
         if _whose(f.get("owned")):
             evidence.append({"fact": _whose(f["owned"]), "from": "data model"})
+    elif fl and not from_request(fl):
+        # text a model wrote (the AI pack's flows): where it came from, and, apart, what the input check saw here
+        src = fl["source"]
+        evidence.append({"fact": f"Text the model wrote was followed to this line in {len(fl['steps'])} steps, "
+                                 f"starting at {src['file']}:{src['line']}: {src['what']}" + (
+                                     f" ({fl['count'] - 1} more model call(s) reach it too)" if fl["count"] > 1
+                                     else "") + (
+                                     ". One step rests on a call matched by name only." if fl["confidence"] == "LOW"
+                                     else ""), "from": "data flow"})
+        if f.get("input"):
+            evidence.append({"fact": f"Request data reaches this line ({f['input'].get('via')})",
+                             "from": "input check"})
     elif fl:
         src = fl["source"]
         evidence.append({"fact": f"Request data was followed to this line in {len(fl['steps'])} steps, starting at "
@@ -224,9 +237,18 @@ def build(f: dict, g: Graph) -> dict:
                                     "input check: " + (f["input"].get("via") if f.get("input") else
                                                        "nothing from the request" if f.get("input") is False
                                                        else "not checked (input is followed from server routes, commands and scripts only)")))
-            if fl:
+            if from_request(fl):
                 conditions[-1] = _cond("What they send reaches this line", True,
                                        f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+            elif fl:
+                # text a model wrote: that it gets here is followed; who can steer it is what the prompt holds
+                conditions[-1] = _cond("Text the model wrote reaches this line", True,
+                                       f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+                conditions.append(_cond(
+                    "Someone outside can put words into the prompt", True if f.get("input") else None,
+                    "input check: " + f["input"].get("via") if f.get("input") else
+                    "Lantern does not know what the prompt holds: a visitor's message, or a page, a file or a mail the "
+                    "model is asked to read, can carry words that steer it"))
             elif ctx.get("sql") and ctx["sql"]["fixed_only"]:
                 conditions[-1] = _cond("What they send becomes part of the SQL text", False,
                                        "only fixed text is spliced; values go to the driver separately")

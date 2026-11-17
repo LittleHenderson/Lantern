@@ -1217,7 +1217,7 @@ NOSEC_SAYS = {
 def _request_data(f: dict) -> bool:
     """Did Lantern itself follow request data to the flagged line: across functions (`flow`), or in the line's own
     function (`input` says "request data"; a parameter alone is not that)?"""
-    if f.get("flow"):
+    if flowscan.from_request(f.get("flow")):
         return True
     i = f.get("input")
     return isinstance(i, dict) and (bool(i.get("flow")) or "request data" in str(i.get("via") or ""))
@@ -1561,9 +1561,10 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
         f["input"] = _input_on_line(g, f, lines_cache) if f["category"] == "code" and r and \
             r["kind"] in UNTRUSTED_ENTRY_KINDS else None
         fl = f.get("flow")
-        if fl and not f["in_tests"]:
+        if flowscan.from_request(fl) and not f["in_tests"]:
             # followed across functions, from the place the request was read: that says more than the look at the
-            # flagged line's own function, which names whatever parameter stands on the line
+            # flagged line's own function, which names whatever parameter stands on the line. Not text a model wrote:
+            # where that came from says nothing of what a caller sent, nor of who reaches this line
             f["input"] = {"via": fl["source"]["what"], "flow": True}
             if not r:
                 # the map shows no way to this line, and the flow is one: but only from a function that a page, a
