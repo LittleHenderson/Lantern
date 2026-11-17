@@ -9,6 +9,11 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The measurements of roadmap stage 5 are written down in one place, `bench/security_packs_results.md`: each rule
+  on 30 folders, the three AI rules on seven public AI projects, the held-out set before and after the whole
+  stage (nine of its fourteen apps, offline: 235 findings before and after, none gone, new or changed; 29 of the
+  42 expected problems of those apps found at medium or above before and after, 13 missed before and after) and
+  the map benchmark (no count differs on any of its seven projects).
 - The three AI rules of roadmap stage 5 measured on seven public AI projects (MCP servers in Python and
   TypeScript, a chat bot with agents, a command-line assistant, a chat over documents), read and never run, with
   what the runs had to show written down before the first run and every finding read by hand.

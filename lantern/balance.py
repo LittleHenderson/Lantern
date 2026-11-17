@@ -381,7 +381,7 @@ def _more(field: str, how: str, js: bool, write: int) -> str:
               "in Prisma" if js else
               f"`filter(pk=…, {f}__gte=cost).update({f}=F(\"{f}\") - cost)` in Django, `update(Model).where("
               f"Model.id == id, Model.{f} >= cost).values({f}=Model.{f} - cost)` in SQLAlchemy")
-    sql = f"`UPDATE … SET {f} = {f} - $1 WHERE id = $2 AND {f} >= $1` in SQL"
+    sql = f"`UPDATE … SET {f} = {f} - $1 WHERE id = $2 AND {f} >= $1` in SQL"  # nosec B608: fix text for a person, never run
     lock = ("lock the row from the read to the write (`SELECT … FOR UPDATE`, `select_for_update()`, "
             "`with_for_update()`). Lantern does not know that the check and the write are about the same record: "
             f"they share the name `{f}`. ")
