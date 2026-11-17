@@ -17,6 +17,7 @@ and is dropped when the clone ends.
 
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
@@ -82,3 +83,88 @@ class GitHubApp:
             if str((d.get("user") or {}).get("id")) != uid or d.get("permission") not in READ:
                 raise NoAccess("denied")    # a renamed login now names someone else, or no read access
             return token
+
+
+# ---- the person's own repositories, for the website's list (Wakil, 2026-11-17: "when a user clicks on github it
+# should open a list of all of the user's github repos"). Public ones from GitHub's public listing; private ones only
+# where the person installed the app on their own account, which is GitHub's own word that they chose to share them.
+# Only repositories GitHub says the signed-in account owns (by its id, not its login) are listed; nothing is stored.
+
+LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
+FULL_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}")
+PAGES = 3                 # 100 a page: the 300 repositories pushed to most recently
+MOST_TEXT = 160           # a description is cut here
+
+
+class GitHubDown(Exception):
+    """GitHub did not answer, or answered with an error or a limit."""
+
+
+def _client(api: str, transport) -> httpx.Client:
+    return httpx.Client(base_url=api, transport=transport, timeout=15, follow_redirects=False,
+                        headers={"accept": "application/vnd.github+json", "x-github-api-version": "2022-11-28",
+                                 "user-agent": "lantern-cloud"})
+
+
+def _repo(d, uid: str) -> dict | None:
+    """One repository as the page shows it, or None when it is not the person's own or has an odd shape."""
+    if not isinstance(d, dict) or str((d.get("owner") or {}).get("id")) != uid:
+        return None
+    name = d.get("full_name")
+    if not isinstance(name, str) or not FULL_NAME.fullmatch(name):
+        return None
+    text = lambda k, n: d.get(k)[:n] if isinstance(d.get(k), str) else ""  # noqa: E731
+    return {"name": name, "private": d.get("private") is True, "description": text("description", MOST_TEXT),
+            "language": text("language", 40), "pushed": text("pushed_at", 20)}
+
+
+def _pages(c: httpx.Client, path: str, headers: dict, key: str | None = None, **more) -> list:
+    out = []
+    for page in range(1, PAGES + 1):
+        r = c.get(path, params={**more, "per_page": 100, "page": page}, headers=headers)
+        if r.status_code != 200:
+            raise GitHubDown(r.status_code)
+        d = r.json()
+        rows = d.get(key) if key and isinstance(d, dict) else d
+        if not isinstance(rows, list):
+            raise GitHubDown("shape")
+        out += rows
+        if len(rows) < 100:
+            break
+    return out
+
+
+def your_repos(app: GitHubApp | None, account: str, label: str | None, transport=None, api: str = API) -> dict:
+    """{"repos": [...], "connected": bool}: the signed-in GitHub account's repositories, newest push first.
+    `connected`: the app is installed on the account, so its private repositories it chose are in the list."""
+    if not account.startswith("github:") or not (label or "").startswith("github:"):
+        raise NoAccess("github")
+    uid, login = account.split(":", 1)[1], label.split(":", 1)[1]
+    if not LOGIN.fullmatch(login):
+        raise NoAccess("github")
+    found, connected, auth = {}, False, {}
+    try:
+        with _client(api, transport if app is None else app.transport) as c:
+            if app is not None:
+                jwt_auth = {"authorization": f"Bearer {app._jwt()}"}
+                r = c.get(f"/users/{login}/installation", headers=jwt_auth)
+                inst = r.json() if r.status_code == 200 else None
+                if r.status_code not in (200, 404):
+                    raise GitHubDown(r.status_code)
+                if inst and str((inst.get("account") or {}).get("id")) == uid:
+                    r = c.post(f"/app/installations/{int(inst['id'])}/access_tokens", headers=jwt_auth,
+                               json={"permissions": {"metadata": "read"}})
+                    if r.status_code != 201:
+                        raise GitHubDown(r.status_code)
+                    auth = {"authorization": f"token {r.json()['token']}"}
+                    connected = True
+                    for d in _pages(c, "/installation/repositories", auth, "repositories"):
+                        if (x := _repo(d, uid)):
+                            found[x["name"]] = x
+            for d in _pages(c, f"/users/{login}/repos", auth, type="owner", sort="pushed"):
+                if (x := _repo(d, uid)):
+                    found.setdefault(x["name"], x)
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        raise GitHubDown(type(e).__name__) from None
+    repos = sorted(found.values(), key=lambda x: x["pushed"], reverse=True)
+    return {"repos": repos, "connected": connected}
