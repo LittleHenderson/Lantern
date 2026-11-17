@@ -724,9 +724,12 @@ on the line of its first such read. The server's code is then in what visitors d
 in the `next.config.*` file nearest above the page's file names that setting, its value is in the page too: rank
 `high`, and `pulled.handed` says where. `tool_confidence` `LOW`: a bundler leaves out code that nothing calls, which
 import lines do not show. The way stops at a file that begins with `"use server"` and at a file that imports
-`server-only`. A remark, a text, a pattern and the words of a page that name a setting are no read. Not read: a
-project with no `"use client"` file, `import()` and `require`, a file that only loads a server library and reads no
-secret setting. Its `scenario` is the story kind `server-code`, or `server-key` where the build hands the setting on.
+`server-only`. A remark, a text, a pattern and the words of a page that name a setting are no read. A settings file of
+t3's env libraries (`@t3-oss/env-nextjs`, `-core`, `-nuxt`) is made to be imported by pages, and the library keeps the
+server's settings out of them: a read inside a call of its `createEnv` is no read, unless the build hands the setting
+over (`env` in `next.config.*`), where every read counts. Not read: a project with no `"use client"` file, `import()`
+and `require`, a file that only loads a server library and reads no secret setting. Its `scenario` is the story kind
+`server-code`, or `server-key` where the build hands the setting on.
 `LW-SENSITIVE-COLUMN-RETURNED` (200; `lantern/wholerecord.py`, roadmap stage 5): a record sent back whole, with a
 secret field in it. Which fields a record has, and which of them hold a secret by their names (a password's hash, a
 reset token, a key), is read from the project's own model files (`lantern/datamodel.py`: a Prisma schema,

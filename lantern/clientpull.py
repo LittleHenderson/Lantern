@@ -11,6 +11,12 @@ reader; an import of types only loads nothing) and from each reached file's own 
 is run. The way stops at a file that begins with `"use server"` (its functions are called over the network, the file
 is not handed over) and at a file that imports `server-only` (a page that pulls it in does not build).
 
+A settings file of t3's env libraries (`@t3-oss/env-nextjs`, `-core`, `-nuxt`) is made to be imported by pages: a page
+reads its public settings, the server's settings it lists come from `process.env`, which the build hands to a page
+only where it is told to, and the library refuses a server setting read in the browser. A read inside the library's
+call is no server code in the page (`checker_calls`); a read outside it still is, and where `env` in `next.config.*`
+hands the setting over, its value is in the page wherever the file reads it, inside the call too.
+
 A heuristic. What import lines do not show: a bundler leaves out code that nothing calls, a project with no
 `"use client"` file is not read at all, `import()` and `require` are not followed, and a file that only loads a
 server library and reads no secret setting is not named (a page that pulls a database driver in does not build).
@@ -54,6 +60,10 @@ READ = re.compile(rb"(?<![\w$])(?:" + _BAG + rb"\s*(?:\.\s*" + _N + rb"(?![\w$])
 APART = re.compile(rb"\}\s*=\s*(" + _BAG + rb")(?![\w$])(?!\s*[.\[?])")
 A_NAME = re.compile(rb"[A-Z][A-Z0-9_]*")
 CODE = ("identifier", "meta_property")      # what tree-sitter says stands where code names the settings' object
+# t3's env libraries, which keep a server's settings out of a page (see the note above): their import line, and a
+# call of their function by the name it was given there
+SHARED_CHECKER = re.compile(rb"""import\s*\{([^}]{0,400})\}\s*from\s*["']@t3-oss/env-(?:nextjs|core|nuxt)["']""")
+MOST_CALLS = 20             # calls of that function in one file that are looked at
 
 NEXT_CONFIGS = ("next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts")
 ENV_BLOCK = re.compile(r"(?<![\w$.])env\s*:\s*\{")
@@ -65,11 +75,39 @@ def secret_name(name: str) -> bool:
     return bool(SECRET_NAME.fullmatch(name)) and not PUBLIC_NAME.match(name) and not SAFE_NAMES.search(name)
 
 
-def secret_reads(text: str, rel: str) -> list[tuple[int, str]]:
+def checker_calls(text: str, rel: str) -> list[tuple[int, int]]:
+    """Where a file calls the function of t3's env libraries (`createEnv`, or the name the import line gives it): the
+    byte range of each call, or [] when the file does not import it. At most `MOST_CALLS` calls are looked at."""
+    data = text.encode("utf-8", "replace")
+    names: set[bytes] = set()
+    for m in SHARED_CHECKER.finditer(data):
+        for part in m.group(1).split(b","):
+            words = part.split()
+            if words and words[0] == b"createEnv":
+                names.add(words[2] if len(words) == 3 and words[1] == b"as" else b"createEnv")
+    if not names:
+        return []
+    end = "." + rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
+    root = Parser(LANGS.get(end, LANGS[".tsx"])).parse(data).root_node
+    spans: list[tuple[int, int]] = []
+    called = re.compile(rb"(?<![\w$.])(" + b"|".join(re.escape(n) for n in sorted(names)) + rb")\s*\(")
+    for m in called.finditer(data):
+        if len(spans) >= MOST_CALLS:
+            break
+        node = root.named_descendant_for_byte_range(m.start(1), m.end(1))
+        if node is None or node.type != "identifier" or node.parent is None:
+            continue
+        call = node.parent
+        if call.type == "call_expression" and call.child_by_field_name("function") == node:
+            spans.append((call.start_byte, call.end_byte))
+    return spans
+
+
+def secret_reads(text: str, rel: str, skip: list[tuple[int, int]] | None = None) -> list[tuple[int, str]]:
     """The secret settings a JS/TS file's code reads by name: `(line, name)`, each setting once, at its first read.
     A name in a remark, in a text, in a pattern or in the words of a page is no read: tree-sitter is asked what
     stands at the place (a name inside `${…}` of a template is code). At most `MOST_LOOKED` places are asked
-    about."""
+    about. A read inside one of the byte ranges of `skip` is not counted."""
     data = text.encode("utf-8", "replace")
     if b"env" not in data:
         return []
@@ -94,6 +132,8 @@ def secret_reads(text: str, rel: str) -> list[tuple[int, str]]:
             if name and rest in (b"", b":", b"=") and secret_name(name.decode("ascii")):
                 hits.append((at + len(part) - len(part.lstrip()), name, m.start(1)))
             at += len(part) + 1
+    if skip:
+        hits = [h for h in hits if not any(a <= h[0] < b for a, b in skip)]
     if not hits:
         return []
     out: list[tuple[int, str]] = []
@@ -269,7 +309,8 @@ def pulled(g) -> list[dict]:
             continue
         reads = secret_reads(text, rel)
         if reads:
-            targets.append((rel, reads))
+            spans = checker_calls(text, rel)
+            targets.append((rel, reads, secret_reads(text, rel, skip=spans) if spans else reads))
             if len(targets) >= MOST_FOUND:
                 break
     if not targets:
@@ -281,11 +322,16 @@ def pulled(g) -> list[dict]:
                 back.setdefault(dst, []).append(src)
     start, steps = set(clients), 0
     configs, out = _Configs(repo), []
-    for rel, reads in sorted(targets):
+    for rel, every, reads in sorted(targets):
         path = [rel]
         while came[path[-1]] is not None:
             path.append(came[path[-1]])
         path.reverse()
+        first, handed = configs.hands(path[0], [name for _line, name in every])
+        if handed:
+            reads = every                           # the build writes the value wherever the file reads it
+        elif not reads:
+            continue                                # every read stands inside the call of t3's env library
         count: int | None = 0                       # the client files that reach it, counted against the imports
         seen, todo = {rel}, [rel]
         while todo and count is not None:
@@ -300,7 +346,6 @@ def pulled(g) -> list[dict]:
                 count = None                        # not counted: said as not known, never as a number
         lines = {name: line for line, name in reads}
         names = [name for _line, name in reads]
-        first, handed = configs.hands(path[0], names)
         if handed:
             names.remove(first)
             names.insert(0, first)

@@ -96,9 +96,11 @@ file. New entries go under `## Unreleased`, on top.
   and high where `env` in a `next.config` file also hands that setting to the page, because then its value is
   there too. The JS/TS reader now writes down which files are loaded with each file (`Graph.js_pulls`; an import
   of types loads nothing). The way stops at a `"use server"` file and at a file that imports `server-only`. One
-  finding for a file, on the line of its first such read, with the way from the page's file (`pulled`). Not
-  read: a project with no `"use client"` file, `import()` and `require`, a file that only loads a server library
-  and reads no secret setting. Tests: `tests/test_client_pull.py` (11).
+  finding for a file, on the line of its first such read, with the way from the page's file (`pulled`). A
+  settings file of t3's env libraries (`@t3-oss/env-*`) is made to be imported by pages, and the library keeps
+  the server's settings out of them: a read inside its `createEnv` call is passed over unless the build hands
+  the setting over. Not read: a project with no `"use client"` file, `import()` and `require`, a file that only
+  loads a server library and reads no secret setting. Tests: `tests/test_client_pull.py` (12).
 - Fixed: where the gitleaks program is not installed, Lantern's built-in secret patterns called a key's place
   kept by filler in an example file (`sk_live_` and nothing but `x`) a possible secret, which ranks critical.
   Filler is now no finding and is counted in the scan's record (`scope.placeholders`). Filler is only what

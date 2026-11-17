@@ -159,6 +159,69 @@ def test_every_client_file_that_reaches_the_file_is_counted_and_the_nearest_is_n
     assert "1 other file that begins with \"use client\" reaches it too" in found["lib/pay.ts"]["more_info"]
 
 
+SHARED = {
+    "package.json": '{"name": "site", "dependencies": {"next": "15.0.0", "react": "19.0.0", "zod": "3.23.0", '
+                    '"@t3-oss/env-nextjs": "0.11.0", "@t3-oss/env-core": "0.11.0", "stripe": "17.0.0"}}\n',
+    "tsconfig.json": TSCONFIG,
+    # ---- safe: a settings file of t3's env library, made to be imported by pages; the page reads a public setting
+    "app/site/Footer.tsx": '"use client";\nimport { env } from "@/env.mjs";\n\n'
+                           "export function Footer() {\n  return <p>{env.NEXT_PUBLIC_SITE}</p>;\n}\n",
+    "env.mjs": 'import { createEnv } from "@t3-oss/env-nextjs";\nimport { z } from "zod";\n\n'
+               "export const env = createEnv({\n"
+               "  server: { STRIPE_SECRET_KEY: z.string().min(1), DATABASE_URL: z.string().url() },\n"
+               "  client: { NEXT_PUBLIC_SITE: z.string() },\n"
+               "  runtimeEnv: {\n"
+               "    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,\n"
+               "    DATABASE_URL: process.env.DATABASE_URL,\n"
+               "    NEXT_PUBLIC_SITE: process.env.NEXT_PUBLIC_SITE,\n"
+               "  },\n});\n",
+    # ---- safe: the library's core, its function under another name
+    "app/site/Header.tsx": '"use client";\nimport { env } from "@/lib/env";\n\n'
+                           "export function Header() {\n  return <p>{env.NEXT_PUBLIC_TITLE}</p>;\n}\n",
+    "lib/env.ts": 'import { createEnv as settings } from "@t3-oss/env-core";\nimport { z } from "zod";\n\n'
+                  'export const env = settings({\n  clientPrefix: "NEXT_PUBLIC_",\n'
+                  "  server: { OPENAI_API_KEY: z.string() },\n  client: { NEXT_PUBLIC_TITLE: z.string() },\n"
+                  "  runtimeEnv: { OPENAI_API_KEY: process.env.OPENAI_API_KEY, "
+                  "NEXT_PUBLIC_TITLE: process.env.NEXT_PUBLIC_TITLE },\n});\n",
+    # ---- dangerous: the same kind of file also makes the server's client with the secret, outside the call
+    "app/shop/Buy.tsx": '"use client";\nimport { env } from "@/lib/shop-env";\n\n'
+                        "export function Buy() {\n  return <p>{env.NEXT_PUBLIC_SHOP}</p>;\n}\n",
+    "lib/shop-env.ts": 'import { createEnv } from "@t3-oss/env-nextjs";\nimport Stripe from "stripe";\n'
+                       'import { z } from "zod";\n\n'
+                       "export const env = createEnv({\n  server: { STRIPE_SECRET_KEY: z.string() },\n"
+                       "  client: { NEXT_PUBLIC_SHOP: z.string() },\n"
+                       "  runtimeEnv: { STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY, "
+                       "NEXT_PUBLIC_SHOP: process.env.NEXT_PUBLIC_SHOP },\n});\n\n"
+                       "export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);\n",
+    # ---- dangerous: a function of the project's own that is called createEnv
+    "app/mail/Send.tsx": '"use client";\nimport { env } from "@/lib/mail-env";\n\n'
+                         "export function Send() {\n  return <p>{String(env)}</p>;\n}\n",
+    "lib/mail-env.ts": 'import { createEnv } from "./create-env";\n\n'
+                       "export const env = createEnv({ MAIL_API_KEY: process.env.MAIL_API_KEY });\n",
+    "lib/create-env.ts": "export function createEnv(x: object) {\n  return x;\n}\n",
+}
+
+
+def test_a_settings_file_made_to_be_shared_with_pages_is_no_server_code_in_them(tmp_path):
+    """t3's env libraries (`@t3-oss/env-nextjs`, `-core`, `-nuxt`) make a settings file that pages import for their
+    public settings: the server's settings it lists are read from `process.env`, which the build does not hand to a
+    page unless told to, and the library refuses a server setting read in the browser. Its reads inside the
+    library's call are no server code in the page. Look-alikes stay named: the same file also reads the secret
+    outside the call (the server's client is made there), and a function of the project's own called `createEnv`.
+    Where `next.config.js` hands the setting over, its value is in the page: high, the library's file too."""
+    found = ours(_write(tmp_path, SHARED))
+    assert [(f["file"], f["line"], f["pulled"]["settings"]) for f in found] == [
+        ("lib/mail-env.ts", 3, ["MAIL_API_KEY"]),
+        ("lib/shop-env.ts", 11, ["STRIPE_SECRET_KEY"]),
+    ], [(f["file"], f["line"], f["pulled"]["settings"]) for f in found]
+    config = "module.exports = {\n  env: {\n    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,\n  },\n};\n"
+    handed = {f["file"]: f for f in ours(_write(tmp_path, {**SHARED, "next.config.js": config}))}
+    assert sorted(handed) == ["env.mjs", "lib/mail-env.ts", "lib/shop-env.ts"], sorted(handed)
+    assert handed["env.mjs"]["rank"] == "high" and handed["env.mjs"]["line"] == 8
+    assert handed["env.mjs"]["pulled"]["handed"] == {"file": "next.config.js", "line": 3}
+    assert handed["env.mjs"]["pulled"]["settings"][0] == "STRIPE_SECRET_KEY"
+
+
 CHANGED = [
     # (the file that changes, the safe text, the dangerous text, the file the finding then stands in)
     ("app/safe/Types.tsx", 'import type { Order } from "@/lib/orders";', 'import { load } from "@/lib/orders";',
