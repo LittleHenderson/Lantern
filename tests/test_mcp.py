@@ -1,4 +1,4 @@
-"""Lantern as a connector (MCP over stdio): read, analyze, re-check, verify; never accept or close."""
+"""Lantern as a connector (MCP over stdio): read, analyze, brief a fix, re-check, verify; never accept or close."""
 
 import io
 import json
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern import mcp_server
+from lantern import fixcheck, mcp_server
 from lantern.mcp_server import Projects, Server
 
 FIX = Path(__file__).parent / "fixtures" / "shop"
@@ -42,7 +42,7 @@ def test_handshake_lists_tools_and_records_the_client(shop):
     assert rpc(s, "notifications/initialized") is None
     names = [t["name"] for t in rpc(s, "tools/list")["result"]["tools"]]
     assert names == ["lantern_projects", "lantern_findings", "lantern_paths", "lantern_explain", "lantern_readiness",
-                     "lantern_analyze", "lantern_recheck", "lantern_verify"]
+                     "lantern_analyze", "lantern_fix_brief", "lantern_recheck", "lantern_verify"]
     assert not any(w in n for n in names for w in ("accept", "close", "dismiss"))
     err, text, data = call(s, "lantern_projects")
     # three since 2026-11-11: the query in shop/repo.py is built from `user_id` of GET /users/{user_id}, which Lantern
@@ -104,8 +104,15 @@ def test_fix_then_recheck(shop):
     err, text, rc = call(s, "lantern_recheck", project="shop", finding=md5["id"])
     assert not err and rc["status"] == "fixed" and "gone" in text
     assert any(f["id"] == md5["id"] for f in rc["fixed"])
-    # asking again: the id no longer exists, and the answer says why
+    # nothing is broken, and the tests were not run (the connector starts no code): fixed, and not yet passed
+    assert rc["contract"]["broken"] == [] and rc["contract"]["not_shown"] == ["tests"]
+    assert rc["contract"]["verdict"] == "incomplete" and "lantern fix check" in text
+    # asking again: the fix is still compared with the check from before it, which the first recheck kept (until
+    # 2026-11-16 the second answer was "not an open finding": the last check, made after the fix, was all there was)
     err, text, rc = call(s, "lantern_recheck", project="shop", finding=md5["id"])
+    assert not err and rc["status"] == "fixed" and rc["compared_with"]["what"] == "first-check"
+    assert "kept when the fix was first checked" in text
+    err, text, rc = call(s, "lantern_recheck", project="shop", finding="no-such-finding")
     assert err and "not an open finding" in text
     # a finding that is still there stays open
     b602 = next(f for f in data["findings"] if f["rule"] == "B602")
@@ -137,7 +144,7 @@ def test_stdio_framing(shop):
     s.serve_stdio(io.BytesIO("\n".join(lines).encode() + b"\n"), out)
     got = [json.loads(x) for x in out.getvalue().decode().splitlines()]
     assert [g.get("id") for g in got] == [1, None, 2] and got[1]["error"]["code"] == -32700
-    assert len(got[2]["result"]["tools"]) == 8
+    assert len(got[2]["result"]["tools"]) == 9          # 8 until lantern_fix_brief (2026-11-16)
 
 
 def test_setup_text_and_cli():
@@ -145,3 +152,67 @@ def test_setup_text_and_cli():
     text = mcp_server.setup_text()
     assert "claude mcp add lantern" in text and '"mcpServers"' in text and "cannot accept or close" in text
     assert main(["mcp", "--setup"]) == 0
+
+
+def test_the_fix_brief_and_a_recheck_that_refuses_a_fix_that_only_hides(shop, tmp_path):
+    """The loop an assistant runs: brief, change, recheck. A change after which the finding no longer shows, and the
+    weak hash is still what runs, is refused with the part that broke; until 2026-11-16 the recheck called it
+    fixed. The true fix after it is compared with the check kept at the brief, not with the check of the trick."""
+    s = Server(Projects([str(shop)]))
+    _, _, data = call(s, "lantern_findings", project="shop", rank="critical")
+    md5 = next(f for f in data["findings"] if f["rule"] == "B324")
+    was = {p.relative_to(shop).as_posix(): p.read_bytes() for p in shop.rglob("*") if p.is_file()}
+    err, text, brief = call(s, "lantern_fix_brief", project="shop", finding=md5["id"][:8])
+    assert not err and text.startswith(f"Fix brief for {md5['id']}: ") and "shop/auth.py" in text
+    assert [p["id"] for p in brief["contract"]] == list(fixcheck.ITEMS)
+    assert all(f"{p['id']}: {p['need']}" in text for p in brief["contract"])
+    assert brief["then"] == {"tool": "lantern_recheck", "finding": md5["id"]} and brief["cannot_close"] is True
+    assert "cannot accept, close or dismiss" in text and "starts no code of a project" in text
+    assert {p.relative_to(shop).as_posix(): p.read_bytes() for p in shop.rglob("*") if p.is_file()} == was
+    assert len(list((tmp_path / "home").rglob("brief.json"))) == 1          # kept in Lantern's own folder
+    err, text, _ = call(s, "lantern_fix_brief", project="shop", finding="no-such-finding")
+    assert err and "not an open finding" in text
+    auth = shop / "shop" / "auth.py"
+    src = auth.read_text(encoding="utf-8")
+    auth.write_text(src.replace("hashlib.md5(", 'getattr(hashlib, "m" + "d5")('), encoding="utf-8")
+    err, text, rc = call(s, "lantern_recheck", project="shop", finding=md5["id"])
+    assert not err and rc["status"] == "refused", text
+    assert rc["contract"]["verdict"] == "refused" and "calls" in rc["contract"]["broken"]
+    assert "not fixed" in text.splitlines()[0] and "getattr(hashlib" in text and "chosen at run time" in text
+    assert [f["id"] for f in rc["refused"]] == [md5["id"]] and not any(f["id"] == md5["id"] for f in rc["fixed"])
+    auth.write_text(src.replace("hashlib.md5(", "hashlib.sha256("), encoding="utf-8")
+    err, text, rc = call(s, "lantern_recheck", project="shop", finding=md5["id"])
+    assert not err and rc["status"] == "fixed", text
+    assert rc["contract"]["broken"] == [] and rc["contract"]["not_shown"] == ["tests"]
+    assert rc["compared_with"]["what"] == "brief" and "kept when the fix brief was asked for" in text
+    assert not (shop / "lantern-accepted.json").exists()                    # and nothing was accepted on the way
+
+
+def test_a_recheck_after_the_rule_that_found_it_was_changed_does_not_say_fixed(shop):
+    """The finding was made by a pack that comes with the project, and the "fix" changes the pack. The pack still
+    runs and says "ok"; that the finding stops showing proves nothing, and the answer is not `fixed`."""
+    pack = shop / "lantern-packs" / "house.json"
+    pack.parent.mkdir()
+    pack.write_text(json.dumps({"pack": "house", "version": "1", "rules": [
+        {"id": "LP-HOUSE-HASH", "title": "A weak hash for a password", "severity": "MEDIUM", "files": ["shop/*.py"],
+         "pattern": "md5\\("}]}), encoding="utf-8")
+    from lantern import pipeline
+    pipeline.analyze(shop, pipeline.out_dir(shop), log=lambda m: None, offline=True)
+    sec = json.loads((shop / ".lantern" / "security.json").read_text(encoding="utf-8"))
+    fid = next(f["id"] for f in sec["findings"] if f["rule"] == "LP-HOUSE-HASH")
+    s = Server(Projects([str(shop)]))
+    err, _, _ = call(s, "lantern_fix_brief", project="shop", finding=fid)
+    assert not err
+    pack.write_text(pack.read_text(encoding="utf-8").replace("md5", "md6"), encoding="utf-8")
+    err, text, rc = call(s, "lantern_recheck", project="shop", finding=fid)
+    assert not err and rc["status"] == "not-shown", text
+    assert "not shown to be fixed" in text.splitlines()[0] and "the rules of lantern-pack:house" in text
+    assert [f["id"] for f in rc["not_shown"]] == [fid] and not any(f["id"] == fid for f in rc["fixed"])
+    assert rc["contract"]["verdict"] == "incomplete" and "gone" in rc["contract"]["not_shown"]
+    # the safe twin: the pack as it was and the line itself changed
+    pack.write_text(pack.read_text(encoding="utf-8").replace("md6", "md5"), encoding="utf-8")
+    auth = shop / "shop" / "auth.py"
+    auth.write_text(auth.read_text(encoding="utf-8").replace("hashlib.md5(", "hashlib.sha256("), encoding="utf-8")
+    err, text, rc = call(s, "lantern_recheck", project="shop", finding=fid)
+    assert not err and rc["status"] == "fixed", text
+    assert rc["contract"]["broken"] == [] and rc["contract"]["not_shown"] == ["tests"]

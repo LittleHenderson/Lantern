@@ -2229,7 +2229,7 @@ function sendText(f) {
   const where = `${f.file || ''}${f.line ? ':' + f.line : ''}`;
   const path = f.ui_path ? ' Reachable from the app: ' + f.ui_path.map(p => { const n = N[p]; return n && n.entry && n.entry.kind === 'page' ? n.entry.detail + ' page' : short((n || {}).qualname || p); }).join(' → ') + '.' : '';
   return `Fix Lantern finding ${f.id} (${f.rule}) in the ${PROJECT} project.\n` +
-    `If the Lantern connector is available, call lantern_findings with id ${f.id} for the file, line, click path and fix, lantern_paths before editing, and lantern_recheck with the finding id after the fix. Do not try to accept or close it; only I can, with a reason.\n` +
+    `If the Lantern connector is available, call lantern_fix_brief with finding ${f.id} for the file, line, click path, the fix and what a fix has to show (lantern_findings with id ${f.id} where that tool is missing), lantern_paths before editing, and lantern_recheck with the finding id after the fix. Do not try to accept or close it; only I can, with a reason.\n` +
     `Essentials: ${f.title} at ${where}${f.input ? ' (uses outside input: ' + f.input.via + ')' : ''}.${path}`;
 }
 function sendMenu(btn) {
