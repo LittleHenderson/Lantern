@@ -364,3 +364,56 @@ def test_one_line_is_one_finding_and_a_requests_own_flow_stays():
     assert asked["flow"]["origin"] == "server" and asked["flow"]["count"] == 1, asked["flow"]
     assert made_safe(findings, safe) == 2
     assert [f["line"] for f in findings] == [10, 21, 40, 50, 70], [f["line"] for f in findings]
+
+
+SHADOW_LLM = '''from openai import OpenAI
+
+client = OpenAI()
+
+
+def ask(prompt):
+    r = client.chat.completions.create(model="gpt-5", messages=[{"role": "user", "content": prompt}])
+    return r.choices[0].message.content
+'''
+
+SHADOW_TASKS = '''import subprocess
+
+from app.llm import ask
+from app.notes import Notes
+
+
+def run(task):
+    reply = ask(task)
+    subprocess.run(reply, shell=True)
+
+
+def run_note(task):
+    note = Notes().create(task)
+    subprocess.run(note, shell=True)
+'''
+
+SHADOW_NOTES = '''class Notes:
+    def create(self, text):
+        return "echo saved"
+'''
+
+
+def test_a_model_call_stays_the_librarys_where_the_project_has_a_method_of_its_name(tmp_path):
+    """The map links a call it cannot place to the project's one method of that name (`unique-method-name`):
+    `client.chat.completions.create(...)` to the project's `Notes.create`. The data-flow step knows the client is the
+    library's (made at the top of the file with the library's class), and a model call it knows by the library's own
+    name stays the library's: what it wrote is followed, a guess by the method's name does not hide it. Twin: the
+    project's own `Notes().create(...)` runs the project's method, whose answer is no text a model wrote."""
+    for rel, text in {"app/__init__.py": "", "app/llm.py": SHADOW_LLM, "app/tasks.py": SHADOW_TASKS,
+                      "app/notes.py": SHADOW_NOTES}.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8", newline="\n")
+    g = build_graph(tmp_path)
+    site = next(s for s in g.sites if s["file"] == "app/llm.py" and s["callee"].endswith("completions.create"))
+    assert site["outcome"] == "name-only" and site["to"] == ["py:app.notes.Notes.create"], site
+    sec = scan(g)
+    lines = [x.strip() for x in SHADOW_TASKS.split("\n")]
+    flowed = sorted(f["line"] for f in sec["findings"] if f["rule"] == RULE and f["file"] == "app/tasks.py"
+                    and (f.get("flow") or {}).get("origin") == "model")
+    assert flowed == [lines.index("subprocess.run(reply, shell=True)") + 1], flowed

@@ -1530,6 +1530,13 @@ class Engine:
         self.tools: dict = {}
         self.tool_sources: dict = {}
         self.asks: dict = {}
+        # an agent loop with no cap on its paid calls (`lantern/agentloop.py`, `LA-UNBOUNDED-AGENT-LOOP`): each paid
+        # model call (`lib`): (file, line, col) -> the library's name for it; id(Fn) -> the names that function gave a
+        # value holding text the model wrote (`assign`); and each call of a library's own agent loop whose limit is a
+        # setting (`R.AGENT_RUNNER`): id(the call) -> (Fn, the call, its name)
+        self.paid: dict = {}
+        self.model_names: dict = {}
+        self.agent_calls: dict = {}
         self._assigned: dict = {}          # function key -> {name: what it is set to in the function's own lines}
         self.before: dict = {}             # route function key -> {dependency name: its function's key or None}
         self.sent: dict = {}               # a request value's key (file, line, words) -> (its name, the part it is in)
@@ -2983,6 +2990,8 @@ class Engine:
                                            or (x.kind == "param" and not x.steps and at.line == env.fn.line)
                                            else with_step(x, step) for x in val.taints))
             env.vars[t.name] = val
+            if any(x.origin == "model" for x in val.taints):
+                self.model_names.setdefault(id(env.fn), set()).add(t.name)      # `lantern/agentloop.py`
         elif k in ("seq", "star"):
             items = t.items if k == "seq" else [t.a]
             for i, x in enumerate(items):
@@ -3524,6 +3533,14 @@ class Engine:
                      text_of(f)[:60] + "()", "LOW")
         site = self.sites.get((fn.file, e.line, e.col))
         targets, guess = self.targets(site)
+        if guess and targets and callee.kind == "ext" and isinstance(callee.data, str) and \
+                R.MODEL_CALL.match(callee.data):
+            # a model call known by the library's own name for it, on a client made by that library
+            # (`claude.messages.create(...)` on `claude = anthropic.Anthropic()` at the file's top): the map only
+            # guessed the project's one `create` by the method's name, and following that guess hid the call from
+            # every rule about a model. Only for these names, whose whole path is the library's own: a value a
+            # library hands back may be an object of the project (`container.resolve(Svc).run()`)
+            targets = []
         if not targets and f.k == "name" and f.name == "super" and fn.cls and fn.lang == "js":
             # `super(term)`: the constructor of the class this one extends, when it is in this file
             targets = [x for b in fn.mod.bases.get(fn.cls, ()) for x in fn.mod.fns
@@ -4714,6 +4731,10 @@ class Engine:
         a0 = args[0] if args and args[0] is not None else None
         what = text_of(e.a)[:60] + "()"
         tainted_args = any(v.taints for v in vals) or any(v.taints for v in kw.values())
+        if name and R.MODEL_CALL.match(name) and not R.UNPAID_MODEL.match(name):
+            self.paid[(fn.file, e.line, e.col)] = name      # a model call that is paid for each time
+        if name and R.AGENT_RUNNER.match(name):
+            self.agent_calls[id(e)] = (fn, e, name)
         if fn.lang == "js" and member in R.TYPE_SETTERS:
             # `res.type("text/plain")` / `res.set("Content-Type", "application/json")`: from here on, on this way
             # through the function, what `res` sends is no page (or is one again)

@@ -128,6 +128,21 @@ def build(f: dict, g: Graph) -> dict:
                  "lets-on": f", and the check that is called (line {hook.get('at')}) is not made of every message "
                             "that gets there"}.get(hook.get("check"), ", with no check of who sent the message "
                                                                       "before it")), "from": "data flow"})
+    loop = f.get("agent_loop")
+    if isinstance(loop, dict):
+        # an agent loop with no cap on its paid calls (`LA-UNBOUNDED-AGENT-LOOP`): each round's paid call, and the
+        # conditions on the model's answer that end the rounds, as the rule read them
+        for p in [x for x in loop.get("paid") or () if isinstance(x, dict)][:4]:
+            evidence.append({"fact": f"A paid model call is made in each round: `{p.get('what')}` at "
+                                     f"{p.get('file')}:{p.get('line')}" + (
+                                         f", which reaches the model call at {p['through']}" if p.get("through")
+                                         else ""), "from": "data flow"})
+        ends = [x for x in loop.get("ends") or () if isinstance(x, dict)][:4]
+        if ends:
+            evidence.append({"fact": "What ends the rounds reads the model's answer: " + "; ".join(
+                f"`{x.get('what')}` on line {x.get('line')}" for x in ends), "from": "code"})
+        if loop.get("setting"):
+            evidence.append({"fact": f"The agent is made with {loop['setting']}", "from": "code"})
     fl = f.get("flow")
     if ctx.get("fixed"):
         fx = ctx["fixed"]
@@ -316,6 +331,21 @@ def build(f: dict, g: Graph) -> dict:
         elif kind == "mass-assign":
             conditions.append(_cond("The record has a field a visitor must not set", None,
                                     "Lantern does not read which fields the record has"))
+        elif kind == "agent-loop":
+            loop = f.get("agent_loop") or {}
+            if loop.get("kind") == "setting":
+                conditions.append(_cond("The agent's own limit on its rounds is switched off", True,
+                                        f"it is made with {loop.get('setting') or 'that setting'}"))
+            else:
+                conditions.append(_cond("Each round makes a paid call to the model", True,
+                                        "the call is known by the library's own name for it"))
+                conditions.append(_cond("Only the model's answer ends the rounds", True,
+                                        "no count, clock or budget is read where the rounds decide to go on, and no "
+                                        "person is asked in each round (a question is read by the name of the call "
+                                        "that asks it)"))
+            conditions.append(_cond("Nothing outside the code stops it (a spending limit set with the provider, a "
+                                    "time limit on the request)", None,
+                                    "Lantern reads the code, not the provider's or the server's settings"))
         if ctx.get("hash"):
             h = ctx["hash"]
             conditions.append(_cond("The hash protects a password, token or signature",
@@ -397,6 +427,9 @@ def _claim(f: dict, kind: str) -> str:
     if f.get("rule") == "LA-UNSAFE-MCP-TOOL":
         return (f"{base}. Read from the library's name for making a tool and the way its input was followed; what the "
                 "model reads, and a check made outside the code Lantern followed, are not known.")
+    if f.get("rule") == "LA-UNBOUNDED-AGENT-LOOP":
+        return (f"{base}. Read from the loop's own lines and the library's name for the model call; a limit kept "
+                "outside the code (a spending limit set with the provider, a time limit on the request) is not seen.")
     if f.get("rule") == "LW-UNSIGNED-WEBHOOK":
         return (f"{base}. Read from the route's own lines and the functions it calls; a signature checked by "
                 "something in front of the app, or in a way Lantern does not follow, is not seen.")

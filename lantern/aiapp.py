@@ -22,6 +22,13 @@ Everything here is deterministic pattern work on the graph and the source, like 
                         names, with no person asked first. HIGH, heuristic: whoever can put words into what the model
                         reads chooses the arguments. Made from the data-flow step's flows with the origin "tool"
                         (`from_tool_flows`; the tools are found by `flow.Engine.find_tools`).
+  * `LA-UNBOUNDED-AGENT-LOOP` — an agent loop makes a paid model call in each round, and only the model's answer ends
+                        it: a `while` loop, `for (;;)`, `do … while`, a `for` over an endless iterator, or a function
+                        that calls itself, with no count, clock or budget read where it decides to go on and no person
+                        asked in each round; also a library's own agent loop whose limit is switched off (LangChain's
+                        `max_iterations=None`, the AI SDK's `stopWhen` made only of `hasToolCall`). MEDIUM,
+                        heuristic: a model that keeps asking, or words put into what it reads, run up the bill. Read by
+                        `lantern/agentloop.py` from the data-flow step's program (`from_agent_loops`).
   * `LA-PROMPT-FROM-INPUT` — visitor text goes straight into a model call in a function that also has tool-like
                         sinks. LOW, informational: normal for a chat app, but the system prompt and tools must
                         assume the text is hostile.
@@ -540,6 +547,58 @@ def from_tool_flows(groups: dict, by_file: dict, lines_for=None, engine=None) ->
         by_file.setdefault(file, []).append(f)
         rec["findings"] += 1
     return made, rec
+
+
+def from_agent_loops(loops: list[dict], lines_for=None) -> list[dict]:
+    """`LA-UNBOUNDED-AGENT-LOOP` from the data-flow step (`flowscan.run`): one finding for each agent loop
+    `agentloop.find` read (a loop or a function that calls itself, with a paid call in each round, that only the
+    model's answer ends; a library's own agent loop with its limit switched off). A heuristic, ranked medium: a cost
+    with no end, not a way in."""
+    from .flow_rules import LOOP_RULE
+    from .websec import _finding
+    made: list[dict] = []
+    for lp in loops:
+        file, line = lp["file"], lp["line"]
+        text = ""
+        if lines_for is not None:
+            lines = lines_for(file)
+            text = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+        calls = "; ".join(f"`{p['what']}` at {p['file']}:{p['line']}" +
+                          (f", which reaches a paid call at {p['through']}" if p.get("through") else "")
+                          for p in lp["paid"])
+        ends = "; ".join(f"`{c['what']}` on line {c['line']}" for c in lp["ends"])
+        heuristic = (" Heuristic: a paid call is known by the library's own name for it, the model's answer by "
+                     "Lantern following it, and a limit by a counter the loop changes, a clock or a budget's words "
+                     "read where it decides to go on; a limit kept outside the code is not seen.")
+        if lp["kind"] == "loop":
+            title = "A loop calls the AI model again and again, and only the model's answer stops it"
+            more = (f"Each round of this loop makes a paid model call ({calls}), and only the model's answer ends it "
+                    f"({ends}): no count of rounds, no clock and no budget is read where it decides to go on. A model "
+                    "that keeps asking for tools, or words put into what it reads that tell it to, keep it going, and "
+                    "every round is billed. Fix: give the loop a fixed number of rounds (`for step in "
+                    "range(MAX_STEPS)`, `for (let i = 0; i < MAX_STEPS; i++)`), stop it after a time or a spend in "
+                    "tokens, and set a spend limit on the provider's dashboard." + heuristic)
+        elif lp["kind"] == "itself":
+            title = "A function that calls the AI model calls itself again, and only the model's answer stops it"
+            more = (f"This function makes a paid model call ({calls}) and calls itself again here unless the model's "
+                    f"answer ends it ({ends}): no depth it counts, no clock and no budget stops it. A model that keeps "
+                    "asking for tools, or words put into what it reads that tell it to, keep it going, and every round "
+                    "is billed. Fix: hand it the depth (`depth + 1`) and stop at a fixed number, stop it after a time "
+                    "or a spend in tokens, and set a spend limit on the provider's dashboard." + heuristic)
+        else:
+            title = "An AI agent's own limit on its rounds is switched off"
+            more = (f"`{lp['what']}` runs the library's own agent loop with its limit on rounds switched off "
+                    f"({lp['setting']}): it goes on for as long as the model asks for tools, and every round is "
+                    "billed. Fix: keep a limit (LangChain stops after 15 rounds unless `max_iterations` is changed, "
+                    "and `max_execution_time` stops it after a time; the AI SDK stops at `stepCountIs(n)`, which can "
+                    "stand beside `hasToolCall`), and set a spend limit on the provider's dashboard. Heuristic: read "
+                    "from the call's own settings; a limit set somewhere else is not seen.")
+        f = _finding(LOOP_RULE, title, "MEDIUM", file, line, category="code", conf="LOW", cwe=834, more=more,
+                     snippet=text[:200], fixed_rank="medium")
+        f["tool"] = "lantern-flow"
+        f["agent_loop"] = {k: lp[k] for k in ("kind", "paid", "ends", "setting") if k in lp}
+        made.append(f)
+    return made
 
 
 def _said(value) -> str:

@@ -725,6 +725,25 @@ ASKS = re.compile(r"(?:^|\.)(?:elicit|elicitInput|elicit_input)$|^(?:click|typer
                   r"^(?:rich\.prompt\.)?(?:Confirm|Prompt)\.ask$|^questionary\.confirm\(\)\.(?:ask|ask_async|unsafe_ask)$|"
                   r"^(?:input|confirm|window\.confirm|interrupt|langgraph\.types\.interrupt)$|"
                   r"^(?:rl|readline|readlineInterface)\.question$|^inquirer\.prompt$")
+
+# ---- an agent loop with no cap on its paid calls (roadmap of 2026-11-14, stage 5: `LA-UNBOUNDED-AGENT-LOOP`,
+# `lantern/agentloop.py`). A model call of `MODEL_CALL` is paid for each time, except a model run on this computer
+LOOP_RULE = "LA-UNBOUNDED-AGENT-LOOP"
+UNPAID_MODEL = re.compile(r"^ollama(?:\.|$)")
+# A library's own agent loop whose limit on rounds is a setting (`agentloop._setting_off`): LangChain's executor
+# (`max_iterations`, 15 unless it is set; `None` with no `max_execution_time` goes on until the model stops), and the
+# AI SDK's calls and agents (`stopWhen`, one step or the agent's own count unless it is set: conditions that are all
+# `hasToolCall(...)` end only when the model calls that tool; the older `maxSteps: Infinity`)
+AGENT_RUNNER = re.compile(r"^(?:langchain(?:_classic)?\.agents(?:\.agent)?\.AgentExecutor(?:\.from_agent_and_tools)?|"
+                          r"(?:new )?ai\.(?:generateText|streamText|ToolLoopAgent|Experimental_Agent)(?:\(\))?)$")
+# Where a loop decides to go on: a clock read there bounds it by time (`time.monotonic()`, `Date.now()`) ...
+CLOCK = re.compile(r"(?:^|\.)(?:time|monotonic|perf_counter|time_ns|monotonic_ns|perf_counter_ns|now|utcnow|hrtime|"
+                   r"getTime)$")
+# ... and a name made of one of these words by a budget (`spent`, `total_tokens`, `maxCost`)
+BUDGET_WORDS = frozenset({"budget", "budgets", "cost", "costs", "spend", "spent", "spending", "price", "usage", "token",
+                          "tokens", "credit", "credits", "quota", "allowance", "ceiling", "dollars", "cents", "usd"})
+# A `for` over one of these never runs out of items
+ENDLESS = re.compile(r"^itertools\.(?:count|cycle)$")
 # The file actions that change what is on the disk (`flow.file_changed`, `flow.WRITES`): a write, a move, a copy's
 # target, a removal, a folder made, an archive unpacked. Any other file action of `PATH_CALL` only reads (opens to
 # read, lists, serves a file).

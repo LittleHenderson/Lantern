@@ -225,6 +225,11 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
     # a tool handed to a model that runs, asks the database, or writes or removes a file with what it is given
     tool_made, tool_text = from_tool_flows(tools, by_file, lines_for, res.engine)
     out.extend(tool_made)
+    # an agent loop that makes a paid model call in each round and that only the model's answer ends
+    from .agentloop import find as agent_loops
+    from .aiapp import from_agent_loops
+    loops, loop_rec = agent_loops(res.engine)
+    out.extend(from_agent_loops(loops, lines_for))
     # the older reading of that rule, inside one function by the names of its lines, on a line where this step saw the
     # model's text arrive made safe on every way (checked against a list of the code's own, made a number): not kept
     checked = made_safe(findings, res.engine.model_safe)
@@ -332,6 +337,8 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
                                          "on_older_findings": on_older, "checked_by_code": checked}
     if tool_text["tools"]:      # functions a model is handed as tools, and what their inputs were followed to
         fields["scope"]["tool_text"] = tool_text
+    if loop_rec["paid_calls"] or loop_rec["findings"]:      # paid model calls, and the loops that make one each round
+        fields["scope"]["agent_loops"] = loop_rec
     if stood_for:       # ... and the routes whose "no login" finding a webhook finding stands for
         fields["scope"]["webhook_for_no_login"] = len(stood_for)
     if notes:
