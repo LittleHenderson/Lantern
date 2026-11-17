@@ -207,6 +207,16 @@ SESSION_READS = {"get", "has"}
 # stand when the code does not show that the server alone can have written the session.
 SESSION_MADE = re.compile(rf"^{SESSION_LIB}\.create(\w*SessionStorage|Cookie)\([^()]*\)(\.\w+)?$")
 UNSIGNED = "(not signed)"
+# A query that asks for the record's owner (`flow.Engine.asks_owner`): the keys under which a condition widens the
+# rows or turns them round, so that an owner named beneath them scopes nothing; and the names of the language that
+# stand for no value, with which a comparison of the owner's field asks nothing.
+NOT_ASKED = frozenset({"OR", "NOT", "not", "none", "isNot", "notIn", "select", "include", "data", "orderBy",
+                       "create", "update", "connect"})
+NO_VALUE = frozenset({"undefined", "null", "None", "NaN"})
+# The helper a sign-in library hands out as a part of what it made, which a project takes apart in one file and
+# calls in every other (`export const { auth, handlers } = NextAuth(…)`, Auth.js version 5): followed into that file
+# the same way, so that the call is known by the library's name for it (`IDENT_CALLS`).
+SIGN_IN_MADE = re.compile(r"^next-auth\(\)\.auth$")
 REQUEST_TYPES = re.compile(r"\b(Request|HttpRequest|WSGIRequest|NextRequest|NextApiRequest|FastifyRequest|"
                            r"WebSocket|HTTPConnection|IncomingMessage)\b")
 REQUEST_GLOBALS = {"flask.request", "quart.request", "bottle.request", "flask.globals.request", "sanic.request"}
@@ -777,8 +787,18 @@ IDENT_CALLS = re.compile(r"^(flask_jwt_extended\.(get_jwt_identity|get_current_u
                          r"next-auth(/next)?\.(getServerSession|unstable_getServerSession|getToken)|"
                          r"next-auth/jwt\.getToken|@clerk/nextjs(/server)?\.(auth|currentUser|getAuth)|"
                          r"@auth0/nextjs-auth0\.getSession|iron-session\.getIronSession|"
-                         r"@supabase/[\w-]+\b.*\.(getUser|getSession)|"
-                         r"django\.contrib\.auth\.get_user|flask_login\.utils\._get_user)$")
+                         r"@supabase/[\w-]+\b.*\.(getUser|getSession|getClaims)|"
+                         r"django\.contrib\.auth\.get_user|flask_login\.utils\._get_user|"
+                         # 2026-11-16: the helper Auth.js version 5 hands out (`export const { auth } = NextAuth(…)`),
+                         # better-auth, Lucia, Auth0 version 4, Kinde, WorkOS AuthKit. Until then a route that asked
+                         # for the owner through one of them was listed as one that asks nobody
+                         r"next-auth\(\)\.auth|better-auth\.betterAuth\(\)\.api\.getSession|"
+                         r"lucia\.Lucia(\(\))?\.validateSession|"
+                         r"@auth0/nextjs-auth0(/server)?\.Auth0Client(\(\))?\.getSession|"
+                         r"@kinde-oss/kinde-auth-nextjs(/server)?\.getKindeServerSession\(\)\."
+                         r"(getUser|getOrganization|getClaim|getPermission|getPermissions|getRoles|getIdToken|"
+                         r"getAccessToken)|"
+                         r"@workos-inc/authkit-nextjs\.(withAuth|getUser))$")
 # The part of a signed-in person that says what they may do. Read in a condition, it is a role check.
 ROLE_WORD = re.compile(r"^(is_?)?(admin|administrator|superuser|super_?admin|staff|moderator|root|owner|manager)$|"
                        r"^(role|roles|permission|permissions|perms|scope|scopes|groups|privilege|privileges|"

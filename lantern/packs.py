@@ -221,7 +221,10 @@ def _applies(pk: dict, repo: Path) -> bool:
         if not any(_files(repo, [pat])):
             return False
     for word in req.get("text", []):
-        if not any(word in _read(p, repo) for p in _manifests(repo)):
+        # whatever its case: a store reads a library's name the same however it is written, and `pip freeze` writes
+        # `Django==5.1` (until 2026-11-16 the word was looked for letter for letter)
+        low = word.lower()
+        if not any(low in _read(p, repo).lower() for p in _manifests(repo)):
             return False
     return True
 

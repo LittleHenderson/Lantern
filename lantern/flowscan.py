@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 
-from . import flow, scanresult
+from . import datamodel, flow, scanresult, tenantscope
 from . import flow_rules as R
 from .graph import route_words
 
@@ -251,8 +251,23 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
                 f["tool"] = "lantern-flow"
                 out.append(f)
                 lets_on += 1
+    models = None       # what the project's model files say of whose a record is (`lantern/tenantscope.py`)
     for (file, line), place in sorted(owned.items()):
-        out.append(_owner(file, line, place, lines_for(file) if lines_for is not None else []))
+        src = lines_for(file) if lines_for is not None else []
+        if models is None:
+            models = datamodel.of(g.repo_root)
+        got = tenantscope.on(src, line, models)
+        if got is None:         # no model of the project is named on the line: the finding as it always was
+            out.append(_owner(file, line, place, src))
+            continue
+        m, whose, all_nobodys = got
+        changes = any(r.get("change") or r.get("act") or r.get("late") for r in place["records"])
+        f = _owner(file, line, place, src, model_says=tenantscope.words(m, whose, changes),
+                   no_owner=tenantscope.nobodys(whose))
+        f["owned"] = whose
+        if all_nobodys and not changes:     # nobody's record, only read: low, with the place in the model file
+            f["fixed_rank"], f["fixed_why"] = "low", tenantscope.low_why(m)
+        out.append(f)
     for _place, c in sorted(claims.items()):
         out.append(_client_role(c, lines_for(c["file"]) if lines_for is not None else []))
     st = res.stats
@@ -301,12 +316,13 @@ def _client_role(c: dict, src: list[str]) -> dict:
     return f
 
 
-def _owner(file: str, line: int, place: dict, src: list[str]) -> dict:
+def _owner(file: str, line: int, place: dict, src: list[str], model_says: str = "", no_owner: bool = False) -> dict:
     """Another person's record (LT-AUTHZ-OWNER, a heuristic ranked medium): one finding for the line a record is
     reached on by an id from the request, with the routes that reach it and compare no owner. That line is where the
     owner has to be asked for, and one service function five routes use is one place to fix. `late`: every route
     does ask whose the record is, but only after this line, where a record is changed or something is done that
-    cannot be taken back (`flow.Engine.acted`)."""
+    cannot be taken back (`flow.Engine.acted`). `model_says`: what the project's data model says of whose the record
+    is (`lantern/tenantscope.py`); `no_owner`: it names none, so the finding does not ask for one."""
     from .websec import _finding
     recs, routes = place["records"], sorted(place["routes"])
     many = len(routes) > 1
@@ -318,11 +334,16 @@ def _owner(file: str, line: int, place: dict, src: list[str]) -> dict:
     more = "Heuristic. " + (
         "The route asks whose the record is (or for a role) only after this line: whoever is turned away has "
         "already had it done. " if late else
+        "" if no_owner else
         "This is the line the record is reached on: the place to ask for the owner as well as the id, or to compare "
         "the owner of what comes back. ")
+    if model_says:
+        more += model_says + " "
     if many:
         more += f"Reached this way by {listed}. "
-    more += "A route that makes that comparison before this line is not listed."
+    if late or not no_owner:
+        more += "A route that makes that comparison before this line is not listed."
+    more = more.strip()
     f = _finding(R.RULE["record"], title, R.SEVERITY["record"], file, line, conf="LOW", cwe=R.CWE["record"],
                  snippet=src[line - 1].strip() if 0 < line <= len(src) else "", fixed_rank=R.FIXED_RANK["record"],
                  more=more)

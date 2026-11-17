@@ -44,6 +44,7 @@ MAX_STEPS = 14       # steps kept per value (the first ones and the sink; a long
 MAX_TAINTS = 6       # origins kept per value
 MAX_DEPTH = 3        # inline functions inside inline functions
 MAX_PASSES = 4       # rounds over functions that call each other
+MOST_ASKED = 400     # parts of one query that are looked at for the field that names the record's owner
 # characters; a longer file is not read by the flow engine (the readers of the map still read it) and the tool's
 # record then says `partial`. Set well above any file a person writes: a page of 630,000 characters (a report kept
 # in the project) made every later run "incomplete" when this was 600,000.
@@ -1361,6 +1362,7 @@ class Engine:
     def __init__(self, g):
         self.g = g
         self.repo = Path(g.repo_root)
+        self._owner_forms: frozenset | None = None      # see `owner_forms`
         self.sites: dict = {}
         self.doubt: set[str] = set()       # names of calls Lantern could not link to one function
         self.handed: set[str] = set()      # functions given to code that calls them
@@ -2778,11 +2780,13 @@ class Engine:
                     self.escaped.add(f.key)
             if mod.lang == "js" and d.startswith(".") and name in mod.picked:
                 # a session storage another file of the project made, or a part taken out of it there: that very
-                # value, so that what is known of its cookie comes with it (`flow_rules.SESSION_MADE`)
+                # value, so that what is known of its cookie comes with it (`flow_rules.SESSION_MADE`); and the
+                # helper a sign-in library handed out there (`SIGN_IN_MADE`), which is called by this name here
                 src = self.js_file(mod, d)
                 if src is not None and mod.picked[name] in src.consts:
                     got = self.modval(src, mod.picked[name])
-                    if got.kind == "ext" and isinstance(got.data, str) and R.SESSION_MADE.match(got.data):
+                    if got.kind == "ext" and isinstance(got.data, str) and (R.SESSION_MADE.match(got.data) or
+                                                                              R.SIGN_IN_MADE.match(got.data)):
                         return got
             return Val(kind="ext", data=d)
         if name in ("this", "self") and mod.lang == "js":
@@ -3355,7 +3359,7 @@ class Engine:
         check it makes when one side says who is signed in. Against fixed text it asks a role (`user.role ==
         "admin"`, `user.email in ADMINS`); against anything else, whose record this is."""
         if not a.taints and not b.taints:
-            return UNKNOWN
+            return self.owner_field(e, a, b) or UNKNOWN
         asked: tuple = ()
         equal = e.name in ("==", "===", "!=", "!==", "is", "is not", "in", "not in")
         for x, y in ((a, b), (b, a)):
@@ -3714,6 +3718,72 @@ class Engine:
             mine.update(params)
         return False, frozenset(mine)
 
+    # ---- whose a record is, by the project's data model (roadmap of 2026-11-14, stage 5)
+    def owner_forms(self) -> frozenset:
+        """How the project's data model says whose a record is: the forms of the field names that name an owner
+        (`lantern/datamodel.py`, read once in a run). Empty where no model is read: a field's name alone then
+        decides nothing, and every reading below is as it was."""
+        if self._owner_forms is None:
+            from . import datamodel
+            self._owner_forms = frozenset(owner_form(f) for m in datamodel.of(self.repo).all for f in m.fields
+                                          if datamodel.owner_column(f))
+        return self._owner_forms
+
+    def asks_owner(self, args: list, kw: dict) -> bool:
+        """Whether a query asks for the record's owner with a value the request did not choose (`not_the_requests`),
+        under a field the data model names an owner by: in the `where` of the object a JavaScript client is handed
+        (`{ where: { id, orgId: ctx.orgId } }`, also inside `AND: [...]`, a compound key and the record it leads
+        to, `org: { id: … }`, `invoice: { orgId: … }`; never under `OR`, `NOT` or `none`), or as a keyword in Python
+        (`get(pk=pk, org=tenant)`, `filter_by(owner_id=…)`). Such a query reaches only that owner's records, whatever
+        helper gave the value: until 2026-11-16 it counted only where Lantern knew the call that says who is signed
+        in. At most `MOST_ASKED` parts of a query are looked at."""
+        forms = self.owner_forms()
+        if not forms:
+            return False
+        left = [MOST_ASKED]
+
+        def look(v: Val | None, depth: int) -> bool:
+            left[0] -= 1
+            if v is None or left[0] < 0 or depth > 8:
+                return False
+            if v.kind == "seq" and isinstance(v.data, (list, tuple)):
+                return any(look(x, depth + 1) for x in v.data[:MOST_ASKED])
+            if v.kind != "obj" or not isinstance(v.data, dict):
+                return False
+            for k, x in list(v.data.items())[:MOST_ASKED]:
+                if not isinstance(k, str) or k in R.NOT_ASKED:
+                    continue
+                if owner_form(k) in forms and not_the_requests(x):
+                    return True
+                if x is not None and x.kind in ("obj", "seq") and look(x, depth + 1):
+                    return True
+            return False
+
+        for a in args:
+            if a is not None and a.kind == "obj" and isinstance(a.data, dict) and look(a.data.get("where"), 0):
+                return True
+        return any(isinstance(k, str) and owner_form(k) in forms and not_the_requests(v) for k, v in kw.items())
+
+    def owner_field(self, e: N, a: Val, b: Val) -> Val | None:
+        """`invoice.orgId !== ctx.orgId`: a field the data model names a record's owner by, read off a record and
+        compared with a value the request did not choose that is no other record's field either. That asks whose
+        the record is (the mark counts once a condition is decided on it, as every such mark), whatever helper
+        gave the other value."""
+        if e.name not in ("==", "===", "!=", "!=="):
+            return None
+        forms = self.owner_forms()
+        if not forms:
+            return None
+        for x, xv, y, yv in ((e.a, a, e.b, b), (e.b, b, e.a, a)):
+            if x is None or x.k != "attr" or not isinstance(x.name, str) or owner_form(x.name) not in forms or \
+                    not of_record(xv):
+                continue
+            if of_record(yv) or not not_the_requests(yv) or \
+                    (y is not None and y.k == "name" and y.name in R.NO_VALUE):
+                continue
+            return Val((mark("owner"),))
+        return None
+
     # ---- who may reach what: records chosen by the request, everything the request sent written onto one
     @staticmethod
     def record_text(q: Val):
@@ -3790,16 +3860,17 @@ class Engine:
         if (member in R.RECORD_SURE and recv_expr is not None and not other and not R.NOT_DATA.match(rtext)) or \
                 (member in R.RECORD_MAYBE and data_recv) or last in ("get_object_or_404", "get_list_or_404"):
             return self.record(ctx, env, e, what, vals, recv, bool(member and R.CHANGE_MEMBERS.search(member)),
-                               rls=rls)
+                               rls=rls, scoped=self.asks_owner(args, kw))
         if told is not None:        # the text is a parameter: the callers say what it reads (`query_db(sql, args)`)
             self.record(ctx, env, e, what, [v for v in vals if v is not q], None, False, (f"q:{told}",))
         return None
 
     def record(self, ctx: Ctx, env: Env, e: N, what: str, vals: list, recv, change: bool = False, more=(),
-               rls: bool = False) -> Val:
+               rls: bool = False, scoped: bool = False) -> Val:
         """A stored record is read, changed or removed here, chosen by `vals`. With who is signed in among them (or as
-        what the call is made on) it is that person's own, and nothing is noted. Otherwise every request value among
-        them is noted for the route to answer for (`authz`), and every parameter for the callers."""
+        what the call is made on) it is that person's own, and nothing is noted; neither where the query asks for
+        the record's owner by the field the data model names (`scoped`: `asks_owner`). Otherwise every request value
+        among them is noted for the route to answer for (`authz`), and every parameter for the callers."""
         fn = env.fn
         taints: tuple = ()
         for v in vals:
@@ -3810,7 +3881,8 @@ class Engine:
             return Val(whose, kind="ext", data="record(rls)")
         # ... and so is one picked by what the request carries to say who is calling (a token, a key, a session id
         # in a cookie or a header): whoever holds that is the one the record belongs to
-        own = bool(whose) or (not more and any(self.credential(t) for t in taints))
+        by_credential = not more and any(self.credential(t) for t in taints)
+        own = bool(whose) or by_credential or scoped
         if whose:
             own_here(ctx)           # asked in the query itself: only the record of whoever is signed in is reached
         params = frozenset(t.key for t in every if t.kind == "param")
@@ -3835,7 +3907,7 @@ class Engine:
                         (frozenset({"change"}) if change else FIXED0) | had_marks(ctx.az)
                     ctx.sink(SinkRec(t.key, "record", t.safe, t.drop, cut(t.steps + (step,)), fn.file, e.line, what,
                                      "LOW", needs, fn.node))
-        if own and not whose and not change:
+        if by_credential and not whose and not change:
             # read by it: what was found says who is calling, and nothing was found for anybody else
             return proven_val("a record found by what the request carries to say who is calling", "record()")
         # a record noted here says where: the object it is read into may be removed or saved later (`changed`).
@@ -4404,6 +4476,13 @@ class Engine:
                                  with_step(t._replace(safe=norm(t.safe | {"xss"}, fn.lang)), step)
                                  for t in cut[0].taints), None, cut[0].sql, cut[0].html)
             if member in R.ARG_ONLY_METHODS or (member in R.ARG_METHODS and not recv.taints):
+                if member == "join" and not tainted_args and not recv.taints and recv.kind == "ext" and \
+                        isinstance(recv.data, str) and R.DATA_LIBS.match(recv.data):
+                    # `select(Tag).join(Item)`, `knex("notes").join(…)`: a query's join and no text's, and the
+                    # query goes on. Until 2026-11-16 it was read as text glued together, the value was no query
+                    # any more, and a record such a query reached by an id alone was listed nowhere
+                    return Val(kind="ext", data=(name or f"{recv.data}.{member}") + "()",
+                               lost=recv.lost or any(v.lost for v in vals))
                 if not tainted_args and not recv.taints and recv.fixed is None:
                     return ENDED if recv.lost or any(v.lost for v in vals) else UNKNOWN
                 if recv.kind == "const" and isinstance(recv.data, str) and member in R.PAGE_TEXT_METHODS:
@@ -6350,6 +6429,34 @@ def sender_counts(ctx: Ctx) -> bool:
     after a way on that some took, not for the requests of some verbs only, and not where the failure is caught and
     the request goes on."""
     return ctx.owner and not ctx.soft and not ctx.narrow and login_for(ctx) == "login"
+
+
+def owner_form(name: str) -> tuple:
+    """A field's name as the words that say whose the record is: `orgId`, `org_id` and `org` are one form, and so is
+    the last part of a Django lookup (`invoice__org`, `org__id`)."""
+    from .datamodel import words
+    parts = [p for p in name.split("__") if p and p not in ("id", "pk", "exact", "in")] if "__" in name else [name]
+    got = words(parts[-1]) if parts else []
+    if got and got[-1] == "id":
+        got = got[:-1]
+    return tuple(got)
+
+
+def of_record(v: "Val | None") -> bool:
+    """Whether `v` is a stored record, or something read off one."""
+    return v is not None and v.kind == "ext" and isinstance(v.data, str) and v.data.startswith("record(")
+
+
+def not_the_requests(v: "Val | None", depth: int = 0) -> bool:
+    """Whether `v` is a value the request did not choose, as far as Lantern followed it: no part of it arrived with
+    the request or through a parameter, it is no fixed text of the code, and its trail did not end in a library call
+    the request's text went into. An object counts when every value in it does (`org: { id: ctx.orgId }`)."""
+    if v is None or v.kind == "const" or v.lost or any(t.kind in ("src", "param") for t in v.taints):
+        return False
+    if v.kind == "obj" and isinstance(v.data, dict):
+        return bool(v.data) and depth < 4 and len(v.data) <= 8 and \
+            all(not_the_requests(x, depth + 1) for x in v.data.values())
+    return v.kind != "seq"
 
 
 def own_here(ctx: Ctx) -> None:

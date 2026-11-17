@@ -72,6 +72,7 @@ class Model:
     line: int
     fields: dict[str, int] = field(default_factory=dict)        # field → its line, in the order written
     leads: dict[str, str] = field(default_factory=dict)         # field → the model it leads to
+    many: list[str] = field(default_factory=list)               # of `leads`: the fields that lead to a list of them
     table: str | None = None                    # the table's name, where the file says one
     inherited: list[str] = field(default_factory=list)          # fields a library's base class brings
 
@@ -137,6 +138,8 @@ def prisma(text: str, rel: str) -> list[Model]:
                 model.fields.setdefault(got.group(1), _line(code, at + got.start(1)))
                 if got.group(2) not in PRISMA_TYPES:
                     model.leads[got.group(1)] = got.group(2)
+                    if got.group(3) and got.group(1) not in model.many:
+                        model.many.append(got.group(1))         # `invoices Invoice[]`: the other end of "belongs to"
             named = _PRISMA_MAP.search(row)
             if named:
                 model.table = named.group(1)
@@ -231,6 +234,8 @@ def _classes(text: str, rel: str) -> list[_Class]:
                 model.fields.setdefault(name, stmt.lineno)
                 if made in DJANGO_LEADS and _to(value):
                     model.leads[name] = _to(value)
+                    if made == "ManyToManyField" and name not in model.many:
+                        model.many.append(name)
             elif hint is not None and (table or "SQLModel" in bases or made == "Field"):
                 model.fields.setdefault(name, stmt.lineno)      # a SQLModel field; counted only for `table=True`
         kind = "django" if django else "sqlmodel" if table else "sqlalchemy" if alchemy else None
