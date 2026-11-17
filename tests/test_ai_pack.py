@@ -282,6 +282,10 @@ def test_what_the_model_wrote_is_followed_into_another_function_and_file(tmp_pat
     expected += [(ts, _at(AGENT_TS, line)) for line in ("exec(cmd);", "execSync(await write(task));",
                                                        "fs.rmSync(args.path, { recursive: true });")]
     assert found == sorted(expected), found
+    rec = next(r for r in sec["tools"] if r["tool"] == "lantern-flow")
+    assert rec["scope"]["flows"] == 0, rec["scope"]        # what a request sent: here none of it reaches an action
+    assert rec["scope"]["model_text"] == {"flows": 12, "findings": 10, "on_older_findings": 1,
+                                          "checked_by_code": 1}, rec["scope"]
     by = {(f["file"], f["line"]): f for f in sec["findings"] if f["rule"] == RULE}
     one = by[(tools, _at(TOOLS_PY, "return subprocess.run(cmd, shell=True)"))]
     assert one["tool"] == "lantern-flow" and one["tool_confidence"] == "LOW" and one["cwe"] == 94, one

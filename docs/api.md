@@ -578,7 +578,11 @@ on whose way a login token is read and nothing turns away a request whose token 
 and pays for nothing before that check), `webhook_routes` (only when there is one: the routes taken for a
 provider's webhook that write stored data, which is what `LW-UNSIGNED-WEBHOOK` read), `webhook_for_no_login` (only
 when there is one: the routes whose finding "no login check was found" was not kept because an `LW-UNSIGNED-WEBHOOK`
-finding names the same route: a provider cannot sign in, so that finding points to the wrong fix)`}`; `partial` when a file could not be read, a function could not be followed or the
+finding names the same route: a provider cannot sign in, so that finding points to the wrong fix), `model_text` (only
+when there is one, since stage 5 of the roadmap of 2026-11-14: text a model wrote followed to an action, `{flows,
+findings` (new `LA-MODEL-OUTPUT-TO-TOOL` findings), `on_older_findings` (lines written on a finding of the older
+reading of that rule, inside one function), `checked_by_code` (findings of the older reading not kept because the
+model's text arrives on that line checked on every way)`}`)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
 (22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
@@ -836,11 +840,13 @@ stays test code and the reason says so), `test_file_stood_in` (true where only t
 test run leads from the app into the test file, a call to a stand-in, a callback or a double that a test handed
 the app: it stays test code, as it is with no test run, and the reason says so), `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
-`{"via": <the words of the flow's first step>, "flow": true}`), `flow` (optional, `flowscan.py`: request data followed
-to this line across functions and files, on a `lantern-flow` finding or attached to another tool's finding for the same
-kind of problem on the same line: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
+`{"via": <the words of the flow's first step>, "flow": true}`; not for a flow of text a model wrote), `flow` (optional,
+`flowscan.py`: request data, or text a model wrote, followed to this line across functions and files, on a
+`lantern-flow` finding or attached to another tool's finding for the same kind of problem on the same line; a flow of
+text a model wrote is on an `LA-MODEL-OUTPUT-TO-TOOL` finding only: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
 `redirect`, `nosql`, `pollution`, `record`, `assign`), `"confidence"` (`HIGH`, or `LOW` when a step is a likely link),
-`"severity"`, `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
+`"severity"`, `"origin"` (`server`: what a request sent; `dom`: the page's own address in the browser; `model`: text a
+model wrote, from the call that gave it back), `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
 request to the sensitive action, in order; `what` is a sentence with code names between backticks), `"others"` (up to
 five other starting points that reach the same line), `"count"}`; the viewer's box "How the value gets there" lists
 the steps, every value escaped), `claim` (`LT-AUTHZ-CLIENT-ROLE` only: `{"name"` (the cookie, header or field as

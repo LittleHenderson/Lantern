@@ -312,7 +312,8 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
     if st.get("stopped_early"):
         notes.append("the time limit was reached before every function was read")
     fields = {"version": VERSION, "findings": len(out), "duration_ms": int((time.perf_counter() - t0) * 1000),
-              "scope": {"files": st.get("files", 0), "functions": st.get("functions", 0), "flows": len(res.flows),
+              "scope": {"files": st.get("files", 0), "functions": st.get("functions", 0),
+                        "flows": len(res.flows) - sum(len(v) for v in model.values()),     # what a request sent
                         "on_other_findings": attached, "not_followed_further": st.get("stopped", 0),
                         "login_read_from_code": len(named_open),
                         "token_check_lets_on": lets_on, "sender_checked": sender_checked}}

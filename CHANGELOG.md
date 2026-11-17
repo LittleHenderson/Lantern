@@ -9,6 +9,21 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- `LA-MODEL-OUTPUT-TO-TOOL` follows text a model wrote across functions and files (roadmap stage 5, the AI-app
+  pack's second version; labelled heuristic as before). Until now the rule read one function's own lines, so a
+  helper that hands back the model's answer and a caller that runs it were not connected. The data-flow step now
+  takes what a model call gives back as text the model wrote, by the library's own name for the call (OpenAI and
+  the clients that speak its words, Anthropic, Google, Mistral, Cohere, Ollama, LiteLLM, Hugging Face, Replicate,
+  the AI SDK, LangChain's chat models, Bedrock's runtime), and follows it through helpers, into other files and
+  out of a tool call the model asked for, to a shell command, query text, code that is run, an address fetched or
+  a file's place. Such a flow is this rule's alone: it is not read as what a request sent, so it makes no other
+  rule's finding and raises no rank. One line is one finding (a flow that ends on a line the older reading
+  flagged is written on that finding), and the older reading's finding is no longer made on a line where the
+  model's text arrives checked against a list of the code's own, or made a number, on every way there. The flow
+  step's record counts it apart (`scope.model_text`); `scope.flows` counts what a request sent only. Measured on
+  30 folders before and after, written down before the first run: 478 findings, none gone, none new, one gained
+  its flow (the AI sample); none of the 12 public projects calls a model, so no precision is known. Tests:
+  `tests/test_ai_pack.py`.
 - New heuristic `LW-NONATOMIC-BALANCE` (roadmap stage 5; labelled heuristic; `lantern/balance.py`): a balance
   checked in one step and taken from in another. A function that checks a balance (credits, points, coins, a
   wallet's money, a quota, stock) and after the check writes it down taken away as a step of its own: a store's
