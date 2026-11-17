@@ -10,11 +10,15 @@ tell it to, keep it going, and every round is billed. Read from the program the 
   function of the project that makes one, directly or through others (`_Look.pays`, `MAX_DEPTH` deep);
 * a round: a `while` loop, `for (;;)`, `do … while`, a `for` over an endless iterator (`flow_rules.ENDLESS`), or a
   function that calls itself. A `for` over a list or a `range` has as many rounds as items, and is no such loop;
-* the model's answer decides: the loop's own test, or a condition under which the loop is left (`break`, `return`,
-  `raise`/`throw`, an exit of the program) or goes round again (`continue`, where the loop has a way out), reads a name
-  that holds the model's answer: a name the flow step saw given text the model wrote (`Engine.model_names`), or one the
-  function sets from such a name (`done = choice.finish_reason == "stop"`). For a function that calls itself: a
-  condition before the call under which it returns, or one the call stands under;
+* only the model's answer decides: every way out of the rounds is the model's. The loop's own test, and each way out
+  of it (`break`, `return`, `raise`/`throw`, an exit of the program, `_ways`), read a name that holds the model's
+  answer: a name the flow step saw given text the model wrote (`Engine.model_names`), or one the function sets from
+  such a name (`done = choice.finish_reason == "stop"`). A way out is the model's when every condition it is taken
+  under reads that answer, or when it is taken under none and comes after a `continue` the answer decides
+  (`_decided`); one only an error reaches (in an `except`) is neither. A loop that something else can end too (a
+  queue that runs out, a flag the code sets, a limit a helper checks) is counted apart (`ends_otherwise`) and is no
+  finding. For a function that calls itself: a condition before the call under which it returns, or one the call
+  stands under;
 * a cap, read where the loop decides: a counter the loop changes (`x += 1`, `x = x + 1`, `i++`, the length of a list it
   adds to), a clock (`flow_rules.CLOCK`) or a name set from one, or a name made of a budget's words
   (`flow_rules.BUDGET_WORDS`: `spent`, `total_tokens`); for a function that calls itself, also a parameter read in a
@@ -48,11 +52,13 @@ def find(eng) -> tuple[list[dict], dict]:
     """The agent loops of the project whose program the flow step's engine `eng` read, each `{"kind": "loop" |
     "itself" | "setting", "file", "line", "paid": [{file, line, what[, through]}], "ends": [{line, what}]}` (a setting
     also `"setting"`: its words, and `"what"`: the call), and the record's counts: `paid_calls`, `loops` (rounds that
-    make a paid call and end on the model's answer), `capped` (of those, a count, a clock or a budget ends), `asked` (a
-    person says yes to each round), `settings_off`, `findings`."""
+    make a paid call and that the model's answer can end), `capped` (of those, a count, a clock or a budget ends),
+    `asked` (a person says yes to each round), `ends_otherwise` (something else can end them too), `settings_off`,
+    `findings`."""
     paid = getattr(eng, "paid", None) or {}
     runners = getattr(eng, "agent_calls", None) or {}
-    rec = {"paid_calls": len(paid), "loops": 0, "capped": 0, "asked": 0, "settings_off": 0, "findings": 0}
+    rec = {"paid_calls": len(paid), "loops": 0, "capped": 0, "asked": 0, "ends_otherwise": 0, "settings_off": 0,
+           "findings": 0}
     out: list[dict] = []
     look = _Look(eng)
     for fn in look.functions() if paid else ():
@@ -61,14 +67,14 @@ def find(eng) -> tuple[list[dict], dict]:
             if got is None:
                 continue
             rec["loops"] += 1
-            if got == "capped" or got == "asked":
+            if isinstance(got, str):
                 rec[got] += 1
             else:
                 out.append(got)
         got = look.itself(fn)
         if got is not None:
             rec["loops"] += 1
-            if got == "capped" or got == "asked":
+            if isinstance(got, str):
                 rec[got] += 1
             else:
                 out.append(got)
@@ -198,8 +204,8 @@ class _Look:
         return False
 
     def loop(self, fn: Fn, loop):
-        """A loop of `fn` that makes a paid call in each round and ends on the model's answer: "capped", "asked", or
-        what the finding needs; None for any other loop."""
+        """A loop of `fn` that makes a paid call in each round and that the model's answer can end: "capped", "asked",
+        "ends_otherwise", or what the finding needs; None for any other loop."""
         _target, it, test = loop.items
         if it is not None and not self.endless(fn, it):
             return None         # a `for` over items: as many rounds as there are items
@@ -207,26 +213,30 @@ class _Look:
         if not paid:
             return None
         always = test is None or (test.k == "const" and bool(test.a))
-        exits, goes = _ways(loop.b)
+        ways = _ways(loop.b)
         model = self.model(fn)
-        ends = [test] if not always and _reads(test, model) else []
-        ends += [g for gs, _s in exits for g in gs if g is not None and _reads(g, model)]
-        if exits or not always:
-            ends += [g for gs, _s in goes for g in gs if g is not None and _reads(g, model)]
+        ends, other = _decided(ways, model)
+        if not always:
+            if _reads(test, model):
+                ends = [test] + ends
+            else:
+                other.append(test)      # `while queue:`: the loop's own test is something else's
         if not ends:
             return None
-        deciding = ([test] if not always else []) + [g for gs, _s in exits + goes for g in gs if g is not None]
+        deciding = ([test] if not always else []) + _conditions(ways)
         counted, grown = _counted(loop)
         if self.capped(fn, deciding, counted, grown):
             return "capped"
         if self.asked(fn, [loop.b, test], loop.line, max((n.line for n in every_node(loop)), default=loop.line)):
             return "asked"
+        if other:
+            return "ends_otherwise"
         return {"kind": "loop", "file": fn.file, "line": loop.line, "paid": _unique(paid),
                 "ends": _unique([{"line": c.line, "what": _what(c, model)} for c in ends])}
 
     def itself(self, fn: Fn):
         """`fn` calls itself again, with a paid call in each round, unless the model's answer ends it: "capped",
-        "asked", or what the finding needs; None otherwise."""
+        "asked", "ends_otherwise", or what the finding needs; None otherwise."""
         calls = [c for c in every_node(fn.body) if c.k == "call" and any(t is fn for t in self.targets(fn, c))]
         if not calls:
             return None
@@ -236,11 +246,21 @@ class _Look:
             return None
         first = min(c.line for c in calls)
         model = self.model(fn)
-        exits, _goes = _ways(fn.body, brk=False, cont=False)
-        before = [g for gs, s in exits if s.line < first and not any(id(n) in mine for n in every_node(s))
-                  for g in gs if g is not None]
-        over = [g for gs in _guards_of(fn.body, mine) for g in gs if g is not None]
-        ends = [g for g in before + over if _reads(g, model)]
+        exits = [w for w in _ways(fn.body, brk=False, cont=False)
+                 if w[0] == "exit" and w[2].line < first and not any(id(n) in mine for n in every_node(w[2]))]
+        ends, other = _decided(exits, model)
+        over = []
+        for gs in _guards_of(fn.body, mine):        # what the call itself stands under
+            for g in gs:
+                c = _plain(g)
+                if c is None:
+                    continue
+                over.append(c)
+                if _reads(c, model):
+                    ends.append(c)
+                elif not isinstance(g, _Inner):
+                    other.append(c)                 # `if retry: return again(...)`: something else decides
+        before = _conditions(exits)
         if not ends:
             return None
         params = {p.name for p in fn.params if p.name and p.name not in ("self", "cls")}
@@ -253,6 +273,8 @@ class _Look:
             return "capped"
         if self.asked(fn, fn.body, fn.first, fn.end):
             return "asked"
+        if other:
+            return "ends_otherwise"
         return {"kind": "itself", "file": fn.file, "line": first, "paid": _unique(paid),
                 "ends": _unique([{"line": c.line, "what": _what(c, model)} for c in ends])}
 
@@ -313,27 +335,73 @@ def _counted(loop) -> tuple[set, set]:
     return counted, grown
 
 
-def _ways(stmts, guards=(), brk=True, cont=True, depth=0) -> tuple[list, list]:
-    """Each way out of the loop whose body is `stmts` (`break`, `return`, `raise`, an exit of the program), and each
-    `continue` of it, with the conditions it is taken under, in order: [(guards, statement)]. A condition that is
-    not a value (an exception caught) is None. `brk`/`cont`: whether a `break` / `continue` here belongs to the loop
-    (not inside a loop written in it, and a `break` not inside a JavaScript `switch`)."""
-    exits: list = []
-    goes: list = []
+class _Inner:
+    """The condition of a loop written inside the one read (its test, or what it goes over): a way out in it is taken
+    while that loop goes round, which says who ends the outer one only where it reads the model's answer (`for call in
+    resp.tool_calls`)."""
+    __slots__ = ("cond",)
+
+    def __init__(self, cond):
+        self.cond = cond
+
+
+def _plain(g):
+    return g.cond if isinstance(g, _Inner) else g
+
+
+def _conditions(ways) -> list:
+    """Every condition the ways out (and the `continue`s) are taken under, as written: where a cap would be read."""
+    return [c for _kind, gs, _s in ways for g in gs if g is not None and (c := _plain(g)) is not None]
+
+
+def _decided(ways, model: set) -> tuple[list, list]:
+    """Who ends the rounds, from the ways out of them in the order written (`_ways`): the conditions on the model's
+    answer a way out is taken under (the first list), and the ways out something else decides (the second). A way out
+    is the model's when every condition it is taken under reads the model's answer (that of a loop written inside it
+    only where it does), or when it is taken under none and comes after a `continue` the model's answer decides (`if
+    resp.stop_reason == "tool_use": ...; continue`, then `return resp`). One only an error reaches (in an `except`) is
+    neither: an error is no limit, and no answer of the model."""
+    mine: list = []
+    other: list = []
+    shield: list = []
+    for kind, gs, s in ways:
+        real = [g for g in gs if g is not None and not (isinstance(g, _Inner) and not _reads(g.cond, model))]
+        reads = [_plain(g) for g in real if _reads(_plain(g), model)]
+        if kind == "go":
+            shield += reads
+            continue
+        if not real and None in gs:
+            continue                    # only an error gets here
+        if real and len(reads) == len(real):
+            mine += reads
+        elif not real and shield:
+            mine += shield
+        else:
+            other.append(s)
+    return mine, other
+
+
+def _ways(stmts, guards=(), brk=True, cont=True, depth=0) -> list:
+    """Each way out of the loop whose body is `stmts` ("exit": `break`, `return`, `raise`, an exit of the program) and
+    each `continue` of it ("go"), with the conditions it is taken under, in the order written: [(kind, guards,
+    statement)]. A condition that is not a value (an exception caught) is None, the condition of a loop written inside
+    it an `_Inner`. `brk`/`cont`: whether a `break` / `continue` here belongs to the loop (not inside a loop written in
+    it, and a `break` not inside a JavaScript `switch`)."""
+    out: list = []
     if depth > 40:
-        return exits, goes
+        return out
     for s in stmts or ():
         k = s.k
         parts: list = []
         if k == "jump":
             if s.name == "break" and brk:
-                exits.append((guards, s))
+                out.append(("exit", guards, s))
             elif s.name == "continue" and cont:
-                goes.append((guards, s))
+                out.append(("go", guards, s))
         elif k in ("return", "raise"):
-            exits.append((guards, s))
+            out.append(("exit", guards, s))
         elif k == "expr" and s.a is not None and s.a.k == "call" and STOPS.match(text_of(s.a.a)):
-            exits.append((guards, s))
+            out.append(("exit", guards, s))
         elif k == "if":
             parts = [(s.b, guards + (s.a,), brk, cont), (s.c, guards + (s.a,), brk, cont)]
         elif k == "try":
@@ -346,12 +414,10 @@ def _ways(stmts, guards=(), brk=True, cont=True, depth=0) -> tuple[list, list]:
             parts = [(case, guards + (s.a,), brk and not switch, cont) for case in s.items or ()]
         elif k == "loop":
             _t, it, test = s.items
-            parts = [(s.b, guards + (test if test is not None else it,), False, False)]
+            parts = [(s.b, guards + (_Inner(test if test is not None else it),), False, False)]
         for body, g, b, c in parts:
-            e2, g2 = _ways(body, g, b, c, depth + 1)
-            exits += e2
-            goes += g2
-    return exits, goes
+            out += _ways(body, g, b, c, depth + 1)
+    return out
 
 
 def _guards_of(stmts, want: set, guards=(), depth=0) -> list:
@@ -382,7 +448,7 @@ def _guards_of(stmts, want: set, guards=(), depth=0) -> list:
             _t, it, test = s.items
             if any(id(n) in want for n in every_node(s.items)):
                 out.append(guards)
-            out += _guards_of(s.b, want, guards + (test if test is not None else it,), depth + 1)
+            out += _guards_of(s.b, want, guards + (_Inner(test if test is not None else it),), depth + 1)
         elif any(id(n) in want for n in every_node(s)):
             out.append(guards)
     return out

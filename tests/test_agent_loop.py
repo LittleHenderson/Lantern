@@ -12,7 +12,10 @@ switched off (LangChain's `AgentExecutor(max_iterations=None)`, the AI SDK's `st
 
 Each dangerous loop stands beside safe twins that differ in the one thing that bounds it, and look-alikes: a model on
 this computer (nothing is paid for each call), a loop that a queue ends, a call tried again after a failure, a person
-who says yes to each round, a chat object of the project's own. Nothing here is run, and no model is asked.
+who says yes to each round, a chat object of the project's own, and loops that the model's answer decides something
+in but that something else can end too (a queue that runs out, a cancel flag, a limit a helper of the project checks;
+written after a first version of the rule called them "only the model's answer stops it"). Nothing here is run, and
+no model is asked.
 """
 from lantern.engine import build_graph
 from lantern.security import scan
@@ -247,6 +250,44 @@ def ask_until_answered(messages):
             return client.messages.create(model="claude-haiku-5-5", max_tokens=1024, messages=messages)
         except anthropic.RateLimitError:
             time.sleep(1)
+
+
+# ---- the model's answer decides something in each round, and something else can end the loop too: a queue that runs
+# out, a flag the code sets, a limit a helper of the project checks. Not "only the model's answer stops it"
+def summarize_queue(queue):
+    while True:
+        job = queue.get()
+        if job is None:
+            break
+        resp = client.messages.create(model="claude-haiku-5-5", max_tokens=512, messages=[{"role": "user", "content": job}])
+        if resp.stop_reason == "max_tokens":
+            continue
+        print(resp.content[0].text)
+
+
+def agent_until_cancelled(messages, stop):
+    while True:
+        if stop.is_set():
+            break
+        resp = client.messages.create(model="claude-haiku-5-5", max_tokens=1024, messages=messages, tools=TOOLS)
+        if resp.stop_reason == "end_turn":
+            return resp
+        messages.append({"role": "assistant", "content": resp.content})
+
+
+def agent_helper_limit(messages):
+    while True:
+        resp = client.messages.create(model="claude-haiku-5-5", max_tokens=1024, messages=messages, tools=TOOLS)
+        if resp.stop_reason == "tool_use":
+            if too_many(messages):
+                break
+            messages.append({"role": "assistant", "content": resp.content})
+            continue
+        return resp
+
+
+def too_many(messages):
+    return len(messages) > 40
 
 
 def handle_blocks(messages):
@@ -499,10 +540,12 @@ def test_what_the_finding_says_and_the_record(tmp_path):
     assert setting["scenario"]["kind"] == "agent-loop" and any(
         "switched off" in s for s in setting["scenario"]["steps"]), setting["scenario"]["steps"]
     rec = next(r for r in sec["tools"] if r["tool"] == "lantern-flow")
-    # paid calls written in the code: 7 in bot/agent.py, 2 in bot/llm.py, 9 in bot/safe.py (Ollama runs on this
-    # computer and is not one), 12 in web/agent.ts
-    assert rec["scope"]["agent_loops"] == {"paid_calls": 30, "loops": 22, "capped": 9, "asked": 1,
-                                           "settings_off": 3, "findings": 15}
+    # paid calls written in the code: 7 in bot/agent.py, 2 in bot/llm.py, 12 in bot/safe.py (Ollama runs on this
+    # computer and is not one), 12 in web/agent.ts. Of the 24 loops the model's answer can end, 9 are capped, 1 asks
+    # a person, 2 can be ended by something else too (a cancel flag, a helper's limit; the queue's loop is none of
+    # them: the model's answer only skips the rest of a round there)
+    assert rec["scope"]["agent_loops"] == {"paid_calls": 33, "loops": 24, "capped": 9, "asked": 1,
+                                           "ends_otherwise": 2, "settings_off": 3, "findings": 15}
 
 
 def test_a_project_with_no_paid_call_has_no_record(tmp_path):
