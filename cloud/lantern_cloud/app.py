@@ -46,6 +46,7 @@ from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN
 
 log = logging.getLogger("lantern_cloud")
 PRIVACY = {"structure", "full"}
+REPO_LIST_SECONDS = 120   # a person's list of GitHub repositories is kept this long, in memory only
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
 SIGNIN_COOKIE = "lsi"          # a sign-in in progress, for this browser only: its mark and the secret kept for it
 SIGNIN_CODE = re.compile(r"[A-Za-z0-9_-]{43,128}")     # the one-time code the gateway sends the browser back with
@@ -290,6 +291,35 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return {"account": acc.split(":", 1)[0], "label": who["label"],
                 "runs_today": store.runs_today(acc), "runs_active": store.active_runs(acc),
                 "limits": s.limits(), "connect_url": gh.install_url if gh else None}
+
+    # Your repositories on GitHub, so a person picks one instead of finding and pasting its link (2026-11-17). Kept a
+    # few minutes per account in memory only: GitHub allows a server few anonymous questions an hour.
+    repo_lists: dict[str, tuple[float, dict]] = {}
+
+    @app.get("/v1/github/repos")
+    async def github_repos(request: Request):
+        from . import ghapp
+        who = await signed_in(request)
+        acc = who["account"]
+        none = {"repos": [], "github": False, "connected": False, "connect_url": gh.install_url if gh else None}
+        if not acc.startswith("github:"):
+            return none
+        now = time.monotonic()
+        kept = repo_lists.get(acc)
+        if kept and now - kept[0] < REPO_LIST_SECONDS and request.query_params.get("fresh") != "1":
+            d = kept[1]
+        else:
+            try:
+                d = await run_in_threadpool(ghapp.your_repos, gh, acc, who["label"])
+            except ghapp.NoAccess:
+                return none
+            except ghapp.GitHubDown:
+                raise HTTPException(503, "GitHub did not answer just now. Paste your project's link instead, "
+                                         "or try again in a minute.") from None
+            if len(repo_lists) > 2000:
+                repo_lists.clear()
+            repo_lists[acc] = (now, d)
+        return {**d, "github": True, "connect_url": gh.install_url if gh else None}
 
     # ---- runs ----
     def own_run(rid: str, who: dict) -> dict:

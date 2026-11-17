@@ -82,6 +82,15 @@
 .sub #explain[disabled]{opacity:.75;cursor:default}
 @media (max-width:760px){#xtoast{left:12px;bottom:84px;max-width:calc(100vw - 24px)}.sub #explain span,.sub #share span{display:none}}
 .dropzone.over{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.repolist{max-width:720px;margin:0 auto}.repolist .reposearch{margin:0 0 10px}
+.reporows{display:flex;flex-direction:column;gap:8px;max-height:min(56vh,520px);overflow:auto;padding:2px}
+.reporow{display:grid;grid-template-columns:1fr auto;grid-template-areas:"n go" "d go" "m go";gap:2px 14px;text-align:left;width:100%;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 16px;cursor:pointer;color:var(--ink);font:inherit}
+.reporow:hover,.reporow:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.reporow .rn{grid-area:n;font-weight:600;font-size:15px}.reporow .rd{grid-area:d;font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reporow .rm{grid-area:m;font-size:12px;color:var(--muted)}.reporow .go2{grid-area:go;align-self:center;font-size:13px;font-weight:600;color:var(--accent)}
+.reporow.busy{opacity:.6;cursor:progress}.reporow[hidden]{display:none}
+.repohint{max-width:720px;margin:12px auto 0;font-size:13px;color:var(--muted);text-align:center}.repohint .ic{width:13px;height:13px;vertical-align:-2px;margin-right:4px}
+h1.orpaste{font-size:20px;margin-top:28px}
 .ghrow{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;max-width:720px;margin:12px auto 0;font:13px var(--font);color:var(--muted)}
 .ghrow .btn svg,#connectgh svg{width:15px;height:15px;flex:none}.ghrow .btn .ic{width:13px;height:13px;opacity:.6}
 .samples{margin-top:40px}
@@ -270,7 +279,7 @@ const PRIV = {structure: 'Map and findings only', full: 'With code snippets'};
 
 // ---- account
 async function loadMe() {
-  try { S.me = await api('/v1/me'); }
+  try { S.me = await api("/v1/me"); S.repos = undefined; }
   catch (e) { S.me = e.status === 401 ? null : S.me || null; if (e.status !== 401) S.meErr = e.message; }
 }
 // A sign-in finished in the GitHub/Google tab while this page was reloaded or its sheet closed: collect it quietly
@@ -589,6 +598,45 @@ function ghRow() {
     <a class="btn sm" href="https://github.com/explore" target="_blank" rel="noopener noreferrer">${GH}Explore GitHub${icon('open')}</a>
     ${connectUrl() ? `<a class="btn sm" href="${esc(connectUrl())}" target="_blank" rel="noopener noreferrer" title="Choose private repositories Lantern may read">${GH}Connect private repositories${icon('open')}</a>` : ''}</div>`;
 }
+// Your projects on GitHub (2026-11-17): a signed-in GitHub account sees its own repositories and picks one; no link to
+// find. Private ones are listed only where the person connected them (the GitHub App), and the list says so.
+// S.repos: undefined (not asked yet) | {loading} | {list, connected} | {error} | {none} (not a GitHub sign-in).
+const REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+async function loadRepos(fresh) {
+  if (!S.me || (S.repos && S.repos.loading)) return;
+  S.repos = {loading: true}; if (S.add === 'github') render();
+  try {
+    const d = await api('/v1/github/repos' + (fresh ? '?fresh=1' : ''));
+    S.repos = d.github ? {list: (Array.isArray(d.repos) ? d.repos : []).filter(r => r && REPO_NAME.test(String(r.name))), connected: d.connected === true} : {none: true};
+  } catch (e) { S.repos = {error: e.status === 401 ? 'Sign in again to see your projects.' : e.message}; }
+  if (S.add === 'github') render();
+}
+function repoPicker() {
+  if (!S.me) return `<h1>Pick your project</h1><p class="lede">Sign in with GitHub and Lantern lists your projects here, so you can pick one.</p>
+    <div class="go"><button class="btn primary big" data-signin>${GH.replace('<svg ', '<svg class="ic" ')}Sign in with GitHub</button></div>`;
+  const R = S.repos;
+  if (R === undefined) { setTimeout(() => loadRepos(false), 0); return `<h1>Pick your project</h1><div class="working"><span class="pulse"></span>Asking GitHub for your projects…</div><div class="indeterminate"></div>`; }
+  if (R.loading) return `<h1>Pick your project</h1><div class="working"><span class="pulse"></span>Asking GitHub for your projects…</div><div class="indeterminate"></div>`;
+  if (R.none) return '';
+  const more = connectUrl() && !R.connected ? `<p class="repohint">${icon('lock')}Don’t see a private project? <a href="${esc(connectUrl())}" target="_blank" rel="noopener noreferrer">Connect GitHub</a>, choose it there, then <button class="linkbtn" id="repofresh">refresh this list</button>.</p>` : '';
+  if (R.error) return `<h1>Pick your project</h1>${note('warn', esc(R.error))}<p class="repohint"><button class="linkbtn" id="repofresh">Try again</button></p>`;
+  if (!R.list.length) return `<h1>Pick your project</h1><p class="lede">GitHub shows no projects on your account yet.</p>${more}`;
+  const rows = R.list.map(r => `<button class="reporow" data-repo="${esc(r.name)}"><span class="rn">${esc(String(r.name).split('/')[1])}${r.private ? ' <span class="tag priv">Private</span>' : ''}</span>
+      <span class="rd">${esc(r.description || '')}</span><span class="rm">${esc([r.language, r.pushed ? 'updated ' + ago(r.pushed) : ''].filter(Boolean).join(' · '))}</span><span class="go2">Check</span></button>`).join('');
+  return `<h1>Pick your project</h1><p class="lede">Your projects on GitHub, the most recently changed first. Click one to check it.</p>
+    <div class="repolist">${R.list.length > 8 ? `<div class="field reposearch">${icon('search')}<input type="text" id="reposearch" placeholder="Find a project by name" autocomplete="off" spellcheck="false" aria-label="Find a project by name"></div>` : ''}<div class="reporows">${rows}</div></div>${more}`;
+}
+function repoControls(el) {
+  el.querySelectorAll('[data-repo]').forEach(b => b.onclick = () => {
+    const name = b.dataset.repo; if (!REPO_NAME.test(name)) return;
+    if (S.privacy === 'full' && !S.agreed) { upMsg('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.'); return; }
+    b.classList.add('busy'); b.disabled = true;
+    startRun('https://github.com/' + name, S.privacy, S.agreed).finally(() => { b.classList.remove('busy'); b.disabled = false; });
+  });
+  const f = el.querySelector('#repofresh'); if (f) f.onclick = () => { S.repos = undefined; loadRepos(true); };
+  const q = el.querySelector('#reposearch');
+  if (q) q.oninput = () => { const t = q.value.trim().toLowerCase(); el.querySelectorAll('[data-repo]').forEach(b => { b.hidden = !!t && !b.dataset.repo.toLowerCase().includes(t); }); };
+}
 // Connect GitHub: the GitHub App's install page, where the person picks the private repositories Lantern may read.
 // Only a github.com/apps/ address is used, whatever the server says.
 const connectUrl = () => { const u = S.me && S.me.connect_url; return typeof u === 'string' && /^https:\/\/github\.com\/apps\/[A-Za-z0-9-]{1,100}\/installations\/new$/.test(u) ? u : ''; };
@@ -694,8 +742,8 @@ function renderAdd(el) {
       <div class="picks"><button class="pick" data-to="github">${GH}<div><b>It’s on GitHub</b><span>You have a link that starts with github.com</span></div></button>
         <button class="pick" data-to="computer">${icon('folder')}<div><b>It’s on this computer</b><span>A folder on this computer, or a .zip you downloaded</span></div></button>
         <button class="pick" data-to="unsure">${icon('info')}<div><b>I’m not sure</b><span>We’ll help you find it</span></div></button></div>`,
-    github: () => `${back('where')}<h1>Paste your project’s link</h1><p class="lede">Copy it from the top of your browser while your project is open on GitHub.</p>
-      <div class="one"><div class="dropzone">${GH}<input type="text" id="link" placeholder="https://github.com/you/your-app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Your project's GitHub link"><button class="btn primary${startingAttr(S.starting && !S.starting.startsWith(SAMPLE))}" id="add">Check my app</button></div>
+    github: () => `${back('where')}${repoPicker()}<h1${S.repos && S.repos.list && S.repos.list.length ? ' class="orpaste"' : ''}>${S.repos && S.repos.list && S.repos.list.length ? 'Or paste a link' : 'Paste your project’s link'}</h1><p class="lede">Copy it from the top of your browser while your project is open on GitHub.</p>
+      <div class="one"><div class="dropzone">${GH.replace('<svg ', '<svg class="ic" ')}<input type="text" id="link" placeholder="https://github.com/you/your-app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Your project's GitHub link"><button class="btn primary${startingAttr(S.starting && !S.starting.startsWith(SAMPLE))}" id="add">Check my app</button></div>
       <div id="adderr">${addMsgHtml()}</div>
       ${why(`<ol class="how" style="margin:0"><li>Open github.com and sign in.</li><li>Click your profile picture, then <b>Your repositories</b>. That is GitHub’s word for your projects.</li><li>Click your app’s name, then copy the address at the top of your browser.</li></ol>${ghRow()}`, 'Where do I find the link?')}
       ${keepBox()}</div>`,
@@ -713,6 +761,7 @@ function renderAdd(el) {
   el.innerHTML = `<main class="simplehome onb">${(screens[S.add] || screens.where)()}<p class="privline" style="margin-top:22px">${icon('lock')}Your code is read in a sealed box and never run.</p></main>`;
   el.querySelectorAll('[data-back]').forEach(b => b.onclick = () => { S.add = b.dataset.back || null; S.addMsg = null; render(); });
   el.querySelectorAll('[data-to]').forEach(b => b.onclick = () => { S.add = b.dataset.to; S.addMsg = null; render(); });
+  if (S.add === 'github') repoControls(el);
   addControls(el);
   const up = el.querySelector('#upload');
   if (up) {
