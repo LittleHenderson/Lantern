@@ -128,8 +128,9 @@ Local app state in `~/.lantern/` (or `$LANTERN_HOME`): `projects.json`, `setting
 
 ## Request flow in the local app
 
-Browser → `GET /?token=…` sets an HttpOnly SameSite=Strict cookie → `GET /` serves `app.html` with the token in
-the page → reads use the cookie, writes also send `X-Lantern-Token`. Long work (`analyze`, `explain`, `accept`)
+Browser → the printed link `/#token=…` (the part after `#` is sent to no server) → `GET /` serves `app.html`, the same
+for everybody → the page keeps the key in its own storage and sends `X-Lantern-Token` with every read and write; a
+report in a frame is opened with a pass from `POST /api/view`. No cookie is set. Long work (`analyze`, `explain`, `accept`)
 starts a thread job (one per project at a time) and returns `202 {id}`; the page polls `/api/jobs/{id}`.
 `/p/{id}/report.html` is the saved report with `window.LANTERN_LIVE` injected, which turns on the live buttons.
 

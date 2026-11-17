@@ -11,6 +11,8 @@
   lantern allowance                                       see how much of it is left
   lantern report PATH                                     rebuild report.html from saved results
   lantern accept PATH FINDING_ID --reason "..."           record an accepted risk (committed in the repo)
+  lantern fix brief PATH FINDING_ID                       what a fix of one finding has to show (the fix contract)
+  lantern fix check PATH FINDING_ID [-- TEST COMMAND]     hold a fix to that contract: passed, refused or incomplete
   lantern starter PATH [--write NAME]                     show or write generated starter files
   lantern evidence PATH                                   rebuild the commit-pinned Evidence Report
   lantern verify PATH --report evidence.html [-- CMD]     re-run the analysis the same way and compare
@@ -158,8 +160,10 @@ def cmd_verify(a, trace_cmd: list[str]) -> int:
               file=sys.stderr)
         return 2
     if r.get("refused"):
-        print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
-              + " ".join(r["trace_command"]), file=sys.stderr)
+        # the report's words are shown as what the report says, never as a line to run (`evidence.words_shown`)
+        print(r["refused"] + "\n  the command the report names, word by word: " + evidence.words_shown(r["trace_command"])
+              + "\n  if it is the project's own test command, type it yourself after:  lantern verify "
+              + (a.path or ".") + f" --report {a.report} --", file=sys.stderr)
         return 2
     o = r["options"]
     print(f"commit  {r['commit']}{' (uncommitted changes present)' if r['dirty'] else ''}")
@@ -238,15 +242,120 @@ def cmd_export(a) -> int:
     return 0
 
 
-def _write_named(repo: Path, dest: Path, text: str) -> None:
+def _write_named(repo: Path, dest: Path, text: str, newline: str | None = None) -> None:
     """Write a file the person named on the command line. The name is theirs, so it is written as they wrote it
     (a link of their own is followed, `/dev/stdout` works), with one exception: a link that lies inside the project
-    came with the project, and Lantern puts its own file in that link's place (`results.write`)."""
+    came with the project, and Lantern puts its own file in that link's place (`results.write`). `newline` as for
+    `open`: None writes this system's line ends, as a report is written; "" writes the text as it is, which a patch
+    needs (its lines end as the lines of the files it changes end, and Windows' own line ends on top of those give
+    a file no tool applies)."""
     from . import results
     if results.link_in_project(repo, dest):
-        results.write(dest, text, where="the project folder")
+        results.write(dest, text, newline=newline, where="the project folder")
     else:
-        dest.write_text(text, encoding="utf-8")
+        dest.write_text(text, encoding="utf-8", newline=newline)
+
+
+def cmd_diff(a) -> int:
+    """`lantern diff [PATH] [BASE..HEAD]` (lantern/diff.py): two versions of the project checked and compared."""
+    from . import diff, gitfacts
+    from .pipeline import change
+    path, spec = a.path, a.range
+    if spec is None and path != "." and not Path(path).is_dir():
+        path, spec = ".", path          # `lantern diff main..HEAD`: one word that is no folder is the two versions
+    repo = Path(path).resolve()
+    quiet = a.format != "line"
+    try:
+        got = change(repo, spec, out=a.out, offline=a.offline or None, base_results=a.base_results,
+                     head_results=a.head_results, base_label=a.base_label, head_label=a.head_label,
+                     privacy=a.privacy, log=(lambda line: print(line, file=sys.stderr)) if quiet else print)
+    except (gitfacts.NoCommit, diff.NotResults) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if a.format == "md":
+        sys.stdout.write(diff.markdown(got["receipt"], short=a.short))
+    elif a.format == "json":
+        sys.stdout.write(json.dumps(got["receipt"], indent=1) + "\n")
+    else:
+        for name in ("html", "md", "json"):
+            print(f"wrote   {got['paths'][name]}")
+    return 0
+
+
+FIX_NOT_OPEN = ("{id} is not an open finding of this project's last check (ids change when the flagged line changes, "
+                "and a finding the project accepted is not open). The Findings page and `lantern analyze` show what "
+                "is open.")
+FIX_RESULT = {"passed": 0, "refused": 1, "incomplete": 3}
+
+
+def cmd_fix(a, trace_cmd: list[str]) -> int:
+    """`lantern fix brief|check [PATH] FINDING` (lantern/fixcheck.py): what the fix of one finding has to show, and
+    whether a fix shows it. Ends with 0 when the fix passed, 1 when it is refused, 3 when nothing is broken and a
+    part is not shown (the tests were not run), 2 when nothing could be checked. Nothing here accepts, closes or
+    re-ranks a finding, and Lantern applies no change to the project."""
+    from . import diff, fixcheck
+    from .server import home_dir
+    repo = Path(a.path).resolve()
+    out = _out(repo, a.out)
+    try:
+        if a.fix_cmd == "brief":
+            from .mcp_server import fix_brief
+            got = fix_brief(repo, out, home_dir(), a.finding.strip())
+            if got is None:
+                print("error: " + FIX_NOT_OPEN.format(id=_printable(a.finding[:80])), file=sys.stderr)
+                return 2
+            lines, data = got
+            if a.format == "json":
+                sys.stdout.write(json.dumps(data, indent=1) + "\n")
+                return 0
+            fid = data["finding"]["id"]
+            print(_printable_lines("\n".join(lines)))
+            print(f"When the fix is written:  lantern fix check {a.path} {fid} -- <the command that runs your tests>")
+            print("Nothing here accepts or closes a finding. A risk that is meant to stay is accepted by a person, "
+                  "with `lantern accept` and a written reason.")
+            return 0
+        from .pipeline import fix_check
+        quiet = a.format == "json"
+        got = fix_check(repo, a.finding.strip(), out=a.out, candidate=a.candidate, trace_cmd=trace_cmd,
+                        suggest=bool(a.suggest), offline=a.offline or None, test_minutes=a.test_minutes,
+                        test_memory=a.test_memory, log=lambda line: print(line, file=sys.stderr))
+    except (diff.NotResults, ValueError, RuntimeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    result, sug = got["result"], got["suggestion"]
+    wrote = None
+    if sug and sug["text"] is not None:
+        dest = Path(a.suggest)
+        _write_named(repo, dest, sug["text"], newline="")         # a patch: byte for byte, on every system
+        wrote = str(dest)
+    if quiet:
+        sys.stdout.write(json.dumps({"finding": got["finding"], "verdict": result["verdict"], "contract": result,
+                                     "compared_with": got["compared_with"], "candidate": got["candidate"],
+                                     "files": got["files"], "tests_ran": got["tests"] is not None,
+                                     "suggestion": {"written": wrote, "why": sug["why"]} if sug else None},
+                                    indent=1) + "\n")
+    else:
+        print(f"Compared with {got['compared_with']['words']}.")
+        print(_printable_lines(fixcheck.text(result).rstrip()))
+        if "tests" in result["not_shown"] and not trace_cmd:
+            print(f"To have the tests run on the fixed code, give the command that runs them:  lantern fix check "
+                  f"{a.path} {got['finding']} -- <test command>")
+        if wrote:
+            print(f"wrote   {wrote} (the suggested change; Lantern applied nothing)")
+    if sug and sug["text"] is None:
+        passed = result["verdict"] == fixcheck.PASSED       # passed, and still not something a patch can carry
+        print(f"{'error: ' if passed else 'note    '}no suggested change was written: {_printable(sug['why'] or '')}",
+              file=sys.stderr)
+        if passed:
+            return 2
+    return FIX_RESULT.get(result["verdict"], 2)
+
+
+def _printable_lines(text: str) -> str:
+    return "\n".join(_printable(x) for x in text.split("\n"))
 
 
 def cmd_github(a) -> int:
@@ -264,9 +373,16 @@ def cmd_github(a) -> int:
         out = _out(repo, a.out)
         if a.gh == "summary":
             ev = onrepo.read(out)
+            receipt = None
+            if a.change and not a.decision_only:
+                from . import diff
+                try:
+                    receipt = diff.read(a.change)
+                except diff.NotResults:
+                    receipt = {}                    # said in the text; the report itself is still given
             print(onrepo.decision_of(ev) if a.decision_only else
-                  onrepo.summary(ev, short=a.short, run_url=a.run_url, report_url=a.report_url), end="\n" if
-                  a.decision_only else "")
+                  onrepo.summary(ev, short=a.short, run_url=a.run_url, report_url=a.report_url, change=receipt),
+                  end="\n" if a.decision_only else "")
             return 0
         for p in onrepo.save(repo, out, a.to, run_url=a.run_url, report_url=a.report_url):
             print(f"wrote   {p}")
@@ -514,7 +630,7 @@ def cmd_learn(a) -> int:
 
 
 def cmd_login(a) -> int:
-    from .providers import ProviderError, save_token, sign_in_claim, sign_in_providers, sign_in_start
+    from .providers import ProviderError, save_token, sign_in_here, sign_in_page, sign_in_providers
     if a.token:
         print(f"saved   {save_token(a.token)}  (the default model now uses the free allowance)")
         return 0
@@ -526,30 +642,30 @@ def cmd_login(a) -> int:
             print(f"  lantern login --{p}")
         print("Or save a token you already have:  lantern login --token lt_...")
         return 0
-    start = sign_in_start(provider)
-    print(f"Sign in with {provider.capitalize()} in your browser:\n  {start['url']}")
-    if not a.no_browser:
-        import webbrowser
-        try:
-            webbrowser.open(start["url"])
-        except Exception:  # noqa: BLE001: no browser is fine, the link is printed
-            pass
-    print("waiting for the sign-in to finish (up to 5 minutes)...", flush=True)
-    import time as _time
-    deadline = _time.time() + 300
-    while _time.time() < deadline:
-        try:
-            tok = sign_in_claim(start["cli"])
-        except ProviderError as e:
+    def show(link: str) -> None:
+        print(f"Sign in with {provider.capitalize()} in a browser on this computer:\n  {link}")
+        print(f"No browser on this computer? Open this one anywhere, press its Copy button, then run "
+              f"`lantern login --token lt_...`:\n  {sign_in_page(provider)}")
+        if not a.no_browser:
+            import webbrowser
+            try:
+                webbrowser.open(link)
+            except Exception:  # noqa: BLE001: no browser is fine, the link is printed
+                pass
+        print("waiting for the sign-in to finish (up to 5 minutes)...", flush=True)
+
+    try:
+        tok = sign_in_here(provider, show)
+    except ProviderError as e:
+        if e.status == 408:
+            print("timed out. Run the command again, or paste the token from the browser page: lantern login --token lt_...",
+                  file=sys.stderr)
+        else:
             print(f"error: {e}", file=sys.stderr)
-            return 2
-        if tok:
-            print(f"saved   {save_token(tok)}  (the default model now uses the free allowance)")
-            return 0
-        _time.sleep(2)
-    print("timed out. Run the command again, or paste the token from the browser page: lantern login --token lt_...",
-          file=sys.stderr)
-    return 2
+        return 2
+    print(f"saved   {save_token(tok)}  (the default model now uses the free allowance)")
+    return 0
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -591,7 +707,8 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--trace", action="store_true", help="also run the command after -- and record real calls")
     sp.add_argument("--sandbox", action="store_true",
                     help="with --trace: run the tests in Lantern's sandbox, the way the app does (on a copy of the "
-                         "project that is thrown away afterwards, with no way out to the internet and nothing "
+                         "project that is thrown away afterwards, kept from the internet and your network where "
+                         "this system's sandbox holds them, which the run's first lines say, and with nothing "
                          "they start left running). Only a test command runs there. Without it the command runs "
                          "in the project's folder, as you")
     sp.add_argument("--test-minutes", type=_minutes, metavar="N",
@@ -680,6 +797,53 @@ def _main(argv: list[str]) -> int:
     sp = sub.add_parser("packs", help="list the analysis packs (rule and framework pattern files) in use and check them")
     common(sp)
 
+    sp = sub.add_parser("diff", help="what a change does to the app: two versions of the project checked and compared "
+                                     "(doors, login checks, links between page and server, findings, the release decision)")
+    sp.add_argument("path", nargs="?", default=".")
+    sp.add_argument("range", nargs="?", metavar="BASE..HEAD",
+                    help="the two versions: BASE..HEAD, BASE...HEAD (from the commit where the two parted, as a pull "
+                         "request shows it), or BASE alone (compared with the files as they are now). With none: the "
+                         "last commit compared with the files as they are now")
+    sp.add_argument("--out", help="folder for the receipt and the two checks (default PATH/.lantern/change)")
+    sp.add_argument("--offline", action="store_true", help="skip the dependency audits in both checks")
+    sp.add_argument("--privacy", choices=["full", "structure"], default="full",
+                    help="structure: keep the project's source out of the two checks' own reports")
+    sp.add_argument("--base-results", metavar="DIR", help="results of a check already made of the code before the change")
+    sp.add_argument("--head-results", metavar="DIR", help="results of a check already made of the code after the change")
+    sp.add_argument("--base-label", metavar="WORDS", help="what the receipt calls the code before the change (\"main\")")
+    sp.add_argument("--head-label", metavar="WORDS", help="what the receipt calls the code after it (\"this pull request\")")
+    sp.add_argument("--format", choices=["line", "md", "json"], default="line",
+                    help="what to print: where the files were written (default), the text for a pull request, or the data")
+    sp.add_argument("--short", action="store_true", help="with --format md: without the list of changed functions")
+    sp = sub.add_parser("fix", help="the fix of one finding: what it has to show (brief), and whether a fix shows it "
+                                    "(check); a fix that only hides the finding is refused")
+    fsub = sp.add_subparsers(dest="fix_cmd", required=True)
+    fp = fsub.add_parser("brief", help="where the finding is, how it is reached, and the contract a fix is held to; "
+                                       "keeps the check as it is now as the one the fix is compared with")
+    common(fp)
+    fp.add_argument("finding", help="finding id (shown in the Findings tab), or the beginning of one")
+    fp.add_argument("--format", choices=["text", "json"], default="text")
+    fp = fsub.add_parser("check", help="check the project again and hold the fix to the contract: 0 passed, 1 refused, "
+                                       "3 incomplete. After --, the command that runs the project's tests: it runs "
+                                       "in the sandbox, and without it the fix cannot pass")
+    common(fp)
+    fp.add_argument("finding", help="finding id (shown in the Findings tab), or the beginning of one")
+    fp.add_argument("--candidate", metavar="DIR",
+                    help="the fix stands in this folder (the project with the fix in it) and not in the project: its "
+                         "change is put onto a copy of the project that is thrown away, and checked there. The "
+                         "project and its results are left as they are")
+    fp.add_argument("--suggest", metavar="FILE",
+                    help="with --candidate: write the change to FILE as a patch for a person to apply, only when the "
+                         "fix passed. Lantern applies nothing and sends nothing anywhere")
+    fp.add_argument("--offline", action="store_true",
+                    help="skip the dependency audits, and fetch no libraries for the tests")
+    fp.add_argument("--test-minutes", type=_minutes, metavar="N",
+                    help="how long the tests may take, from 1 to 240 minutes (default: 10)")
+    fp.add_argument("--test-memory", type=_megabytes, metavar="MB",
+                    help="how much memory the tests may have in use, in megabytes (default: 2048)")
+    fp.add_argument("--format", choices=["text", "json"], default="text",
+                    help="what to print: the verdict part by part (default), or the data")
+
     sp = sub.add_parser("github", help="leave Lantern's report on the GitHub repository it checked: setup, summary, save")
     gsub = sp.add_subparsers(dest="gh", required=True)
     gp = gsub.add_parser("setup", help="write the workflow that checks every push and pull request, the badge and its "
@@ -696,6 +860,9 @@ def _main(argv: list[str]) -> int:
         gp.add_argument("--report-url", help="link to the full report's download (https://github.com/... only)")
         if name == "summary":
             gp.add_argument("--short", action="store_true", help="the shorter form for a pull request's comment")
+            gp.add_argument("--change", metavar="FILE", help="the data file of a change receipt (change.json of "
+                                                             "`lantern diff`): what a pull request changes is "
+                                                             "written right after the decision")
             gp.add_argument("--decision-only", action="store_true", help="print only Passed, Blocked, Incomplete "
                                                                          "or none")
         else:
@@ -780,6 +947,10 @@ def _main(argv: list[str]) -> int:
         return 0
     if a.cmd == "accept":
         return cmd_accept(a)
+    if a.cmd == "diff":
+        return cmd_diff(a)
+    if a.cmd == "fix":
+        return cmd_fix(a, trace_cmd)
     if a.cmd == "github":
         return cmd_github(a)
     if a.cmd == "starter":

@@ -72,8 +72,10 @@ def test_links_need_a_valid_unexpired_key_for_that_run(done_run, tmp_path, clone
     wrong = k[:-1] + ("1" if k[-1] == "0" else "0")       # a different last digit, whatever the key ends in
     assert cloud.get(f"/r/{rid}/report.html?k={wrong}").status_code == 401
     assert cloud.get(f"/r/{rid}/report.html?k=garbage").status_code == 401
-    exp, mac = k.split(".")
-    assert cloud.get(f"/r/{rid}/report.html?k={int(exp) + 999}.{mac}").status_code == 401   # can't stretch the time
+    exp, lanes, who, mac = k.split(".")
+    assert lanes == "all"
+    assert cloud.get(f"/r/{rid}/report.html?k={int(exp) + 999}.{lanes}.{who}.{mac}").status_code == 401   # can't stretch the time
+    assert cloud.get(f"/r/{rid}/report.html?k={exp}.{mac}").status_code == 401                # the older form of a link
     # A key for one run does not open another.
     rid2 = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(gw.sign_in("github:2", "github:b"))).json()["id"]
     assert cloud.get(f"/r/{rid2}/report.html?k={k}").status_code == 401

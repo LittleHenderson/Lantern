@@ -10,8 +10,8 @@ the database and on disk. Out here `judge` reads that record. One outcome per ca
 
 * `held`         the app did what the plan says must hold, and the control beside it worked;
 * `broken`       with codes (`CODES`): let in, refused but changed, leaked, accepted, took effect, sent elsewhere,
-                 outside address, outside file, unlimited, forgotten, raced, repeated, partial, carried over, stuck,
-                 crashed;
+                 outside address, outside file, unlimited, forgotten, lived on, raced, repeated, partial, carried
+                 over, stuck, crashed;
 * `inconclusive` the control failed (the rightful person was refused too, or nothing changed for them), so a
                  refusal proves nothing;
 * `not-run`      with the reason.
@@ -36,8 +36,8 @@ from .python_frontend import project_text
 
 PLAN_NAME = "lantern-behaviour.json"
 RESULT_NAME = "behaviour.json"
-KINDS = ("refuse", "hide", "tokens", "input", "keeps", "contain", "redirect", "address", "limit", "once", "retry",
-         "faults")
+KINDS = ("refuse", "hide", "tokens", "input", "keeps", "contain", "redirect", "address", "limit", "ended", "once",
+         "retry", "faults")
 TOKEN_VARIANTS = ("none", "empty", "garbage", "truncated", "altered", "unsigned", "other-key", "expired")
 CODES = {
     "let-in": "was let in",
@@ -50,6 +50,7 @@ CODES = {
     "outside-file": "the app wrote, or tried to write, outside the folders it keeps its files in",
     "unlimited": "the tries were not limited",
     "forgotten": "the limit was forgotten",
+    "lived-on": "what was ended was accepted again",
     "raced": "two requests at the same moment did what one after the other does not",
     "repeated": "the same request sent again was done again",
     "partial": "a request that failed half-way left half of its work behind",
@@ -58,6 +59,7 @@ CODES = {
     "crashed": "the app answered with a server error",
 }
 MAX_CHECKS = 2000
+ACROSS = {"same": "straight after", "restart": "after a restart", "other-worker": "on another worker"}
 HOST = re.compile(r"""['"]([^'"]{1,200})['"]""")
 
 
@@ -131,7 +133,9 @@ def check(plan: dict) -> dict:
             raise PlanError(f"{where}: its id is used twice, or holds a slash")
         seen.add(c["id"])
         _request_ok(c.get("request"), where)
-        for key in ("good", "then", "after"):
+        if c["kind"] == "ended":
+            _ended_ok(c, where, people)
+        for key in ("good", "then", "after", "end"):
             if key in c:
                 _request_ok((c[key] or {}).get("request", c[key]) if isinstance(c[key], dict) else c[key], where)
         for who in _list(c.get("who")) + _list(c.get("allowed")) + _list(c.get("shown_to")):
@@ -141,6 +145,28 @@ def check(plan: dict) -> dict:
                                 or any(v not in TOKEN_VARIANTS for v in c["variants"])):
             raise PlanError(f'{where}: "variants" is a list of ways to send a token: {", ".join(TOKEN_VARIANTS)}')
     return plan
+
+
+REFUSED = (401, 403)                 # how an app says "not you (any more)", unless a check names its own
+
+
+def _ended_ok(c: dict, where: str, people: dict) -> None:
+    """A check of the kind `ended` names the request that ends something, and may say across what and how the
+    app refuses."""
+    end = c.get("end")
+    if not isinstance(end, dict):
+        raise PlanError(f'{where}: a check of the kind "ended" names under "end" the request that ends something '
+                        "(a sign-out, an account switched off, an invitation taken back)")
+    if "request" in end and end.get("as", "nobody") != "nobody" and end["as"] not in people:
+        raise PlanError(f"{where}: the plan names nobody called {str(end['as'])[:40]}")
+    across = c.get("across")
+    if across is not None and (not isinstance(across, list) or not across or any(a not in ACROSS for a in across)):
+        raise PlanError(f'{where}: "across" is a list of {", ".join(ACROSS)}')
+    refused = c.get("refused")
+    if refused is not None and (not isinstance(refused, list) or not refused or any(
+            isinstance(r, bool) or not isinstance(r, int) or not 300 <= r < 500 for r in refused)):
+        raise PlanError(f'{where}: "refused" is a list of the statuses this app refuses with (401, 403, or 302 where '
+                        "it sends people to its sign-in page): 300 to 499")
 
 
 def _list(x) -> list:
@@ -170,9 +196,6 @@ def _step(request: dict, who=None, **more) -> dict:
     if who and who != "nobody":
         step["as"] = who
     return step
-
-
-ACROSS = {"same": "straight after", "restart": "after a restart", "other-worker": "on another worker"}
 
 
 def scene(plan: dict) -> tuple[dict, list]:
@@ -217,6 +240,16 @@ def scene(plan: dict) -> tuple[dict, list]:
             for across in c.get("across") or list(ACROSS):
                 more = {"same": [last], "restart": [{"restart": True}, last], "other-worker": [dict(last, worker=1)]}[across]
                 add(c, ACROSS[across], tries + more, fresh=True, across=across)
+        elif kind == "ended":
+            # The request that works, the request that ends something, the first request again. On another worker
+            # that copy of the app answers the request once before the end, so what it remembers is in play.
+            end = c["end"]
+            asks, ends = _step(req, who), _step(end.get("request", end), end.get("as", who))
+            there = dict(asks, worker=1)
+            for across in c.get("across") or list(ACROSS):
+                steps = {"same": [asks, ends, asks], "restart": [asks, ends, {"restart": True}, asks],
+                         "other-worker": [asks, there, ends, there]}[across]
+                add(c, ACROSS[across], steps, fresh=True, across=across)
         elif kind == "once":
             one, two = _step(req, who), _step(req, who, worker=1)
             for n in (1, 2):
@@ -451,6 +484,28 @@ def judge(plan: dict, cases: list, observed: dict) -> list:
                 at_once = (by_id.get(f"{case['check']}/{ACROSS['same']}") or {}).get("steps") or [{}]
                 kept_at_once = case.get("across") != "same" and _status(at_once[-1]) in limited
                 codes.append("forgotten" if kept_at_once else "unlimited")
+        elif kind == "ended":
+            refused = tuple(check.get("refused") or REFUSED)
+            asked = [s for s in steps if "restarted" not in s]
+            before = [_status(s) for s in asked[:-2]]
+            ended = _status(asked[-2]) if len(asked) > 2 else None
+            worked = [s for s in before if s is not None and 200 <= s < 300]
+            if len(asked) < 3 or len(worked) != len(before):
+                bad = next((s for s in before if s not in worked), None)
+                why = (f"the request did not work before anything was ended (status {bad}), so a refusal afterwards "
+                       "proves nothing")
+            elif ended is None or ended >= 400:
+                why = f"the request that ends it did not work (status {ended}), so nothing was ended"
+            elif status in refused:
+                pass
+            elif status is None or status >= 500:
+                codes.append("crashed")
+            elif 200 <= status < 300:
+                codes.append("lived-on")
+            else:
+                why = (f"after it was ended the request was answered with status {status}: not accepted as before, and "
+                       f"not one of the refusals this check names ({', '.join(str(r) for r in refused)}); a check says "
+                       'how its app refuses under "refused"')
         elif kind == "once":
             ends = [cs[-1]["state"]["loud"] for cs in ctl_steps if cs and "state" in cs[-1]]
             if not steps[0].get("paused"):

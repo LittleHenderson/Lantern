@@ -279,7 +279,10 @@ def test_on_the_command_line_lantern_told_to_end_takes_the_tests_with_it(tmp_pat
     repo, mark = _slow(tmp_path)
     lantern = subprocess.Popen([sys.executable, "-m", "lantern.cli", "analyze", str(repo), "--offline", "--trace", "--",
                                 "python", "-m", "pytest", "-q"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               cwd=Path(cli.__file__).resolve().parent.parent, start_new_session=True)
+                               cwd=Path(cli.__file__).resolve().parent.parent, start_new_session=True,
+                               # as a terminal starts it: a signal these tests were told to pass over (a run
+                               # started under nohup hands that on) is one Lantern leaves as it found it
+                               preexec_fn=lambda: signal.signal(getattr(signal, how), signal.SIG_DFL))
     try:
         deadline = time.monotonic() + 120
         while not _started(mark) and lantern.poll() is None and time.monotonic() < deadline:
@@ -409,7 +412,7 @@ def test_in_the_app_the_sheet_takes_the_limit_and_remembers_it(tmp_path, monkeyp
                            {"command": " ".join(PYTEST), "confirm": True, "minutes": bad})
             assert code == 400 and "from 1 to 240" in e["error"], (bad, code, e)
         code, j = call(base, f"/api/projects/{pid}/trace", "POST",
-                       {"command": " ".join(PYTEST), "confirm": True, "minutes": 25})
+                       {"command": " ".join(PYTEST), "confirm": True, "minutes": 25, "reach": sandbox.reach("python")["ask"]})
         assert code == 202, j
         done = wait(base, j["id"], timeout=180)
         assert done["status"] == "done" and done["result"]["returncode"] == 0, done

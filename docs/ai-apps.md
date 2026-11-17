@@ -14,6 +14,11 @@ Mistral, Cohere, Groq, Replicate, Hugging Face, Ollama, LangChain, LlamaIndex, B
 Chroma, Weaviate, Qdrant, pgvector/Supabase, FAISS, Milvus; Stripe; Resend/SendGrid/Mailgun/Postmark/SES/
 nodemailer/smtplib; Twilio/Vonage. Add more in `CALL_PATTERNS`.
 
+A call is read from the code, not from what is written about it: a remark (also one at the end of a line of code, and
+every line of a block remark or a Python docstring) and a text that runs over several lines make no call. One
+exception is meant: a vector store named in the text of a query (`"select … <=> …"` over several lines) is still a
+vector store. Not told apart yet: a JavaScript template that runs over several lines is read as code.
+
 ## Findings
 
 | Rule | What it means | Rank |

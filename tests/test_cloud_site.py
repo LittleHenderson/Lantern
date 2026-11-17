@@ -121,46 +121,98 @@ def test_the_intro_plays_on_the_website_from_this_origin(env):
 
 
 # ---- sign-in ----
+def _started(c):
+    """A sign-in the website's page starts: (the answer, the mark of the sign-in, the secret's fingerprint the gateway
+    is shown, the secret itself as only the browser's cookie holds it)."""
+    from urllib.parse import parse_qsl, urlsplit
+    r = c.post("/v1/signin/start", json={"provider": "github"}, headers=SITE)
+    assert r.status_code == 200
+    asked = dict(parse_qsl(urlsplit(r.json()["url"]).query))
+    nonce, _, verifier = set_cookies(r)["lsi"]["value"].partition(".")
+    return r, nonce, asked["challenge"], verifier
+
+
 def test_sign_in_through_the_gateway_puts_the_token_in_an_httponly_cookie(env):
+    import base64
+    import hashlib
+
+    from lantern_gateway import auth
     c, gw, _ = env
     assert c.get("/v1/signin/providers").json() == {"providers": ["github"]}
     assert c.post("/v1/signin/start", json={"provider": "github"}).status_code == 403       # not from our page
     assert c.post("/v1/signin/start", json={"provider": "google"}, headers=SITE).status_code == 400   # not switched on
-    r = c.post("/v1/signin/start", json={"provider": "github"}, headers=SITE)
-    assert r.status_code == 200
+    r, nonce, challenge, verifier = _started(c)
     ck = set_cookies(r)["lsi"]
-    assert ck["httponly"] and ck["secure"] and ck["samesite"].lower() == "strict" and ck["path"] == "/v1/signin"
-    cli = ck["value"]
-    assert r.json()["url"] == f"http://gateway.test/v1/auth/github/start?cli={cli}"
-    assert cli not in json.dumps(r.json()).replace(r.json()["url"], "")
+    # Lax: the browser comes back from the gateway, another site, and must bring the cookie along
+    assert ck["httponly"] and ck["secure"] and ck["samesite"].lower() == "lax" and ck["path"] == "/v1/signin"
+    assert r.json()["url"] == (f"http://gateway.test/v1/auth/github/start?challenge={challenge}"
+                               f"&return=https%3A%2F%2Flantern.example%2Fv1%2Fsignin%2Freturn&nonce={nonce}")
+    # the page is given the fingerprint of the secret, never the secret
+    assert challenge == base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    assert verifier not in r.text and len(verifier) >= 43
+    # and the gateway takes that start as it is, for a website it names
+    back = "https://lantern.example/v1/signin/return"
+    assert auth.asked(challenge, back, nonce, auth.return_origins("https://lantern.example"))["return"] == back
     # still signing in
     assert c.post("/v1/signin/poll", headers=SITE).json() == {"signed_in": False}
-    # the gateway's callback parks the token under the code; the next poll collects it into a cookie
-    tok = gw.sign_in("github:7", "github:octo")
-    gw.park(cli, tok)
+    # the person signs in at the gateway, which sends this browser back with a one-time code
+    code = gw.hand_over("github:7", "github:octo", challenge)
+    r = c.get("/v1/signin/return", params={"code": code, "state": nonce})
+    assert r.status_code == 200 and "You're signed in" in r.text and "lt_" not in r.text and "octo" not in r.text
+    assert r.headers["referrer-policy"] == "no-referrer" and "no-store" in r.headers["cache-control"]
+    assert r.headers["content-security-policy"].startswith("default-src 'none'")
+    lt = set_cookies(r)["lt"]
+    tok = lt["value"]
+    assert tok.startswith("lt_") and lt["httponly"] and lt["secure"] and lt["samesite"].lower() == "strict" and lt["path"] == "/"
+    assert set_cookies(r)["lsi"]["value"] == ""                                   # the sign-in's own cookie is gone
     r = c.post("/v1/signin/poll", headers=SITE)
     assert r.json() == {"signed_in": True, "label": "github:octo"} and tok not in r.text
-    lt = set_cookies(r)["lt"]
-    assert lt["value"] == tok and lt["httponly"] and lt["secure"] and lt["samesite"].lower() == "strict" and lt["path"] == "/"
     me = c.get("/v1/me")
     assert me.status_code == 200 and me.json()["label"] == "github:octo"
-    # the code is spent and its cookie gone
-    assert c.post("/v1/signin/poll", headers=SITE).status_code == 400
+    # the code is spent: the same address again signs nobody in
+    assert c.get("/v1/signin/return", params={"code": code, "state": nonce}).status_code == 400
     # sign out
     assert c.post("/v1/signout").status_code == 403
     assert c.post("/v1/signout", headers=SITE).status_code == 200
     assert c.get("/v1/me").status_code == 401
+    assert c.post("/v1/signin/poll", headers=SITE).status_code == 400            # nothing in progress here now
 
 
 def test_another_browser_cannot_collect_someone_elses_sign_in(env):
+    """Two people at the website. Whoever holds the code but not the cookie gets nothing, and so does whoever holds
+    a cookie of their own making; a code that came to the wrong browser is used up."""
     c, gw, app = env
-    r = c.post("/v1/signin/start", json={"provider": "github"}, headers=SITE)
-    cli = set_cookies(r)["lsi"]["value"]
-    gw.park(cli, gw.sign_in("github:7", "github:octo"))
+    _, nonce, challenge, verifier = _started(c)
+    code = gw.hand_over("github:7", "github:octo", challenge)
     other = TestClient(app, base_url="https://lantern.example")
-    assert other.post("/v1/signin/poll", headers=SITE).status_code == 400      # no code of its own
-    other.cookies.set("lsi", "x" * 48, domain="lantern.example", path="/v1/signin")
-    assert other.post("/v1/signin/poll", headers=SITE).json() == {"signed_in": False}
+    assert other.post("/v1/signin/poll", headers=SITE).status_code == 400      # no sign-in of its own
+    r = other.get("/v1/signin/return", params={"code": code, "state": nonce})  # the address, read off somewhere
+    assert r.status_code == 400 and "not started in this browser" in r.text and "lt" not in set_cookies(r)
+    assert other.get("/v1/me").status_code == 401
+    # the code went to the wrong browser, so it is used up: the right browser signs in again instead
+    r = c.get("/v1/signin/return", params={"code": code, "state": nonce})
+    assert r.status_code == 400 and "lt" not in set_cookies(r) and c.get("/v1/me").status_code == 401
+    assert gw.db.execute("select count(*) from sessions").fetchone()[0] == 0   # no token was ever made for it
+
+    # a cookie of the other browser's own making, with the right mark and another secret
+    _, nonce, challenge, verifier = _started(c)
+    code = gw.hand_over("github:7", "github:octo", challenge)
+    other.cookies.set("lsi", f"{nonce}.{'x' * 64}", domain="lantern.example", path="/v1/signin")
+    r = other.get("/v1/signin/return", params={"code": code, "state": nonce})
+    assert r.status_code == 400 and "lt" not in set_cookies(r) and other.get("/v1/me").status_code == 401
+
+    # somebody else's sign-in, pointed at this website, in a browser with a sign-in of its own under way: the mark differs
+    _, nonce, challenge, verifier = _started(c)
+    theirs = gw.hand_over("github:9", "github:other", "h" * 43)
+    r = c.get("/v1/signin/return", params={"code": theirs, "state": "m" * 32})
+    assert r.status_code == 400 and "lt" not in set_cookies(r) and c.get("/v1/me").status_code == 401
+    assert gw.redeem(theirs, "v" * 64) is None                                 # used up
+    for bad in ({}, {"code": "short", "state": nonce}, {"state": nonce}, {"code": "c" * 43}):
+        r = c.get("/v1/signin/return", params=bad)
+        assert r.status_code == 400 and "lsi" not in set_cookies(r)
+    # none of that disturbed this browser's own sign-in, which finishes as it would have
+    r = c.get("/v1/signin/return", params={"code": gw.hand_over("github:7", "github:octo", challenge), "state": nonce})
+    assert r.status_code == 200 and set_cookies(r)["lt"]["value"].startswith("lt_") and c.get("/v1/me").status_code == 200
 
 
 def test_cookie_requests_that_change_something_need_the_sites_header(env):

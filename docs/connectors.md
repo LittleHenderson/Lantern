@@ -33,10 +33,31 @@ switch cannot tell you whether anything is actually connected.
 | `lantern_explain` | The stored three-lens explanation and the source. Never calls a model | no |
 | `lantern_readiness` | The release decision with each required criterion's state and what is missing (`release`), score, grade, the checklist's own number (`checklist`), failed checks with fixes, what to do first, protections | no |
 | `lantern_analyze` | (Re-)analyze a folder; reports fixed and new findings since last time | rewrites `.lantern/` |
-| `lantern_recheck` | After a fix: is this finding gone, still open, or moved? | rewrites `.lantern/` |
+| `lantern_fix_brief` | Before a fix: where one finding is, the path a user takes to it, how the value gets there, and the **fix contract**: the seven things `lantern_recheck` will hold the fix to. Keeps the check as it is now, as the one the fix is compared with | keeps a copy of the check in Lantern's own folder |
+| `lantern_recheck` | After a fix: analyzes again and holds the change to the fix contract. `fixed` only when no part of the contract is broken; `refused` (with the part that broke) when the finding only stopped showing; `still-open` or `moved` otherwise | rewrites `.lantern/` |
 | `lantern_verify` | Re-run an Evidence Report's analysis and compare digests | no |
 
 Every answer carries both readable text and structured JSON (`structuredContent`).
+
+### The fix loop: brief, change, recheck
+
+A finding stops showing for many reasons that are no fix: a comment excuses it, the code is moved to a place
+Lantern does not read, the call is put together at run time, the route that led to it is taken away, the test
+that would have failed is deleted. So the recheck does not ask "is the finding's id gone?". It compares the
+check made before the fix with the one made after it, part by part (`docs/fix.md` has the seven parts), and
+calls a finding fixed only when no part is broken. An assistant that tries one of the shortcuts is told which
+part broke and what Lantern read there, in sentences it can act on.
+
+Two things to know:
+
+* **The connector starts no code of a project, so it runs no tests.** After a true fix the recheck answers
+  `fixed` with the contract's verdict `incomplete`: nothing is broken, and the tests were not run on the fixed
+  code. `lantern fix check PATH FINDING -- <test command>` in a terminal runs them in the sandbox, and only then
+  can the verdict be `passed`.
+* **A "fix" that was refused cannot pass by being checked a second time.** The check from before the fix is
+  kept in Lantern's own folder (`LANTERN_HOME/fix-briefs/`, outside the project the assistant works in) when the
+  brief is asked for, or else when the fix is first rechecked, and every later recheck of that finding is
+  compared with it. The answer says which check it was compared with and when that was kept.
 
 ### What it never gets
 
@@ -44,8 +65,11 @@ Every answer carries both readable text and structured JSON (`structuredContent`
   cannot accept or close findings". Accepting a risk needs a person's written reason, through
   `lantern accept` or the Accept button in the app, and appears in the Evidence Report with that reason.
   So "a model never closes a finding" holds by construction.
-* **Run the project's code.** `lantern_verify` refuses a report made with a runtime trace, because
-  replaying the trace would run whatever command the report named. The builder runs that from a terminal.
+* **Run the project's code.** No tool starts the project's tests, its app or any command of its own: the fix
+  contract's part about tests stays "not shown" here. `lantern_verify` refuses a report made with a runtime trace, because
+  replaying the trace would run whatever command the report named. The command such a report names is shown as
+  what the report says, each word in quotes, never as a line ready to run; a person who knows it as the
+  project's own test command types it in a terminal.
 * **Your code.** The connector returns function source only for `lantern_explain`, to the assistant you chose,
   on your machine. Nothing is sent anywhere by Lantern.
 
@@ -55,8 +79,9 @@ Every finding card in the report has a **Send to…** button: Claude, ChatGPT, o
 Code and others). It sends a **reference**, not a pasted blob:
 
 > Fix Lantern finding 57fa455f7b3b (B602) in the shop project. If the Lantern connector is available, call
-> lantern_findings with id 57fa455f7b3b for the file, line, click path and fix, lantern_paths before editing,
-> and lantern_recheck with the finding id after the fix. Do not try to accept or close it; only I can, with a
+> lantern_fix_brief with finding 57fa455f7b3b for the file, line, click path, the fix and what a fix has to
+> show (lantern_findings with id 57fa455f7b3b where that tool is missing), lantern_paths before editing, and
+> lantern_recheck with the finding id after the fix. Do not try to accept or close it; only I can, with a
 > reason. Essentials: subprocess call with shell=True at shop/app.py:16 (uses outside input: parameter
 > `name`). Reachable from the app: /admin page → BackupButton → … → app.backup.
 

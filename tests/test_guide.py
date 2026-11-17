@@ -178,7 +178,7 @@ def test_every_page_reaches_the_guide():
     for note in (cloud_app.SHARE_GONE, cloud_app.EXPIRED_PAGE):
         assert '<a href="/guide"' in note
     from lantern_gateway import auth
-    for page in (auth.login_page(["github"], "", None), auth.error_page("x"), auth.done_page("t", "github:me", True)):
+    for page in (auth.login_page(["github"]), auth.error_page("x"), auth.done_page("t", "github:me", True)):
         assert 'class="guide" href="https://lantern-cloud.fly.dev/guide"' in page
     landing = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
     assert landing.count('href="https://lantern-cloud.fly.dev/guide"') == 2   # the menu ("Guide" on a phone) and the footer

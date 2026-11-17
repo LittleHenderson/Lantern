@@ -16,12 +16,14 @@ Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import gzip
 import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -45,7 +47,8 @@ from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN
 log = logging.getLogger("lantern_cloud")
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
-SIGNIN_COOKIE = "lsi"          # the one-time code a sign-in in progress is parked under, for this browser only
+SIGNIN_COOKIE = "lsi"          # a sign-in in progress, for this browser only: its mark and the secret kept for it
+SIGNIN_CODE = re.compile(r"[A-Za-z0-9_-]{43,128}")     # the one-time code the gateway sends the browser back with
 SESSION_DAYS = 30
 # What /r/{id}/<name> serves, and the result file behind each. Every page is rebuilt from our templates
 # (`lantern.server.result_page`); nothing in the run's folder is sent as a page.
@@ -114,7 +117,17 @@ def sweep(store, results_dir: str, days: int, cleanup: Cleanup | None = None) ->
     return gone
 
 
-EXPIRED_PAGE = _note_page("This link has expired", "Report links work for an hour. Open the run again from "
+SIGNED_IN_PAGE = _note_page("You're signed in", "Lantern is open in another tab? Go back to it: it has noticed, and you "
+                            "can close this one. Or go on here: <a href=\"/\" style=\"color:#0B5F5A\">open Lantern</a>.")
+SIGNIN_NOT_HERE = _note_page("Sign-in problem", "This sign-in was not started in this browser, or it took too long. "
+                             "<a href=\"/\" style=\"color:#0B5F5A\">Open Lantern</a> and sign in again.")
+SIGNIN_FAILED = _note_page("Sign-in problem", "That sign-in did not work. <a href=\"/\" style=\"color:#0B5F5A\">Open "
+                           "Lantern</a> and sign in again.")
+SIGNIN_LATER = _note_page("Sign-in problem", "Sign-in is unavailable right now. <a href=\"/\" style=\"color:#0B5F5A\">Open "
+                          "Lantern</a> and try again in a minute.")
+EXPIRED_PAGE = _note_page("This link no longer opens", "It has expired or was ended. Report links work for an hour, "
+                          "and only while the person they were made for is signed in on this website and may read "
+                          "the report. Open the run again from "
                           "<a href=\"/\" style=\"color:#0B5F5A\">My runs</a>.")
 
 
@@ -133,6 +146,12 @@ def _page_headers(extra: dict | None) -> dict:
 # reloading a slow page does not stack builds of half a gigabyte each until the machine runs out of memory.
 COMPRESS_FROM = 1024
 RENDERS = threading.BoundedSemaphore(2)
+# Seconds from one question to the gateway about the sign-in behind an open stream of a run's progress to the next.
+STREAM_ASKS_AGAIN = 15.0
+# What a person is told when they signed out here and the gateway could not be reached.
+NOT_HEARD = ("This browser is signed out, and this website takes that sign-in no more. Lantern could not reach its "
+             "sign-in service to end it there as well{again}. To be sure, sign in again in a little while and "
+             "choose \"Sign out everywhere\".")
 
 
 def result_response(out: Path, name: str, request: Request, extra: dict | None = None, lanes=None) -> Response:
@@ -190,6 +209,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     async def lifespan(_app: FastAPI):
         yield
         upkeep_over.set()
+        ident.over.set()
         if worker is not None:   # the service is stopping: no new run starts, and the step each run is in is
             worker.shutdown()    # ended with everything it started; the run's record then says why it stopped
 
@@ -197,7 +217,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     app.state.store, app.state.settings, app.state.identity, app.state.worker = store, s, ident, worker
     app.state.cleanup = cleanup
     provider_for = provider_for or (lambda token: hosted(token, s.gateway_url))
-    idle = IdleExit(s.idle_minutes, busy=lambda: store.busy() > 0)
+    # A sign-out the gateway has not heard of yet is work under way too: the service does not go to sleep on it.
+    idle = IdleExit(s.idle_minutes, busy=lambda: store.busy() > 0 or bool(ident.unfinished))
     app.state.idle = idle
     idle.start()
 
@@ -226,8 +247,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 raise HTTPException(403, "This request did not come from Lantern's own page.")
         if not token:
             raise HTTPException(401, "Sign in first.")
-        try:
-            who = await ident.whoami(token)
+        try:        # asked of the gateway now; a remembered "yes" (where the owner allows one) only for a read
+            who = await ident.whoami(token, fresh=request.method != "GET")
         except GatewayUnavailable:
             raise HTTPException(503, "Lantern can't check your sign-in right now. Try again in a minute.") from None
         if who is None:
@@ -393,13 +414,35 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         who = await signed_in(request)
         lanes = readable_run(rid, who)["lanes"]
         quiet = lanes != "all"    # the log describes the whole app
+        token = request.state.token
+
+        async def still_theirs(asked: float) -> tuple[bool, float]:
+            """A stream stays open for minutes: whether its reader may still read this run, and the same layers of
+            it, is looked up at every round, and the gateway is asked again about the sign-in every
+            `STREAM_ASKS_AGAIN` seconds (until 2026-11-15 both were looked at once, when the stream was opened).
+            A gateway that cannot be reached ends nothing: it is asked again at the next round."""
+            try:
+                if readable_run(rid, who)["lanes"] != lanes:
+                    return False, asked
+            except HTTPException:
+                return False, asked
+            if time.monotonic() - asked >= STREAM_ASKS_AGAIN:
+                try:
+                    now = await ident.whoami(token, fresh=True)
+                except GatewayUnavailable:
+                    return True, asked
+                return bool(now) and now["account"] == who["account"], time.monotonic()
+            return True, asked
 
         async def events():
-            n = 0
+            n, asked = 0, time.monotonic()
             while True:
                 r = store.run(rid)
                 if r is None:
                     return
+                theirs, asked = await still_theirs(asked)
+                if not theirs:
+                    return                    # closed without an `end`: the page asks again and is told why
                 if r["status"] in FINISHED:
                     lines = (r.get("log_tail") or "").splitlines() if n == 0 else []
                     lines += worker.logs.since(rid, n)[0] if worker and n else []
@@ -418,25 +461,50 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     vsecret = (s.view_secret or (hashlib.sha256(("view:" + s.admin_secret).encode()).hexdigest() if s.admin_secret
                                  else secrets.token_hex(32))).encode()
 
-    def view_key(rid: str, exp: int, lanes: str = "all") -> str:
-        """`exp.sig` for the whole report; `exp.lanes.sig` for a member who may see only some layers, so the
-        link itself says which layers it opens and can't be edited to open more."""
-        if lanes == "all":
-            return f"{exp}.{hmac.new(vsecret, f'{rid}:{exp}'.encode(), hashlib.sha256).hexdigest()[:32]}"
-        return f"{exp}.{lanes}.{hmac.new(vsecret, f'{rid}:{exp}:{lanes}'.encode(), hashlib.sha256).hexdigest()[:32]}"
+    def whose(account: str) -> str:
+        """An account as a view link names it: a keyed fingerprint, so the link says nobody's name."""
+        return hmac.new(vsecret, ("who:" + account).encode(), hashlib.sha256).hexdigest()[:16]
+
+    def view_key(rid: str, exp: int, account: str, lanes: str = "all") -> str:
+        """`exp.lanes.who.sig`: until when, which layers ("all", or a scope code), whom it was made for, and a
+        signature over those, the run and the account's round of links (`store.views`), so none of them can be
+        edited. Until 2026-11-15 a link said nothing of whom it was made for."""
+        who = whose(account)
+        signed = f"{rid}:{exp}:{lanes}:{who}:{store.views(account)}"
+        return f"{exp}.{lanes}.{who}.{hmac.new(vsecret, signed.encode(), hashlib.sha256).hexdigest()[:32]}"
+
+    def lanes_now(r: dict, who: str) -> tuple[str, str] | None:
+        """(account, layers) of the person a view link names, as they may read this run at this moment: the run's
+        owner, or a member of the workspace the run is in now. None: nobody who may read it."""
+        if hmac.compare_digest(whose(r["account"]), who):
+            return r["account"], "all"
+        wid = r.get("workspace")
+        for m in store.members(wid) if wid else []:
+            if hmac.compare_digest(whose(m["account"]), who):
+                return m["account"], store.member_lanes(wid, m["account"]) or "all"
+        return None
 
     def key_lanes(rid: str, k: str | None) -> str | None:
-        """The layers a view link opens ("all", or a scope code), or None when it is wrong or has expired."""
+        """The layers a view link opens ("all", or a scope code), or None: it is wrong, has expired, was made
+        before its account signed out, or its person may no longer read the run or no longer all of its layers.
+        What the person may read is looked up at every use (review stage, 2026-11-15): until then a link kept the
+        run and the layers of the moment it was made, for somebody since taken out of the workspace too."""
         parts = (k or "").split(".")
+        if len(parts) != 4 or len(k or "") > 200:
+            return None
         try:
-            exp, lanes = int(parts[0]), (parts[1] if len(parts) == 3 else "all")
+            exp, lanes, who = int(parts[0]), parts[1], parts[2]
             if scope.code(scope.decode(lanes)) != lanes:    # one spelling per set of layers
                 return None
         except ValueError:
             return None
-        if len(parts) not in (2, 3) or exp <= time.time():
+        r = store.run(rid) if exp > time.time() and len(rid) <= 40 else None
+        now = lanes_now(r, who) if r else None
+        if now is None or not hmac.compare_digest(view_key(rid, exp, now[0], lanes), k or ""):
             return None
-        return lanes if hmac.compare_digest(view_key(rid, exp, lanes), k or "") else None
+        if now[1] != "all" and (lanes == "all" or not set(scope.decode(lanes)) <= set(scope.decode(now[1]))):
+            return None                                     # never more layers than its person may see now
+        return lanes
 
     @app.post("/v1/runs/{rid}/view")
     async def view_link(rid: str, request: Request):
@@ -447,7 +515,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if r["status"] != "done":
             raise HTTPException(409, "This run has no report yet.")
         exp = int(time.time()) + s.view_minutes * 60
-        k = view_key(rid, exp, r["lanes"])
+        k = view_key(rid, exp, who["account"], r["lanes"])
         base = f"{s.public_url}/r/{rid}/"
         return {"expires_in": s.view_minutes * 60,
                 **{name.split(".")[0]: f"{base}{name}?k={k}" for name in VIEWABLE}}
@@ -940,8 +1008,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.post("/v1/signin/start")
     async def signin_start(payload: dict, request: Request):
-        """Begin a sign-in: a fresh one-time code, kept in an HttpOnly cookie for this browser only, and the page to
-        open. The person signs in on GitHub or Google through the gateway, which parks the token under the code."""
+        """Begin a sign-in: a fresh secret and a mark of this sign-in, kept in an HttpOnly cookie for this browser only,
+        and the page to open. The gateway is shown the secret's SHA-256 and nothing else of it. When the person has
+        signed in on GitHub or Google, the gateway sends this browser to `/v1/signin/return` with a one-time code,
+        which is worth nothing without the secret."""
         site_only(request)
         provider = payload.get("provider")
         try:
@@ -950,50 +1020,89 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
         if not ok:
             raise HTTPException(400, "Choose GitHub or Google.")
-        cli = secrets.token_urlsafe(36)
-        resp = JSONResponse({"url": ident.login_url(provider, cli)}, headers={"Cache-Control": "no-store"})
-        resp.set_cookie(SIGNIN_COOKIE, cli, max_age=600, path="/v1/signin", secure=secure, httponly=True, samesite="strict")
+        verifier, nonce = secrets.token_urlsafe(48), secrets.token_urlsafe(24)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        resp = JSONResponse({"url": ident.login_url(provider, challenge, f"{s.public_url}/v1/signin/return", nonce)},
+                            headers={"Cache-Control": "no-store"})
+        # Lax, not Strict: the browser comes back from the gateway, which is another site, and must bring this along.
+        resp.set_cookie(SIGNIN_COOKIE, f"{nonce}.{verifier}", max_age=600, path="/v1/signin", secure=secure, httponly=True,
+                        samesite="lax")
         return resp
 
-    @app.post("/v1/signin/poll")
-    async def signin_poll(request: Request):
-        """Collect the token once the person has signed in; it goes into an HttpOnly cookie, never to the page."""
-        site_only(request)
-        cli = request.cookies.get(SIGNIN_COOKIE) or ""
-        if not (32 <= len(cli) <= 128):
-            raise HTTPException(400, "No sign-in in progress here. Start again.")
+    @app.get("/v1/signin/return")
+    async def signin_return(request: Request, code: str | None = None, state: str | None = None):
+        """The gateway sends the browser here when the person has signed in. Only the browser that started this
+        sign-in holds the secret its code is worth anything with; the token goes into an HttpOnly cookie, never into a
+        page. A code that belongs to no sign-in of this browser (somebody else's link led it here) signs nobody in and
+        is used up at the gateway, so that it is worth nothing to anyone who reads it off the address bar."""
+        code = code if code and SIGNIN_CODE.fullmatch(code) else ""
+        nonce, _, verifier = (request.cookies.get(SIGNIN_COOKIE) or "").partition(".")
+        mine = bool(code and nonce and verifier) and hmac.compare_digest(nonce.encode(), (state or "").encode())
+
+        def page(body: str, status: int) -> Response:
+            resp = Response(body, status, media_type="text/html; charset=utf-8", headers=_page_headers(None))
+            if mine and status != 503:      # a code that is not this browser's leaves its own sign-in as it stands
+                resp.delete_cookie(SIGNIN_COOKIE, path="/v1/signin")
+            return resp
         try:
-            token = await ident.claim(cli)
-            who = await ident.whoami(token) if token else None
+            token = await ident.redeem(code, verifier if mine else secrets.token_urlsafe(48)) if code else None
+            who = await ident.whoami(token) if token and mine else None
         except GatewayUnavailable:
-            raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
-        if not token:
-            return JSONResponse({"signed_in": False}, headers={"Cache-Control": "no-store"})
+            return page(SIGNIN_LATER, 503)
+        if not mine:
+            return page(SIGNIN_NOT_HERE, 400)
         if who is None:
-            raise HTTPException(401, "That sign-in did not work. Try again.")
+            return page(SIGNIN_FAILED, 400)
         store.touch_user(who["account"], who["label"])
-        resp = JSONResponse({"signed_in": True, "label": who["label"]}, headers={"Cache-Control": "no-store"})
-        resp.delete_cookie(SIGNIN_COOKIE, path="/v1/signin")
+        resp = page(SIGNED_IN_PAGE, 200)
         resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, path="/", secure=secure, httponly=True,
                         samesite="strict")
         return resp
 
+    @app.post("/v1/signin/poll")
+    async def signin_poll(request: Request):
+        """Has the sign-in this browser started finished? It is collected when the browser comes back
+        (`/v1/signin/return`); this only says so, for the page that is waiting."""
+        site_only(request)
+        token = request.cookies.get(SESSION_COOKIE) or ""
+        try:
+            who = await ident.whoami(token) if token else None
+        except GatewayUnavailable:
+            raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
+        if who is not None:
+            return JSONResponse({"signed_in": True, "label": who["label"]}, headers={"Cache-Control": "no-store"})
+        if not request.cookies.get(SIGNIN_COOKIE):
+            raise HTTPException(400, "No sign-in in progress here. Start again.")
+        return JSONResponse({"signed_in": False}, headers={"Cache-Control": "no-store"})
+
+
     @app.post("/v1/signout")
     async def signout(request: Request, payload: dict | None = None):
         """Sign this browser out (its sign-in ends at the gateway too), or with `{"everywhere": true}` every place
-        the account is signed in: the website on other devices, the app and the CLI."""
+        the account is signed in: the website on other devices, the app and the CLI. `confirmed` says whether the
+        gateway heard: where it could not be reached the browser's cookie is removed and the website takes that
+        sign-in no more, but the sign-in itself is not ended, and the answer says so (until 2026-11-15 it read as
+        a sign-out that worked)."""
         site_only(request)
         everywhere = bool((payload or {}).get("everywhere"))
         token = request.cookies.get(SESSION_COOKIE) or ""
-        ended = 0
+        said = {"signed_in": False, "ended": 0, "confirmed": True}
         if token:
+            account = ident.account_of(token)
             try:
-                ended = await ident.sign_out(token, everywhere)
+                if account is None:           # not used here since the service started: the gateway says whose it is
+                    account = ((await ident.whoami(token, fresh=True)) or {}).get("account")
+                said["ended"] = await ident.sign_out(token, everywhere)
             except GatewayUnavailable:
                 if everywhere:
                     raise HTTPException(503, "Lantern can't reach sign-in right now, so nothing was signed out. "
                                              "Try again in a minute.") from None
-        resp = JSONResponse({"signed_in": False, "ended": ended})
+                later = ident.end_here(token) if len(token) <= 512 else False
+                said.update(confirmed=False, message=NOT_HEARD.format(
+                    again=", and keeps trying for a few minutes" if later else ""))
+            if account:
+                store.end_views(account)      # the links to results made for this account open nothing from now on
+        resp = JSONResponse(said, headers={"Cache-Control": "no-store"})
         resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
 

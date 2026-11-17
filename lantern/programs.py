@@ -135,3 +135,60 @@ def put(folder: Path, name: str, text: str) -> Path:
     path = Path(folder) / name
     path.write_text(text, encoding="utf-8", newline="\n")
     return path
+
+
+def _one_name(part) -> bool:
+    """Is `part` the name of one file or folder on this system: nothing that leads up, down or to another drive?"""
+    return isinstance(part, str) and bool(part) and part not in (".", "..") and "\0" not in part \
+        and not any(sep and sep in part for sep in (os.sep, os.altsep, "/")) and not (WINDOWS and ":" in part)
+
+
+def put_copy(folder: Path, parts: list[str], data: bytes) -> Path:
+    """A copy of a project's file in a folder of Lantern's own (`folder()`): `data`, byte for byte, under the names
+    `parts`, one folder below the other as they are in the project, handed back as its path. For a tool that is
+    started on copies of a project's files and not on the project itself. ValueError when `parts` is no list of
+    names of one file or folder each (nothing is written outside the folder); OSError when the copy cannot be
+    written: the caller then does not start the tool."""
+    if not isinstance(parts, (list, tuple)) or not parts or not all(_one_name(part) for part in parts):
+        raise ValueError("not a bare name")
+    path = Path(folder).joinpath(*parts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def link_inside(parts: list[str], target) -> bool:
+    """Does a link written at `parts` (its names, one folder below the other, from the top of a folder) with the text
+    `target` stay inside that folder, whatever else lies in it? Only a target that first climbs (`../`), no further
+    than the folder's top, and then goes down by plain names. A climb after a name is refused: the name may itself
+    be a link, and climbing out of the place that leads to is not climbing out of the place it stands in
+    (`a/b/up -> ../..` is the top; `a/b/x -> up/../y` then reads the folder above the top). An address from the top
+    of the disk, a drive, a backslash and an empty text are refused."""
+    if not isinstance(parts, (list, tuple)) or not parts or not all(_one_name(part) for part in parts):
+        return False
+    if not isinstance(target, str) or not target or "\0" in target or "\\" in target or target.startswith("/"):
+        return False
+    steps = [step for step in target.split("/") if step not in ("", ".")]
+    up = 0
+    while up < len(steps) and steps[up] == "..":
+        up += 1
+    return up <= len(parts) - 1 and all(_one_name(step) for step in steps[up:])
+
+
+def put_link(folder: Path, parts: list[str], target: str) -> Path:
+    """A link of a project, made again in a folder of Lantern's own (`folder()`) beside the copies of its files:
+    at `parts`, leading to `target` as the project wrote it. Only a link that stays inside the folder
+    (`link_inside`); ValueError for any other, and nothing is made. Where this system lets this user make no link
+    (Windows without the right), the target's text is written as a small file, which is what git itself checks
+    out there. OSError when neither can be written."""
+    if not link_inside(parts, target):
+        raise ValueError("not a link that stays inside")
+    path = Path(folder).joinpath(*parts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(target, path, target_is_directory=(path.parent / target).is_dir())
+    except (NotImplementedError, OSError):
+        if os.path.lexists(path):
+            raise
+        path.write_bytes(target.encode("utf-8", "surrogateescape"))
+    return path

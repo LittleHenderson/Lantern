@@ -122,6 +122,10 @@ def plan() -> dict:
             # ---------------------------------------------------------------- sign-in tokens
             {"id": "tokens", "kind": "tokens", "about": "Only a sign-in the app issued, whole and in date, gets in",
              "request": _req("GET", "/me"), "who": "alice", "claims": {"sub": "{tara_id}"}},
+            # ---------------------------------------------------------------- what was ended
+            {"id": "removed-user", "kind": "ended", "about": "A removed person's sign-in gets nothing more",
+             "request": _req("POST", "/tokens", json={"scope": "read"}), "who": "amir",
+             "end": {"request": _req("DELETE", "/admin/users/{amir_id}"), "as": "tara"}},
             # ---------------------------------------------------------------- what is sent
             {"id": "profile-role", "kind": "keeps", "about": "The profile form cannot change a person's role",
              "request": _req("PATCH", "/me", json={"email": "alice@kiln.test", "role": "admin"}), "who": "alice",
@@ -211,6 +215,8 @@ EXPECTED: dict[str, dict[str, list[str]]] = {
     "unsigned-token": _all("tokens", ("truncated", "altered", "unsigned", "other-key", "expired"), LET_IN),
     "scope-unchecked": {"read-only-token/alice_read": LET_IN, "note-change/alice_read": LET_IN,
                         "note-delete/alice_read": LET_IN},
+    # the copy that let him in answers from what it remembers; a copy started afresh has to look him up
+    "sign-in-remembered": _all("removed-user", ("straight after", "on another worker"), ["lived-on"]),
     "role-in-profile": {"profile-role/the request": ["took-effect"]},
     "negative-transfer": {"negative-transfer/the bad request": ["accepted"]},
     "no-size-limit": {"huge-note/the bad request": ["accepted"], "huge-note-undeclared/the bad request": ["accepted"],

@@ -122,6 +122,24 @@ provenance, a required Limits section, and a results digest anyone can check:
 lantern verify path/to/repo --report evidence.html   # re-runs the analysis on this commit, compares digests
 ```
 
+See what a change does before you merge it (`docs/diff.md`): two versions are checked and compared, and the
+receipt lists only what differs: new and removed routes and pages, login checks that changed, links between page
+and server that broke, findings that are new, fixed or reached only now, and the release decision before and after.
+No model writes any line of it:
+
+```bash
+lantern diff path/to/repo                      # your last commit, compared with your files as they are now
+lantern diff path/to/repo main...my-branch     # what a pull request from my-branch would change
+```
+
+Hold a fix to more than "the finding no longer shows" (`docs/fix.md`): a comment that excuses the line, code moved
+where Lantern does not read it, a call put together at run time or a deleted test is refused, with the reason:
+
+```bash
+lantern fix brief path/to/repo FINDING_ID                          # where it is, how it is reached, what a fix has to show
+lantern fix check path/to/repo FINDING_ID -- python -m pytest -q   # 0 only when the fix passed, tests included
+```
+
 Attach your own walkthroughs of key flows by writing `lantern-narratives.md` at the repo root.
 `.lantern/badge.svg` is a README badge with the commit, the open critical findings and the date. It is green only
 for a release that Passed; otherwise it ends in "blocked" or "incomplete".

@@ -3,7 +3,7 @@
 // the page as markup (an element with data-pwn, or a changed title: see tools/poison_report.py).
 // Works on any report (it clicks whatever is on screen).
 // Usage: node tools/viewer_smoke.js path/to/report.html /tmp/shot   (needs `npm i playwright`)
-// App mode: node tools/viewer_smoke.js --app 'http://127.0.0.1:8765/?token=…' OUT_PREFIX [--image shot.png --expect-text WORD]
+// App mode: node tools/viewer_smoke.js --app 'http://127.0.0.1:8765/#token=…' OUT_PREFIX [--image shot.png --expect-text WORD]
 //                                        [--slow-tests 'python -m pytest -q tests/stop_check.py']
 //   drives a live `lantern serve` with one analyzed project: "Watch my tests run" (confirm and run in the sandbox,
 //   wait for the result; with --slow-tests, a test command of the project that would go on for minutes is started
@@ -80,7 +80,7 @@ async function appSmoke(url, out, image, expectText, slowTests) {
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
     p.on('console', m => { if (m.type() === 'error' && !outside.refusedFont(m) && !(allow400 && /status of 400/.test(m.text()))) errs.push(`${name} console: ${m.text()}${outside.where(m)}`); });
     p.on('dialog', d => { errs.push(`${name}: a dialog opened: ${d.message()}`); d.dismiss(); });
-    const api = (path, body) => p.evaluate(([path, body]) => fetch(path, body === undefined ? {} : {method: 'POST',
+    const api = (path, body) => p.evaluate(([path, body]) => fetch(path, body === undefined ? {headers: {'X-Lantern-Token': TOKEN}} : {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN}, body: JSON.stringify(body)}).then(r => r.json()), [path, body]);
     try {
       await p.goto(url);
@@ -147,6 +147,18 @@ async function appSmoke(url, out, image, expectText, slowTests) {
         await p.screenshot({ path: `${out}-${name}-sheet.png` });
         await a11y.axe(p, `${name} test sheet`, errs);
         await sheetFits(p, name, errs, step, [[vp.width, vp.height], [1280, 600]], vp);
+        // where this system's sandbox does not hold every program of the tests, the sheet asks first
+        if (await p.isVisible('#shreach')) {
+          await p.click('#shrun');   // without the word: nothing starts, and the row that asks is brought into view
+          const shown = await p.evaluate(() => {
+            const row = document.querySelector('#shreachrow'), body = document.querySelector('.shbody');
+            if (!row || !body || !row.classList.contains('ask') || document.querySelector('.toastin')) return false;
+            const r = row.getBoundingClientRect(), b = body.getBoundingClientRect();
+            return r.top >= b.top - 1 && r.bottom <= b.bottom + 1;
+          });
+          if (!shown) errs.push(`${name}: Run pressed without the tick did not bring the box that asks into view`);
+          await p.check('#shreach'); step(name, 'sheet: asked first, then agreed to what the sandbox cannot hold');
+        }
         await p.click('#shrun');
         await p.waitForSelector('.toastin.ok, .toastin.bad', { timeout: 300000 });
         const toast = (await p.$eval('#toast', el => el.innerText)).replace(/\s+/g, ' ').trim();
@@ -158,6 +170,11 @@ async function appSmoke(url, out, image, expectText, slowTests) {
           await p.click('#watchtests'); await p.waitForSelector('#shrun');
           await p.fill('#testcmd', slowTests);
           await p.click('#shrun');
+          // another command: where the sandbox does not hold every program, the sheet asks for this one too
+          const again = await Promise.race([
+            p.waitForSelector('[data-stop]', { timeout: 30000 }).then(() => false, () => false),
+            p.waitForSelector('#shreachrow.ask', { timeout: 30000 }).then(() => true, () => false)]);
+          if (again) { await p.check('#shreach'); await p.click('#shrun'); step(name, 'sheet: asked again for another command'); }
           await p.waitForSelector('[data-stop]', { timeout: 30000 });
           await a11y.axe(p, `${name} tests running`, errs);
           await p.screenshot({ path: `${out}-${name}-tests-running.png` });

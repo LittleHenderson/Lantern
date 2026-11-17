@@ -62,14 +62,14 @@ def wait(base, job_id, timeout=60):
 
 def test_access_control(srv):
     base, _ = srv
-    assert call(base, "/", cookie=False, token=None)[0] == 403              # no token: locked page
+    code, page = call(base, "/", cookie=False, token=None)                  # the page itself holds no key and no data
+    assert code == 200 and "tok-123" not in page and "<title>Lantern</title>" in page
     assert call(base, "/api/state", cookie=False, token=None)[0] == 403
+    assert call(base, "/api/state", token=None)[0] == 403                    # a cookie opens nothing (tests/test_app_key.py)
     assert call(base, "/api/state", host="evil.example:80")[0] == 403        # DNS rebinding
     assert call(base, "/api/settings", "POST", {}, token=None)[0] == 403     # cookie alone can't write
     assert call(base, "/api/settings", "POST", {}, token="wrong")[0] == 403
-    code, page = call(base, "/")
-    assert code == 200 and "tok-123" in page and "<title>Lantern</title>" in page
-    # the tokenized link sets an HttpOnly, SameSite=Strict cookie and redirects
+    # the link's older form hands the key to the page after the "#" and sets no cookie
     req = urllib.request.Request(base + "/?token=tok-123")
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -79,8 +79,9 @@ def test_access_control(srv):
         urllib.request.build_opener(NoRedirect).open(req)
     except urllib.error.HTTPError as e:
         assert e.code == 303
-        c = e.headers["Set-Cookie"]
-        assert "HttpOnly" in c and "SameSite=Strict" in c
+        assert e.headers["Location"] == "/#token=tok-123" and e.headers["Set-Cookie"] is None
+    else:
+        raise AssertionError("the link's older form was not sent on")
 
 
 def test_project_lifecycle(srv, tmp_path):
@@ -217,7 +218,7 @@ def test_pages_carry_a_nonce_csp(srv, tmp_path):
     p = store.add_project(repo)
     wait(base, call(base, f"/api/projects/{p['id']}/analyze", "POST", {})[1]["id"])
     for path in ("/", f"/p/{p['id']}/report.html", f"/p/{p['id']}/evidence.html"):
-        req = urllib.request.Request(base + path, headers={"Cookie": "lantern_token=tok-123"})
+        req = urllib.request.Request(base + path, headers={"X-Lantern-Token": "tok-123"})
         with urllib.request.urlopen(req) as r:
             csp, body = r.headers["Content-Security-Policy"], r.read().decode()
         assert "script-src" in csp and "unsafe-inline" not in csp.split("script-src")[1].split(";")[0], path
@@ -330,6 +331,7 @@ def test_the_command_for_an_assistant_is_lantern_by_its_full_path(srv, monkeypat
 
 def test_watch_tests_accepts_only_test_runners(tmp_path):
     """'Watch my tests run' runs the command the user confirmed, so it must never become 'run anything'."""
+    from lantern import sandbox
     from lantern.sandbox import check_command
     from lantern.server import detect_test_command
     ok = {"python -m pytest -q": "python", "pytest": "python", "py.test tests/": "python", "python3 -m unittest": "python",
@@ -345,7 +347,9 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
             check_command(c.split())
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     d = detect_test_command(tmp_path)
-    assert d["supported"] and d["traced"] and d["sandbox"]["name"] in ("docker", "subprocess") and "Nothing leaves" in d["leaves"]
+    assert d["supported"] and d["traced"] and d["sandbox"]["name"] in ("docker", "subprocess")
+    # the sheet's last line is what this system's sandbox keeps the tests from, and nothing more
+    assert d["leaves"] == sandbox.reach("python")["words"] and ("Nothing leaves" in d["leaves"]) == (not d["reach"]["ask"])
     js = tmp_path / "js"
     js.mkdir()
     (js / "package.json").write_text('{"scripts": {"test": "vitest"}}', encoding="utf-8")
@@ -368,8 +372,12 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
     assert not detect_test_command(tmp_path / "nowhere")["supported"]
 
 
-def test_terminal_drawer_runs_lantern_commands_only(tmp_path):
+def test_terminal_drawer_runs_lantern_commands_only(tmp_path, monkeypatch):
+    from lantern import sandbox
     from lantern.server import TerminalRefused, run_terminal_command
+    # which commands the drawer takes; what it asks first on a system that does not hold the tests has its own
+    # test (tests/test_sheet_promise.py)
+    monkeypatch.setattr(sandbox, "reach", lambda language, fetched=False: {"network": "all", "files": "all", "words": "", "ask": ""})
     class Jobs:
         def start(self, pid, kind, fn, stop=None):
             return {"id": "j1", "kind": kind, "status": "running"}

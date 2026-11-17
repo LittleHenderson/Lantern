@@ -35,6 +35,7 @@ BADGE_LINE = f"[![Lantern]({FOLDER}/badge.svg)]({FOLDER}/README.md)"
 ACTION = "LittleHenderson/Lantern"
 FIRST_WITH_ACTION = (0, 12, 0)        # the first release whose tag holds action.yml
 MOST_COMMENT = 60_000                 # GitHub takes 65,536 characters in a comment or a pull request's text
+MOST_CHANGE = 30_000                  # of those, what the receipt of a pull request's change may take
 TOP_COMMENT, TOP_SAVED = 10, 50       # how many open findings each form lists by name
 RANK_ORDER = ("critical", "high", "medium", "low")
 
@@ -109,12 +110,36 @@ def _https(url) -> str | None:
         else None
 
 
+CHANGE_HEAD = "## Lantern: what this change does"
+WHOLE_HEAD = "## The project as a whole, after this change"
+NO_CHANGE = ("The report of what this change does could not be read, so it is not shown here. The report of the "
+             "project as a whole is below.")
+
+
+def _change(receipt, short: bool) -> list[str]:
+    """The receipt of a pull request's change (`lantern/diff.py`) as lines for the comment: at most `MOST_CHANGE`
+    characters, cut at a line with nothing left folded open. Anything that is no receipt is said in a sentence."""
+    from . import diff
+    try:
+        if not isinstance(receipt, dict) or receipt.get("schema") != diff.SCHEMA:
+            raise ValueError("no receipt")
+        text = diff.markdown(receipt, short=short)
+    except (KeyError, TypeError, AttributeError, ValueError, IndexError):
+        return [CHANGE_HEAD, "", NO_CHANGE, "", WHOLE_HEAD, ""]
+    if len(text) > MOST_CHANGE:
+        text = text[:MOST_CHANGE].rsplit("\n", 1)[0]
+        text += "\n" + "\n\n</details>" * max(0, text.count("<details>") - text.count("</details>"))
+        text += "\n\n…cut short: `change.md` in the full report has the rest.\n"
+    return [*text.rstrip("\n").split("\n"), "", WHOLE_HEAD, ""]
+
+
 def summary(ev: dict | None, *, short: bool = False, run_url: str | None = None, report_url: str | None = None,
-            saved: bool = False) -> str:
+            saved: bool = False, change=None) -> str:
     """The report in a few lines of Markdown: the decision and what it means, the open problems by severity, why the
     decision is what it is, the most serious problems by name, what could not be checked, and, folded away for
     engineers, how to check the report again. `short`: the form for a pull request's comment. `saved`: the form
-    kept in the repository beside `evidence.html` (it says how to open that file)."""
+    kept in the repository beside `evidence.html` (it says how to open that file). `change`: the receipt of what a
+    pull request changes (`diff.compare`), written right after the decision and before the project as a whole."""
     ev = _table(ev)
     h, sc, se = _table(ev.get("header")), _table(ev.get("scorecard")), _table(ev.get("security"))
     now = _table(sc.get("now"))
@@ -129,6 +154,8 @@ def summary(ev: dict | None, *, short: bool = False, run_url: str | None = None,
               + (" (with changes that were not committed)" if h.get("dirty") is True else "")
               + (f" on {when}" if when else "") + f" by Lantern {code(_text(h.get('engine'), 60) or __version__)}.", ""]
 
+    if change is not None:
+        lines += _change(change, short)
     counts = {k: _int(now.get(k)) for k in RANK_ORDER}
     lines += ["| Critical | High | Medium | Low |", "|---:|---:|---:|---:|",
               "| " + " | ".join(str(counts[k]) for k in RANK_ORDER) + " |", "",
@@ -263,7 +290,8 @@ def workflow(ref: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", ref):
         raise ValueError("an Action version is a tag, a branch or a commit")
     return f"""# Lantern checks this repository and leaves its report here (written by `lantern github setup`).
-# - On each pull request: one comment with the result (Passed, Blocked or Incomplete), updated on every push.
+# - On each pull request: one comment with the result (Passed, Blocked or Incomplete) and with what the pull
+#   request changes (routes, login checks, broken links, findings), updated on every push.
 # - On the main branch: a pull request that saves the report in {FOLDER}/. Merge it to keep the report and
 #   to update the badge on your front page.
 # - The check fails when the result is Blocked. Change `require` below to `passed` or `none` to change that.

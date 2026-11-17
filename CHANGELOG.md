@@ -16,6 +16,84 @@ file. New entries go under `## Unreleased`, on top.
   A name shown nowhere is still refused. `model-eval`'s `min_first_try` default is 0.7 (was 0.8), Wakil's choice,
   near the measured rate across seven repos (72.9%); the target in docs/explain-runs.md is unchanged.
 
+- The fix contract (roadmap stage 3; `docs/fix.md`, `lantern/fixcheck.py`): Lantern calls a finding fixed only when
+  the change shows seven things: the finding is gone and not moved, nothing was hushed with a `# nosec` comment or
+  an accepted-risk entry, every scanner still read what it read, no route or link between page and server broke, no
+  call was hidden from the map, nothing got worse elsewhere, and the tests are all there and passed. Each part
+  comes back as held, broken or not shown, with what Lantern read there. Nothing in it accepts or closes a finding.
+- New connector tool `lantern_fix_brief`: where one finding is, how it is reached, how the value gets there, and
+  the contract. `lantern_recheck` holds a fix to it. **Changed answers:** a change after which the finding only
+  stops showing is `refused` (a call put together at run time, code moved where Lantern does not read it) or
+  `not-shown` (the rules that found it were changed) where it was `fixed`; a recheck asked a second time is
+  compared with the check from before the fix and answers again, where it said "not an open finding"; a true fix
+  is `fixed` with the tests "not shown", because the connector starts no code of a project.
+- "Fix this for me" in the app is held to the same contract: a change that only hides the finding reads "Don't
+  apply this one", with the reason. Its result carries `contract`.
+- New commands `lantern fix brief [PATH] FINDING` and `lantern fix check [PATH] FINDING [-- TEST COMMAND]` (ends
+  with 0 passed, 1 refused, 3 incomplete, 2 nothing could be checked). With `--candidate DIR` a fix made in another
+  folder is checked on a throw-away copy and the project is left as it is; `--suggest FILE` then writes the change
+  as a patch, only when it passed. Lantern applies nothing and posts nothing.
+- The check a fix is compared with is kept in `LANTERN_HOME/fix-briefs/`, outside the project: a "fix" that was
+  refused cannot pass by being checked a second time.
+- An analysis pack's row in `security.json` says what the pack said (`rules`, `rules_sha256`), so a finding of a
+  pack that stops showing after the pack itself was changed is not read as fixed.
+- The message a finding card sends to an assistant ("Send to…") names `lantern_fix_brief`.
+- New heuristic `LW-SHARED-CONNECTION` (medium, labelled heuristic; `lantern/sharedconn.py`): a Python file
+  that opens one SQLite connection with the library's own guard switched off (`check_same_thread=False`),
+  keeps it for the whole program and uses it in a function with no lock held, so two requests answered on
+  two threads at the same moment can be on the one connection together. Quiet under a lock, in the function
+  that opens the connection, at the top of the file, for a bare `close()`, and where every use is on the
+  event loop's one thread. It says "check": Lantern does not know how the program is run. Measured on 27
+  folders (benchmark projects, sample apps): none of them opens a connection that way, so there is no
+  finding and no precision is claimed. Tests: `tests/test_sharedconn.py` (5).
+- A paid call is read from the code and not from what is written about it (`lantern/aiapp.py`: `read_as_code`,
+  `named`). Until now every line that did not begin as a comment was read as code, so a remark at a line's end, the
+  later lines of a block comment or of a docstring, and a text kept over several lines (a help text, a tiny app in a
+  test) each "made" a call into a model, a payment or an email service: the function was marked as one that spends
+  money, and a route that reaches it could be listed as one anyone can make spend it. Found on the first real pull
+  request that got the "what this change does" comment: it said the changed code leads to a payment, for a remark in
+  one of Lantern's own files (Lantern's check of itself listed 30 such calls in its own code; 27 were only written
+  about, the other 3 are in a sample app). Now: remarks are none in Python, Ruby, Go and the languages that write
+  them `//` and `/* */`; a text over several lines is none in Python, Go and the languages with text blocks in three
+  double quotes; a Python docstring is none for a vector store either (a vector store is still read out of the text
+  of a query handed to a call). The same calls written as code are found as before, also after a remark, after a `#`
+  or `//` inside a text and after a pattern that holds a backtick. Not judged: a JavaScript template that runs over
+  several lines (Known gaps). Tests: `tests/test_aiapp.py` (4 more).
+  - The change receipt: only a call that is paid for is "a call that costs money" (a vector store was one too), and
+    what a started program gave back or raised (`subprocess.CompletedProcess`, `subprocess.TimeoutExpired` and
+    their like) is no longer listed under "the shell". Tests: `tests/test_diff.py` (2 more).
+
+- What a change does (`lantern diff`, `docs/diff.md`; roadmap of 2026-11-14, stage 2). Two versions of a project are
+  checked and what the two checks found is compared, as a change receipt (`change.json`, `change.md`, `change.html`
+  in `.lantern/change/`): pages, routes and commands added, removed or moved; a login check that got weaker or was
+  taken off; a request the page still makes that no route answers any more; findings that are new, fixed, reached by
+  a page or route only now, ranked higher, or accepted in the change (a line that was only given a `# nosec` comment
+  is listed as accepted, with the comment's reason, never as fixed); calls that cost money that a route reaches now;
+  the functions that changed with what leads to them and what they lead to; and the release decision before and
+  after. Only differences are listed, two versions that differ in comments and spacing give "nothing changed", and
+  no model writes or ranks any line (`lantern/diff.py`: a function of two results folders). A check now says which
+  Lantern made it (`run.json` `lantern`): a receipt whose two checks were made by different versions, or by one
+  that does not say, says that a difference may be the Lantern's and not the change's.
+  - `lantern diff [PATH] [BASE..HEAD]`: with no versions, the last commit and the files as they are now; `BASE`,
+    `BASE..HEAD`, `BASE...HEAD` (from where the two parted, as a pull request shows it). An earlier version is
+    copied out of the repository into a folder of Lantern's own and checked there (`gitfacts.resolve`,
+    `gitfacts.copy`): the project's folder is not touched, and the settings, hooks, filters and attributes that
+    come with a repository decide nothing about the copy.
+  - The app (`lantern serve`): one new button on a project's screen, **What changed**, compares the last commit
+    with the files as they are now and opens the receipt (`POST /api/projects/<id>/change`,
+    `/p/<id>/change.html`: built from the data each time, no script in it). The terminal takes
+    `diff [BASE..HEAD]`.
+  - The GitHub Action: on a pull request the comment and the run's page begin with what the pull request changes
+    (the code before it is the first parent of GitHub's merge commit; the pull request's own check is not made a
+    second time). New inputs: `change` (default on) and `code-scanning` (default off: also hand the findings to
+    GitHub's code scanning, which needs `security-events: write`). The findings are in the full report as
+    `lantern.sarif` either way.
+  - `security.json` has a new field, `route_logins`: what each route shows about asking who is calling
+    (`shown`, `lookup` or `none`, with the sign that was read), the reading the missing-login rule already made,
+    written down so that two checks can be compared route by route. Results of an older Lantern are still read; a
+    receipt made from them says that the login record is missing.
+  - Result files that are damaged, or are no plain file, are refused by `lantern diff` with a sentence.
+
 - Lantern leaves its report on the GitHub repository it checked (`docs/github.md`), in three ways: one comment with
   the result (Passed, Blocked or Incomplete) on every pull request, edited on each push; one pull request on the main
   branch that saves the report in `.lantern/report/` (README in words, the commit-pinned Evidence Report, the digest
@@ -26,6 +104,131 @@ file. New entries go under `## Unreleased`, on top.
   (`lantern/onrepo.py`); every value from the results is written as text (no link, image, HTML or mention can be
   made through a finding's title). Lantern's own pull requests get the comment (`.github/workflows/lantern-report.yml`).
 
+- Signing in: the app that starts a sign-in is the one that collects it (gateway 0.2.7, `lantern login`, the app's
+  Settings, the website). The terminal, the app and the website each keep a secret and give the gateway its
+  fingerprint and the address their browser comes back to: one on this computer (`http://127.0.0.1:<port>/…`) or a
+  website the gateway names. A sign-in is finished only in the browser that started it; that browser is sent back
+  with a one-time code, and the app collects its token with the code and the secret (`POST /v1/auth/redeem`), once,
+  within two minutes. No token exists before that moment, and none waits in the gateway's database.
+  - `lantern login --github` / `--google` listens on 127.0.0.1 until the browser comes back (five minutes at most,
+    then it says how to paste a token). The buttons in the app's Settings work the same way through
+    `/api/login/return`; an app that listens on another address than this computer's own asks for a paste.
+  - The website signs in through `GET /v1/signin/return`; `POST /v1/signin/poll` only says whether this browser is
+    signed in yet.
+  - What changes for people: once the gateway runs 0.2.7, a Lantern from before this change (0.11.0 and older) no
+    longer picks its sign-in up by itself. The gateway's page says to press Copy and paste the token into Lantern.
+    `GET /v1/auth/claim` answers that this way of picking a sign-in up has ended.
+  - For whoever runs a gateway: deploy the gateway and the website one after the other, the gateway first
+    (`docs/deploy.md`). A website at another address than `LANTERN_HOME_URL` is named in the new setting
+    `LANTERN_RETURN_ORIGINS`. What an earlier version kept for its pick-up is deleted and written over at start-up.
+  - Tests: `tests/test_signin.py` (68), `tests/test_gateway_limits.py` (118), `tests/test_cloud_site.py` (22). Left,
+    and written in `docs/audit/THREAT_MODEL.md`: with nothing listening at the return address the one-time code
+    stays in the browser's address bar for two minutes, worth nothing without the app's secret.
+- The app (`lantern serve`) keeps the key of a run in its page, not in a cookie. The printed link carries the key
+  after `#` (`http://127.0.0.1:8765/#token=…`); the page keeps it in its own storage and sends it with every request,
+  reads included. A report in a frame or a new tab is opened with a pass that is good once (`POST /api/view`). No
+  cookie is set and none counts; the link's older form (`/?token=…`) still works, and the page is served at the
+  address Lantern listens on (`localhost` is sent on to it).
+  - What changes for people: with the app stopped, a report opened earlier is no longer shown from the browser's
+    copy. The service worker now keeps the app's icon and manifest only and deletes what an earlier version kept.
+    The report file in the project's `.lantern` folder still opens by itself.
+  - Tests: `tests/test_app_key.py` (6).
+- The login check no longer takes a handler's own name for a login: `def revoke_token(...)` "called"
+  `revoke_token`, so the route counted as asking who is calling. The name on the line that defines a handler is now
+  left out (`websec.own_name`). Measured on 210 routes of 25 folders: no route's result changed.
+- New heuristic `LW-TOKEN-PICKUP` (medium, labelled heuristic): a Python or JS/TS route that takes one plain value
+  from the request, fetches something the server keeps under it and sends it back under a credential's name
+  (`token`, `secret`, `session`), asking for nothing else. Quiet where the handler shows a second proof, a caller it
+  identifies, a value that is itself a credential, a credential made on the spot, or two values asked for. It says
+  "check who can know the value", never that the route is open. No finding on the benchmark projects and the sample
+  apps, so no precision is claimed. Tests: `tests/test_fullstack.py`.
+- Two new heuristics for what a browser keeps for a site (both medium, labelled heuristic; `lantern/localweb.py`).
+  `LW-LOOPBACK-COOKIE`: a server started on this computer's own address that puts a login in a cookie. A browser
+  keeps cookies by host name and not by port, so it sends that cookie to every other program that serves pages on
+  the computer. `LW-SW-KEEPS-PAGES`: a service worker that keeps a copy of everything it fetches, on a site people
+  sign in to, so a signed-in person's pages stay in the browser after they have left. Each says "check". Measured
+  on 25 folders (benchmark projects, sample apps, Lantern's own two services): no finding, after one false alarm of
+  the first measurement was fixed (a session key has to say who is signed in), so no precision is claimed.
+  Tests: `tests/test_localweb.py` (6).
+- Guard coverage completed in four places where Lantern starts another program on a project's files (each with
+  tests written first and safe twins that work as before).
+  The Python check: where something that is not the project's own cannot be written as an exclusion, Bandit runs
+  on copies of the project's own Python files in a folder of Lantern's own (`way: "copies"` in its record),
+  each written through `programs.put_copy` (`tests/test_programs.py`, 1 new).
+  The Evidence page: the line to copy holds a commit's own name and Lantern's fixed words; a report's test command
+  is shown as what the report says, word by word, and the person types it (`lantern verify` and the connector too).
+  Git facts: git is not started where a repository's objects folder leads elsewhere; the files then count as
+  changed and the note says why. **Changed:** a clone made with `git clone --shared` or `--reference` reads that way.
+  A file git itself removes while the folder is looked at (its upkeep right after a commit) is not taken for that.
+  JavaScript libraries with no lock file: npm is handed a `package.json` Lantern wrote, names and versions for the
+  store and nothing else. **Changed:** a library named there by a folder, a file, a link, a repository or an
+  address means the tests are not run and the reason says so (with npm's lock file it is fetched as before).
+  Tests: `tests/test_links_out.py`, `tests/test_evidence.py`, `tests/test_gitfacts.py`, `tests/test_npm_no_lock.py`.
+- The gateway completes its count of the free allowance: a request is counted against the limits in the same step
+  that looks at them (`Store.hold`), and the count is put right when the answer is back (`Store.settle`). A
+  request that does not fit beside requests that are still being answered is told to ask again in a moment (429
+  `allowance_busy`, `Retry-After: 2`; Lantern's own client asks again by itself), because "used up" is not known
+  until they are counted. What the limits say to one request at a time is unchanged. A request that reached the
+  model and was cut off is counted at what was held for it. Tests: `tests/test_gateway_under_way.py` (9).
+- New heuristic `LW-LIMIT-COUNTED-LATER` (medium, labelled heuristic; `lantern/countlater.py`): a Python or JS/TS
+  function that turns a request away with 402 or 429 where a limit is reached, then waits for its work (an awaited
+  call, a call to a model or another service), and writes the use down only after that, so requests sent at the
+  same moment all pass the look. Quiet where the use is counted or held before the work, where a limiter takes
+  one in the look itself, under a lock or a transaction, and where the count shares no name with the look. It
+  says "check". Measured on 30 folders (benchmark projects, sample apps, Lantern's own code): 29 functions turn a
+  request away that way, 5 of them wait for work and count, and there is no finding, after one false alarm of the
+  first measurement was fixed (a limiter that takes one in the look). No precision is claimed.
+  Tests: `tests/test_countlater.py` (3).
+- `lantern behave`: a new kind of check, `ended`: a request that works, the request that ends something (a sign-out,
+  an account switched off, an invitation taken back), then the first request again, which must be refused:
+  straight after, after a restart, and on another copy of the app that had answered it before. Broken with the
+  new code `lived-on` when it is accepted again; inconclusive when the request did not work before, when the end
+  did not work, or when the answer is neither a refusal nor accepted. It catches a sign-out that ends nothing, a
+  copy of an app that remembers its own "yes", and a list of what was ended that is kept in memory, each a tiny
+  app in the tests beside a twin that asks its database. Lantern's own gateway holds in all three cases, and so
+  does its website when it is asked about a sign-in that was ended at its gateway.
+  Tests: `tests/test_behave.py` (43). Guide: `docs/behaviour.md`.
+- The website follows a sign-in and a link to results to their end (tests written first, each beside twins that
+  work as before). A sign-in: the website asks its sign-in service on every request. **Changed:**
+  `LANTERN_CLOUD_IDENTITY_TTL` is 0 by default (before: 300); above 0 an answer is used again for a read only,
+  never for a request that changes something or makes a link. `POST /v1/signout` answers `confirmed`: where the
+  sign-in service could not be reached, the browser is signed out, the website takes that sign-in no more and
+  tries for a few minutes to end it there too, and the page says so (`confirmed: false` with a `message`).
+  A link to results (`POST /v1/runs/{id}/view`): it is made for the person who asked, opens what that person may
+  read at the moment it is used, and ends when they sign out on the website. **Changed:** the link's `k` has four
+  parts (`<expiry>.<layers>.<who>.<HMAC>`), and links made before the update stop opening: open the run again
+  from My runs. An open stream of a run's progress is looked at again while it is open.
+  Tests: `tests/test_cloud_signin_ended.py` (12), `tests/test_cloud_view_rights.py` (11).
+- A report cut to some layers of an app (a workspace's per-layer permissions, `lantern/scope.py`) holds what its
+  reader may see and nothing worked out from the rest. **Changed:** such a report has no readiness score with
+  its checks, no release decision and no protections (`readiness` is null), and of each scanner only which one
+  ran and how it ended (`tool`, `version`, `state`; a scanner's own sentence, its errors and its counts are
+  about every layer). The badge, which shows the whole app's score and its critical and high counts, answers 403
+  for such a reader, as the evidence report and the raw files already did. The report's Readiness and
+  Protections pages say why, and the website leaves those tabs out for them. With every layer nothing changes.
+  Tests written first: `tests/test_scope.py` (34), `tests/test_cloud_teams.py`.
+- The sheet before "Watch my tests run" ends with what this run keeps the tests from on this computer, worked
+  out by the server for the system and the kind of tests (`sandbox.reach`), in place of one sentence for every
+  system. **Changed:** where the sandbox holds every program of the tests (Docker, most Linux systems) the line
+  reads as before and nothing more is asked. Where it holds Python code only (Windows, Mac, a Linux system
+  that gives the run neither a network of its own nor a doorman), the sheet says what a program of the tests
+  that is not Python can reach, and the tests start only after the person ticked "I have read this. Run the
+  tests anyway." under it, once per project, command and sentence (`POST /api/projects/<id>/trace` takes the
+  sentence as `reach` and answers 409 without it; in the terminal the word is `trace --anyway -- COMMAND`).
+  The app's answer to "Does Lantern run my app or my tests?" and the help of `--sandbox` say the same. The
+  command line asks nothing: the first lines of its log say what the sandbox holds. No wall changed.
+  Tests written first: `tests/test_sheet_promise.py` (48).
+- Behaviour benchmark (`bench/behaviour`): the practice app has a thirty-second planted problem,
+  `sign-in-remembered` (a copy of the app that remembers whom it let in), and the plan a check of the kind
+  `ended` for it (`removed-user`: a removed person asks again straight after, after a restart and on another
+  copy). What must come out was written down before the first run; the first run of the whole plan against all
+  33 versions came out as written down (`bench/behaviour/results.md`: 33 of 33, the safe app 83 cases held).
+  Every outcome code but `stuck` and `crashed` now comes out of a version of the practice app. Reading the code
+  alone tells the new version from the safe app by nothing (`bench/behaviour/README.md`).
+- Gateway: every call on the store's one database connection, a read too, stands under the store's lock, which
+  a thread may now take again, so requests that arrive at the same moment are answered as they would be one
+  after the other. The website's store was written that way already. Tests written first:
+  `tests/test_store_at_once.py` (10: both stores asked by eight threads at once, and both stores' code read).
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside
@@ -337,7 +540,6 @@ file. New entries go under `## Unreleased`, on top.
   Lantern then analyzes the copy and tells you, in one line, whether the problem is gone and whether anything new
   and serious appeared. The changed files are one tap away, and nothing reaches your project until you press
   Apply, which refuses if you changed those files meanwhile. Off by default (directive: user first, step 6).
-
 - Notes on the map (Lantern Cloud): people who can open a report leave short notes on a function for each other
   ("Is this still used?"). They sit behind one "Add a note" or "Notes · 2" button in the function's panel, and a
   small mark on the map shows where notes are. Notes are words only: they never change what Lantern found and are
@@ -498,7 +700,6 @@ file. New entries go under `## Unreleased`, on top.
   Lantern describe the whole app, so they stay with people who see everything. The view link carries the layers
   and can't be edited to open more. New `PUT /v1/workspaces/{id}/people/{person}` and `lantern/scope.py`
   (directive: user first, step 4).
-
 - Team workspaces on Lantern Cloud: a few people who can open each other's reports. The owner names a workspace
   and invites people with one-time links (they work once, for 7 days; Lantern keeps only a hash and never asks for
   an email). A report joins only when its own owner puts it there (Share, then Your team, or Add one of my reports
@@ -507,7 +708,6 @@ file. New entries go under `## Unreleased`, on top.
   nothing is deleted. The Team page sits in Advanced and appears in Simple only once someone is in a workspace.
   New `/v1/workspaces`, `/v1/invites` and `PUT /v1/runs/{id}/workspace` (docs/api.md) (directive: user first,
   step 3).
-
 - Getting started is one button: Simple's home on Lantern Cloud and in `lantern serve` opens with **Show us your
   project**, then asks one plain question per screen (is it on this computer, on GitHub, or not sure?). The word
   repository never shows; "Where do I find the link?" and "Is my code safe?" sit behind small Why? buttons, and

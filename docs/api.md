@@ -31,10 +31,15 @@ Evidence Report rendered by `lantern/evidence.py`. A redesign replaces those fil
 
 ## Authentication
 
-`lantern serve` prints `http://127.0.0.1:8765/?token=...`. The first visit sets a `lantern_token` cookie
-(SameSite=Strict, HttpOnly). Every write (`POST`, `DELETE`) also needs the token in the `X-Lantern-Token`
-header; the app gets it from `window.LANTERN_TOKEN` (injected into `app.html`) and the report from
-`window.LANTERN_LIVE.token`. Wrong or missing token → 401. The `Host` header must name the server.
+`lantern serve` prints `http://127.0.0.1:8765/#token=...`. The part after `#` stays in the browser: the app's page
+(`GET /`, the same for everybody, with no key and no data in it) reads it, keeps it in its own storage
+(`localStorage` `lantern.k`, which a browser keeps apart for each port) and takes it out of the address bar. Every
+request for data, reads and writes alike, needs the key in the `X-Lantern-Token` header; the report gets it from
+`window.LANTERN_LIVE.token`. No cookie is set and none counts. A result file the browser opens by its address (a
+frame, a new tab) takes a pass: `POST /api/view {"path": "/p/<id>/report.html"}` answers
+`{"url": "/p/<id>/report.html?k=<pass>"}`, good once, for a minute, for that file. Wrong or missing key → 403. The
+`Host` header must name the server, and `GET /` under the name `localhost` is sent on to the address Lantern
+listens on. The link's older form (`/?token=...`) is sent on to `/#token=...`.
 
 ## Endpoints
 
@@ -71,12 +76,13 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | `POST /api/projects/<id>/explain` | `{"nodes": [ids]}` for some, or `{"depth", "limit"}` for the plan | job (202). Log lines include `free explanations left: N` and `stopped early: …` when the allowance runs out |
 | `GET /api/projects/<id>/explanation?node=<id>` | | `{"record": explanation record or null, "metaphor": {"world", "roles"}}` |
 | `POST /api/projects/<id>/accept` | `{"finding": id, "reason": "≥10 letters, two words", "by": name}` or `{"finding", "remove": true}` | job (202): writes `lantern-accepted.json` in the repo and re-analyzes. A weak reason → 400 |
-| `POST /api/projects/<id>/cmd` | `{"argv": ["analyze", "--offline"]}` | The terminal drawer. job (202) whose log the drawer prints. `argv` is a list of strings (never a shell line; at most 64 items). Allowed: `analyze [--offline] [--no-scan] [--privacy]`, `trace [--] TEST COMMAND` (through the test sandbox; typing it counts as the confirmation), `explain [--node ID…] [--depth N] [--max-nodes N]`, `report [--privacy]`, `verify [--report FILE]`, `accept ID --reason "…" [--by]` / `accept ID --remove` (same reason check as the UI), `packs`, `export [--sarif FILE]` (default `.lantern/findings.sarif`), `learn [--check]`; a leading `lantern` is dropped. `--out` is always the project's `.lantern/`; path arguments must resolve inside the project. Anything else → 400 `{"error", "allowed": [...], "help"}`. Token and Host checks as on every write |
-| `GET /api/projects/<id>/testcmd` | | The command the "Watch my tests run" sheet shows first: `{"command", "how", "language": "python\|node\|go\|rust\|java", "supported", "traced", "note", "cwd"?, "sandbox": {"name": "docker\|subprocess", "label", "image", "details": [lines]}, "minutes", "minutes_range": [1, 240], "memory_mb", "memory_range": [128, 1048576], "leaves", "confirmed"}`. `details` lists the walls this computer's sandbox has (fewer on macOS and on a Linux kernel without Landlock; since 2026-11-13 they say whether the tests get a network of their own, in which they may start a server and call it, and how long and how much memory they get); its last line says that the tests are not run when any of them cannot be set up. `minutes` and `memory_mb` (since 2026-11-13) are what a run started now would get: what the person last set in the sheet, else what the installation says (`LANTERN_TEST_MINUTES`, `LANTERN_TEST_MEMORY_MB`), else 10 minutes and 2048 MB; the two ranges are what the sheet's fields (`#testmin`, `#testmem`) may hold. `traced` is true for Python only ("Tests run; your map upgrades for Python only for now") |
-| `POST /api/projects/<id>/trace` | `{"command": "python -m pytest -q", "confirm": true, "minutes"?: 1…240, "memory_mb"?: 128…1048576}` | job (202). `minutes` and `memory_mb` (since 2026-11-13) are how long the tests may take and how much memory they and everything they start may have in use; a value that is no whole number in its range → 400 (never quietly another number); one that is given is remembered for the next run (settings `test_minutes`, `test_memory_mb`), one left out means the last one set, else the installation's, else 10 minutes and 2048 MB. Only test runners (`sandbox.check_command`; anything else → 400). The first run of a command for a project needs `confirm: true` (409 otherwise); later runs of the same command do not. Runs in `lantern/sandbox.py` and re-analyzes; the job result is `{"returncode", "observed", "recall", "backend", "language", "traced", "timed_out", "time_limit", "over_memory", "memory_limit", "blocked": [{"kind": "write\|network\|read", "what"}], "ran", "unavailable", "not_run_for", "libraries", "off_network", "cancelled", "not_ended", "note", "score_before", "score_after", "summary"}`. `blocked[].kind` (since 2026-11-13 also `read`: the tests reached for one of the person's own folders, which the sandbox closes to a Python or JavaScript run on Linux). `libraries` (since 2026-11-13): what the tests ran on, `{"state": "fetched\|installed\|none", "store", "count", "exact"}` (fetched for this run from the store named, with how many libraries and whether every version was the project's own choice; the ones installed on this computer, when the check was offline; or none, when the project names none), null when there is no such record; the libraries themselves are in `run.json`. `off_network` (since 2026-11-14): true when this run's own walls kept the tests from the network, false when they did not (tests that are not Python on macOS and Windows, where Lantern's guard is inside Python only; the run's log says why), null for a run that does not say (one before that date, or one that did not run); the page says "with the network off" only for true, and for false that the tests were not kept from the network by this run. `ran` false + `unavailable` (a sentence, always Lantern's own words): the sandbox could not be set up on this computer, or (`not_run_for: "libraries"`, since 2026-11-13) the libraries the project names could not be had for the tests, so the tests were **not run**; the job still ends `done`, because everything that only reads the code was checked: `returncode` is null and `observed` 0, the score's "Tests pass" check is `skip` (not `fail`), and the Evidence Report names no test command. `cancelled`: the person stopped the tests (below); the job ended there, **no result file was written** (the project shows what its last finished check found, `score_after` equals `score_before`, `summary` is null). `returncode` null with `timed_out`: stopped at the time limit (`time_limit`, the seconds the tests had); `returncode` null with `over_memory`: stopped because the tests, with what they started, had more memory in use than `memory_limit` megabytes. Either way the tests did not finish, which is no pass and no failure: the check goes on, "Tests pass" is `skip` with `required: true` (its points stay in the sum and earn none; until 2026-11-13 a run stopped by the clock read `fail` there) and the release decision is Incomplete, with the way to give the tests more time or memory. Whatever way a test run ends, every process it started is ended too; `not_ended` lists, in Lantern's own words, anything that could not be (normally `[]`; the page then says so and never says beside it that everything was ended) |
+| `POST /api/projects/<id>/cmd` | `{"argv": ["analyze", "--offline"]}` | The terminal drawer. job (202) whose log the drawer prints. `argv` is a list of strings (never a shell line; at most 64 items). Allowed: `analyze [--offline] [--no-scan] [--privacy]`, `trace [--anyway] [--] TEST COMMAND` (through the test sandbox; typing it counts as the confirmation of the command; since 2026-11-15, where this system's sandbox does not hold every program of the tests, the first try is refused with the sentence that says what they can reach, and `--anyway` is the person's word for it, remembered like the sheet's tick), `explain [--node ID…] [--depth N] [--max-nodes N]`, `report [--privacy]`, `verify [--report FILE]`, `accept ID --reason "…" [--by]` / `accept ID --remove` (same reason check as the UI), `packs`, `export [--sarif FILE]` (default `.lantern/findings.sarif`), `learn [--check]`, `diff [BASE..HEAD] [--offline]` (the job of `/change` below; the two versions must be written as commit names, and no other option of `lantern diff` is taken); a leading `lantern` is dropped. `--out` is always the project's `.lantern/`; path arguments must resolve inside the project. Anything else → 400 `{"error", "allowed": [...], "help"}`. Token and Host checks as on every write |
+| `POST /api/projects/<id>/change` | `{}` or `{"range": "main..my-branch"}` | "What changed" (since stage 2 of the 2026-11-14 roadmap). job (202), kind `change`: two versions of the project are checked and what the two checks found is compared (`lantern/diff.py`, see `change/` under Result files). With no `range`: the last commit and the files as they are now. `range` is what `lantern diff` takes: `BASE`, `BASE..HEAD` or `BASE...HEAD` (from the commit where the two parted), one line of at most 300 characters, each side written as a commit's name (a branch, a tag, `HEAD`, a commit's number, with `~1` or `^`); anything else → 400 with a sentence. A commit is copied out of the repository into a folder of Lantern's own and checked there; the project's folder is not touched and no test is run. Everything is written to `.lantern/change/`, so the project's own report and results stay as they were. The job always ends `done`; `result` is `{"compared": true, "line", "same", "counts", "release": "Passed → Blocked"}` or `{"compared": false, "why": "<Lantern's sentence>"}` (the folder is in no git repository, no such commit, git is not installed). The person's `privacy` setting holds for the two checks' own reports. 409 while another job of the project runs |
+| `GET /api/projects/<id>/testcmd` | | The command the "Watch my tests run" sheet shows first: `{"command", "how", "language": "python\|node\|go\|rust\|java", "supported", "traced", "note", "cwd"?, "sandbox": {"name": "docker\|subprocess", "label", "image", "details": [lines]}, "minutes", "minutes_range": [1, 240], "memory_mb", "memory_range": [128, 1048576], "leaves", "reach": {"network", "files", "ask", "accepted"}, "confirmed"}`. `details` lists the walls this computer's sandbox has (fewer on macOS and on a Linux kernel without Landlock; since 2026-11-13 they say whether the tests get a network of their own, in which they may start a server and call it, and how long and how much memory they get); its last line says that the tests are not run when any of them cannot be set up. `leaves` (the sheet's last line) and `reach` (since 2026-11-15) are what this run keeps the tests from on this computer, for this kind of tests (`sandbox.reach`): `network` and `files` are each `all` (every program of the tests is held), `python` (Python code only) or `none`; `ask` is the sentence the person agrees to before the tests start, empty where everything is held, and `accepted` says whether they already did for this command. The page prints `leaves` as it is and adds no words of its own (until then the line said on every system that nothing leaves the computer). `minutes` and `memory_mb` (since 2026-11-13) are what a run started now would get: what the person last set in the sheet, else what the installation says (`LANTERN_TEST_MINUTES`, `LANTERN_TEST_MEMORY_MB`), else 10 minutes and 2048 MB; the two ranges are what the sheet's fields (`#testmin`, `#testmem`) may hold. `traced` is true for Python only ("Tests run; your map upgrades for Python only for now") |
+| `POST /api/projects/<id>/trace` | `{"command": "python -m pytest -q", "confirm": true, "minutes"?: 1…240, "memory_mb"?: 128…1048576, "reach"?: "<the sheet's sentence>"}` | job (202). `minutes` and `memory_mb` (since 2026-11-13) are how long the tests may take and how much memory they and everything they start may have in use; a value that is no whole number in its range → 400 (never quietly another number); one that is given is remembered for the next run (settings `test_minutes`, `test_memory_mb`), one left out means the last one set, else the installation's, else 10 minutes and 2048 MB. Only test runners (`sandbox.check_command`; anything else → 400). The first run of a command for a project needs `confirm: true` (409 otherwise); later runs of the same command do not. Where `testcmd`'s `reach.ask` is not empty (since 2026-11-15) the tests start only when `reach` is that sentence, letter for letter, or the person agreed to it for this command before: 409 `{"error", "reach": {"ask", "words"}}` otherwise, with the sentence for the kind of tests the command is (the sheet shows it with its tick box); an agreement is kept per project, command and sentence, so a system whose sandbox holds less than before asks again. Runs in `lantern/sandbox.py` and re-analyzes; the job result is `{"returncode", "observed", "recall", "backend", "language", "traced", "timed_out", "time_limit", "over_memory", "memory_limit", "blocked": [{"kind": "write\|network\|read", "what"}], "ran", "unavailable", "not_run_for", "libraries", "off_network", "cancelled", "not_ended", "note", "score_before", "score_after", "summary"}`. `blocked[].kind` (since 2026-11-13 also `read`: the tests reached for one of the person's own folders, which the sandbox closes to a Python or JavaScript run on Linux). `libraries` (since 2026-11-13): what the tests ran on, `{"state": "fetched\|installed\|none", "store", "count", "exact"}` (fetched for this run from the store named, with how many libraries and whether every version was the project's own choice; the ones installed on this computer, when the check was offline; or none, when the project names none), null when there is no such record; the libraries themselves are in `run.json`. `off_network` (since 2026-11-14): true when this run's own walls kept the tests from the network, false when they did not (tests that are not Python on macOS and Windows, where Lantern's guard is inside Python only; the run's log says why), null for a run that does not say (one before that date, or one that did not run); the page says "with the network off" only for true, and for false that the tests were not kept from the network by this run. `ran` false + `unavailable` (a sentence, always Lantern's own words): the sandbox could not be set up on this computer, or (`not_run_for: "libraries"`, since 2026-11-13) the libraries the project names could not be had for the tests, so the tests were **not run**; the job still ends `done`, because everything that only reads the code was checked: `returncode` is null and `observed` 0, the score's "Tests pass" check is `skip` (not `fail`), and the Evidence Report names no test command. `cancelled`: the person stopped the tests (below); the job ended there, **no result file was written** (the project shows what its last finished check found, `score_after` equals `score_before`, `summary` is null). `returncode` null with `timed_out`: stopped at the time limit (`time_limit`, the seconds the tests had); `returncode` null with `over_memory`: stopped because the tests, with what they started, had more memory in use than `memory_limit` megabytes. Either way the tests did not finish, which is no pass and no failure: the check goes on, "Tests pass" is `skip` with `required: true` (its points stay in the sum and earn none; until 2026-11-13 a run stopped by the clock read `fail` there) and the release decision is Incomplete, with the way to give the tests more time or memory. Whatever way a test run ends, every process it started is ended too; `not_ended` lists, in Lantern's own words, anything that could not be (normally `[]`; the page then says so and never says beside it that everything was ended) |
 | `POST /api/jobs/<id>/stop` | `{}` | Ends a running test run: the tests and every process they started. Returns the job (`stopping: true`); the job then ends `done` with `result.cancelled` true and no result file changed (`pipeline.Stopped`). 404 for an unknown job, 400 for a job that cannot be stopped part-way (`can_stop` false), 403 without the app's token. Asking again, or after the job has ended, changes nothing |
 | `GET /api/agents` | | `{"agents": [{"id": "claude"\|"codex"\|"aider", "name", "found": bool}], "chosen": id or ""}`: the coding agents Lantern can run for "Fix this for me", and whether each one's program is on this computer |
-| `POST /api/projects/<id>/agentfix` | `{"finding": id}` | job (202), only when an installed agent is chosen in Settings (400 otherwise, and for a finding that is not open). Copies the project to `LANTERN_HOME/fixes/`, runs the agent there as a fixed argument list (never a shell line) with no `LANTERN*` variables, analyzes the copy offline and compares it with the project's results. Result: `{"fix": id or null, "status": "fixed"\|"fixed_with_new"\|"not_fixed"\|"no_change", "verdict", "agent", "returncode", "files": [{"path", "change": "added"\|"changed"\|"deleted", "diff"}], "new": [{"rank", "title", "file", "line"}], "fixed": N}`. The project is not touched |
+| `POST /api/projects/<id>/agentfix` | `{"finding": id}` | job (202), only when an installed agent is chosen in Settings (400 otherwise, and for a finding that is not open). Copies the project to `LANTERN_HOME/fixes/`, runs the agent there as a fixed argument list (never a shell line) with no `LANTERN*` variables, analyzes the copy offline and compares it with the project's results. Result: `{"fix": id or null, "status": "fixed"\|"fixed_with_new"\|"not_fixed"\|"no_change", "verdict", "agent", "returncode", "files": [{"path", "change": "added"\|"changed"\|"deleted", "diff"}], "new": [{"rank", "title", "file", "line"}], "fixed": N, "contract": {"verdict", "words", "broken", "not_shown", "items": [{"id", "state", "facts"}]}}`. The verdict is the fix contract's (below, "The fix contract"; since 2026-11-16): `not_fixed` also for a change after which the finding no longer shows and was only hidden, or whose scanner read less; the tests are not run here, so `contract.not_shown` holds `tests`. The project is not touched |
 | `POST /api/projects/<id>/agentapply` | `{"fix": id}` | job (202): copies only the fix's changed files into the project, refusing if any of them changed since the copy was made, deletes the copy, and analyzes the project again |
 | `POST /api/projects/<id>/agentdiscard` | `{"fix": id}` | `{"ok": true}`: deletes the copy. An id that is not a fix → 400 |
 | `POST /api/projects/<id>/starter` | `{"name": "Dockerfile"}` | `{"ok", "wrote"}`; never overwrites |
@@ -90,6 +96,8 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | `GET /p/<id>/evidence.html` | The Evidence Report |
 | `GET /p/<id>/evidence.json` | Its data (schema below) |
 | `GET /p/<id>/badge.svg` | `Lantern · commit 1a2b3c · 0 critical · Oct 31` |
+| `GET /p/<id>/change.html` | What changed: the change receipt as a page, built from `.lantern/change/change.json` by Lantern's own template (the `change.html` that lies beside it is never sent: a results folder may come with a project). The page holds no script at all, and its header says so: `Content-Security-Policy: default-src 'none'; style-src 'sha256-…'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'`. 404 "No change was compared yet" with no receipt, 409 for data that is no receipt this Lantern writes. The app shows it in the project's frame after the button "What changed" or the terminal's `diff`, and sets the theme on it from outside |
+| `POST /api/view` | `{path}` → `{url}`: a pass for one of the five result files above, so that the page can open it by its address (a frame, a new tab), where it cannot send the key. Good once and for a minute; 400 for any other path, 404 for an unknown project |
 
 ### Settings and connections
 
@@ -475,7 +483,18 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 
 `{"findings": [...], "tools": [scanner records], "incomplete": [the scanner records that apply and are not ok],
 "counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables",
-"logins_shown", "not_read", "ai", "mobile"}`
+"logins_shown", "route_logins", "not_read", "ai", "mobile"}`
+
+`route_logins` (since stage 2 of the 2026-11-14 roadmap; absent from results written before it): what every route
+shows about asking who is calling, one record a route, so that two checks of one project can be compared route by
+route (`lantern diff`): `[{"node", "detail": "POST /api/admin/export", "file", "line", "login": "shown" | "lookup" |
+"none", "why": the sign that was read or null, "public": the path is one made to be open (a sign-in, a webhook),
+"changes": its verb changes data, or it is a Server Action whose code does}]`. It is the reading the missing-login
+rule and the protections card make (`websec.login_check`), one story with the findings: a route in `logins_shown`
+is `shown` whatever its names, and a route an open `LW-AUTH-MISSING` finding stands on is `none`. `lookup`: the
+handler only looks a user up by a value of the request, which finds a record and not the caller. Not listed: routes
+in test code, the one door other routes stand behind (tRPC's), what a phone app is started with. A heuristic, like
+the two rules it is shared with.
 
 `logins_shown`: the node ids of the routes whose own code turns away whoever is not signed in, as the flow step read
 it (a check under any name, one written in place, a hook, a dependency); `null` when that step did not run, and
@@ -518,7 +537,7 @@ link that leads out of it, a pipe), `errors` (one line per file or package left 
 the project: `linked` (the project was handed over under a name of Lantern's own) or `plain` (by its own path).
 `partial` keeps the findings the tool did
 produce. Bandit's `scope` has `under_another_name` when Python kept as text was handed to it (how many such files, a
-part of `files`), and the record then names them in `read_as_text`. `copied-audit` (`depaudit.run_copied_audit`: the
+part of `files`), and the record then names them in `read_as_text`. Bandit's record has `way: "copies"` when it was started on copies of the project's own Python files, in a folder of Lantern's own, and not on the project's folder: that is done where something in the project that is not the project's own (a link that leads out, a pipe) cannot be written as an exclusion (a comma in its path, or more of them than fit a command line). Findings name the project's files as always; a file that could not be copied is in `errors` and makes the run `partial`; where no folder for the copies can be made the record is `failed` and Bandit is not started; nothing of such a run is kept between runs. `copied-audit` (`depaudit.run_copied_audit`: the
 copies under `vendor` that say what they are, asked of OSV as npm packages by the name and version their own
 `package.json` gives, which nothing proves) adds `copied` and `copied_examples` (the copies with a name and a
 version), `unnamed` and `unnamed_examples` (code files that belong to no such copy: the record is then `partial`),
@@ -628,6 +647,44 @@ a value made safe for a page, the rank is `low`; anything else is `medium`; `fix
 falls back to text in the code when the setting is missing), `password` (the password of an account the app
 connects with) or `address` (a database address that carries its password); the `snippet` has `[redacted]` in the
 secret's place and no field repeats the text.
+`LW-TOKEN-PICKUP` (639): a Python or JS/TS route that hands back, under a credential's name, something it looks
+up with one plain value of the request, with no second proof and no sign of who is calling in the handler; rank
+`medium`, `tool_confidence` `LOW`. The finding stands on the line that fetches; the title names the route, the
+word (`token`) and the value (`code`); `more_info` names the call that fetches and what to check (who can know
+the value). Its `scenario` is the story kind `pickup`.
+`LW-LOOPBACK-COOKIE` (287): a server the code starts on this computer's own address (`127.0.0.1`, `localhost`,
+`::1`) that puts a login into a cookie: a cookie set under a name that says so, a `Set-Cookie` header, or the
+framework's own session given a key that says who is signed in. A browser keeps cookies by host name and not by
+port, so it sends this one to every other program that serves pages on the computer. Rank `medium`,
+`tool_confidence` `LOW`. The finding stands on the line that sets the cookie; the title names the cookie;
+`more_info` names the file and line of the start and says what to check (what the cookie opens) and what to do
+for a server that stays on this computer (the key in a header the page adds itself). Its `scenario` is the story
+kind `local-cookie`.
+`LW-SW-KEEPS-PAGES` (525): a service worker whose `fetch` handler puts aside every answer it fetched under the
+request's own address (`put` or `add` on a cache, in the handler or in a function of the file the handler hands
+the request to) with nothing that narrows what is kept (the kind of file, its ending, a folder of static files, a
+list), in a project where some other code file shows that people sign in. Rank `medium`, `tool_confidence` `LOW`.
+The finding stands on the line that stores; `more_info` names the file that shows the login and says that the
+copies stay in the browser after the person has signed out. Its `scenario` is the story kind `kept-pages`.
+`LW-LIMIT-COUNTED-LATER` (367; `lantern/countlater.py`): a Python or JS/TS function that turns a request away with
+402 or 429 where a condition says a limit is reached, then waits for its work (an awaited call, a call to a model
+or another service), and writes the use down only after that (a call named for counting, a number stepped in
+place, `increment:` / `decrement:`, SQL that sets a column to itself plus or minus). Requests sent at the same
+moment all read the number before any is counted. Rank `medium`, `tool_confidence` `LOW`. Quiet where the use is
+counted or held between the look and the work (the look's own condition included), where a limiter takes one in
+the look, where the function names a lock or a transaction, and where the count shares no name with the look or
+with the line that gave the look its value. The finding stands on the look's line; `more_info` names the lines of
+the work and of the count and the name the two share. Its `scenario` is the story kind `counted-later`.
+`LW-SHARED-CONNECTION` (567; `lantern/sharedconn.py`): a Python file that opens one SQLite connection with the
+library's own guard switched off (`sqlite3.connect(..., check_same_thread=False)`), keeps it on `self`, on its
+class or under a name at the top of the file, and uses it in a function with no lock held. Two requests that
+are answered on two threads at the same moment can then be on the one connection together. Rank `medium`,
+`tool_confidence` `LOW`. Quiet where a use stands under a lock (`with <lock>:`, a decorator with a lock's name,
+an `acquire()` in the function), in the function that opens the connection and at the top of the file, for a
+bare `close()`, in a function the file only calls from such places, and where every use that is left is in
+`async def` functions or in functions only they call (the event loop's one thread). One finding for each
+connection, on the first such line; `more_info` names the line that opens the connection, the other functions
+with their lines, and how many uses stand under a lock. Its `scenario` is the story kind `shared-connection`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -839,7 +896,7 @@ the scenario of the function's finding, else a one-line sketch from the map.
 `note?`: a sentence, present when there is no commit (`not a git repository`, `git not installed`, or why the folder's
 git folder was not read: it is a link, it is kept in a place that does not name the folder back, or it lies outside
 the folder and is not the current user's) or when git could not compare the files with the commit, in which case
-`dirty` is `true`: `lantern/gitfacts.py`),
+`dirty` is `true` (also where the git folder takes part of its history from another place, a list of other folders of objects, which `git clone --shared` and `--reference` write too, or a link among its own objects: git is not started on it and `committed_at` is null): `lantern/gitfacts.py`),
 `scorecard` (`readiness` (with `checklist` beside `score`), `now` counts, `before` counts, `baseline_date`,
 `baseline_commit`), `release` (the whole `release` of `readiness.json`, or null for a readiness file an older Lantern
 wrote; the Scorecard section shows the decision, every criterion, the profile and what the decision is tied to; the
@@ -911,9 +968,79 @@ first use and keeps in `LANTERN_HOME/seal.key`; it is absent when that folder ca
 usually lies in the project, so a project can bring a `behaviour.json` of its own: without a seal that holds, the
 record counts for nothing. The seal says which Lantern made the record, not that the record is right.
 
+### `change/` (the change receipt, `lantern diff`)
+
+Written by `lantern diff [PATH] [BASE..HEAD]`, by the app's "What changed" (`POST /api/projects/<id>/change`) and by
+the GitHub Action on a pull request (`docs/github.md`), into `change/` of the results folder: `change.json` (the
+data), `change.md` (the text for a pull request, begins with `<!-- lantern-change -->`), `change.html` (one page with
+no script), and the two checks' own results in `before/` and `after/` (each a results folder like any other; a side
+that was handed over with `--base-results` / `--head-results` is not written again). The receipt is a pure function
+of the two checks' `graph.json`, `security.json` and `readiness.json` (`diff.compare`): no model writes or ranks any
+line, and two versions that differ only in comments and spacing give `same: true`. `diff.read(path)` reads a receipt
+back the strict way (a plain file, `schema` 1, every part there; `diff.NotResults` otherwise).
+
+`change.json`:
+
+| Field | Meaning |
+|---|---|
+| `schema` | `1` |
+| `lantern` | the version that compared |
+| `base`, `head` | each side: `{"label": what the person called it ("main", "the files as they are now", "this pull request"), "commit", "lantern": the version of the Lantern that made this check, as its `run.json` says it, or null (results written before 2026-11-16, or text there that is no version), "code_sha256", "files", "uncommitted_changes"}` |
+| `same` | true when nothing below differs |
+| `counts` | `doors_added`, `doors_removed`, `doors_moved`, `logins_changed`, `logins_weaker`, `doors_added_open`, `links_broken`, `links_unanswered`, `findings_new`, `findings_fixed`, `findings_now_reached`, `findings_raised` (ranked higher than before), `findings_accepted`, `findings_reopened`, `paid_new`, `functions_changed`, `functions_added`, `functions_removed` |
+| `release` | `{"before", "after"}`: each `{"decision", "words", "criteria": {findings, scanners, dependencies, tests, behaviour}, "score", "grade", "counts"}` as `readiness.json` has them; `"changed"`; `"criteria"`: `[{"id", "before", "after"}]` for each criterion that moved; `"why"`: sentences; `"words"`: `"Passed → Blocked"` |
+| `doors` | pages, routes and commands (identity: kind + detail). `added`, `removed`: `[{"kind", "detail", "words", "node", "file", "line", "login": the route's `route_logins` record or null, "login_recorded"}]`; `moved`: the same handler under another address (`before`, `after`); `login_changed`: a route on both sides whose `login` differs (`before`, `after`, `weaker`) |
+| `links` | requests the page makes: `broken` (still made, and no route answers it any more), `unanswered` (new, and no route of the project answers it), `mended` (unanswered before, answered now), `unasked` (a route that is still there and that no page asks any more) |
+| `findings` | by finding id: `new`, `fixed`, `still_open` (on code this change touched, and open as before), `now_reached` (in the code before, and a page or route reaches it only now; `rank_before`), `rank_changed` (`rank_before`, `raised`), `accepted` (`how`: `nosec` for a comment on the line with a written reason, `accepted` for `lantern accept`; `reason`; `came`: true when the finding came with this change, accepted from its first day), `reopened` (accepted before, open now). A finding's id is made from its line's text, so an edited line has its finding under another id: one that is gone while its rule shows again in the same file is listed as `still_open`, `accepted` (a `# nosec` comment is an edit of the line) or `reopened`, and `fixed` is said only where the rule no longer shows in that file |
+| `paid` | calls that cost money (a model, an embedding, an image, speech, a payment, an email, an SMS: the kinds of `aiapp.PAID_KINDS`; a vector store is none, and a call is one only where the code makes it, never where a remark or a text names a provider) that a route reaches now and did not before (the route is new, the call is new, or the way from one to the other is): `[{"kind", "detail", "words", "node", "file", "line" (the route), "calls": [{"kind", "provider", "file", "line", "what"}], "in": {"node", "file", "line"} (the function that makes the call), "login": the route's login record as in `doors`, or null}]`. A paid call no route reaches is not listed |
+| `touches` | the functions whose text changed (`changed`, `added`, `removed`: `[{"node", "name", "file", "line"}]`, by each function's `fingerprint`), their `files`, how many are `in_tests`, the `doors` that lead to them, what they lead to (`reaches`: `table`, `shell` (what starts a program; not what a started program gave back or raised, `diff.NOT_THE_SHELL`), `service`, `outside`), `paid`, `cut_short` (the walk over the map stopped at its limit), `by_text` (changed files Lantern maps no function of) |
+| `more` | counts of rows left out of a list that was cut |
+| `limits` | sentences: what this comparison cannot say (a scanner that did not finish on one side, a part of the release decision only one side was checked for, files of a commit that were not copied, results of an older Lantern without `route_logins`, two checks made by different versions of Lantern or a check that does not say which made it: a difference may then be the Lantern's and not the change's; two checks whose `security.json` `id_version` differ: their findings are not compared at all, every list under `findings` is empty) |
+
+Everything in `change.md` that comes from a project is written so that it stays text on GitHub (`onrepo.md`,
+`onrepo.code`: no HTML, link, picture, heading or table of its own, and no `@name`, `#12` or address that GitHub
+would turn into a notice to a person or a link). Everything in `change.html` is escaped.
+
+### The fix contract (`lantern fix`, the connector's recheck, "Fix this for me")
+
+Not a result file of a check: the answer of `fixcheck.judge` about two checks, the one made before a fix and the
+one made after it (`docs/fix.md`; since stage 3 of the 2026-11-14 roadmap).
+
+`{"schema": 1, "verdict": "passed" | "refused" | "incomplete", "words": one sentence, "finding": {id, rule, title,
+file, line, rank, …}, "items": [{"id", "state": "held" | "broken" | "not-shown", "need": what this part needs, as a
+sentence, "facts": [what Lantern read there, as sentences]}], "broken": [ids], "not_shown": [ids]}`
+
+`items` always holds the seven parts in this order: `gone`, `no-suppression`, `still-read`, `links`, `calls`,
+`nothing-new`, `tests`. `passed` only when every part held; `refused` when one is broken; `incomplete` when none is
+broken and one is not shown. A part's `facts` are at most 12 sentences (the rest counted in the last one), each
+printable, with everything that came from the project cut to a length; a UI shows them as text.
+
+Where it comes back:
+
+* `lantern fix check … --format json`: `{"finding": id, "verdict", "contract": the answer above, "compared_with":
+  {"what": "brief" | "first-check" | null, "kept_at", "words"}, "candidate": bool, "files": [paths the candidate
+  changes] or null, "tests_ran": bool, "suggestion": {"written": FILE or null, "why": sentence or null} or null}`.
+  The command ends with 0 (passed), 1 (refused), 3 (incomplete) or 2 (nothing could be checked).
+* `lantern fix brief … --format json` and the connector's `lantern_fix_brief`: `{"project", "finding": the finding
+  as `lantern_findings` gives it, "path": the steps from the page or route to the line, "flow": {"steps", "class"}
+  or null, "contract": [{"id", "need"}], "kept_at"}`; the connector adds `"then": {"tool": "lantern_recheck",
+  "finding"}`, `"tests"` (a sentence: the connector runs none) and `"cannot_close": true`.
+* The connector's `lantern_recheck`: `{"project", "finding", "status": "fixed" | "refused" | "not-shown" | "open" |
+  "changed", "verdict", "was", "now", "contract", "compared_with": {"what", "kept_at"}, "fixed": [...], "new":
+  [...], "changed_still_open": [...]}`; with `refused` the finding is listed under `"refused"` and with `not-shown`
+  under `"not_shown"`, never under `"fixed"`.
+* `POST /api/projects/<id>/agentfix` (above): `contract` without `schema`, `finding` and each part's `need`.
+
+The check a fix is compared with is kept in `LANTERN_HOME/fix-briefs/<project>/<finding>/`: copies of that check's
+result files and `brief.json` `{"schema", "finding", "kept_at", "how": "brief" | "first-check", "files"}`.
+
+A pack's record in `security.json` `tools` carries `rules` (how many) and `rules_sha256` (16 hex characters of what
+the pack said: its name, version, requirements, rules and entry patterns) since the same date; a record without
+them was written by an older Lantern.
+
 ### Other files
 
-`calls.json` (above), `run.json` (timings, privacy, offline, trace, `incomplete` `[{tool, state, status, why, role}]`,
+`calls.json` (above), `run.json` (`lantern`: the version that made this check, since 2026-11-16, read by `lantern diff`; timings, privacy, offline, trace, `incomplete` `[{tool, state, status, why, role}]`,
 finished_at; `kept`, since 2026-11-12 and only when the run asked for kept work = `{"<kind>": {"reused": n, "anew": n}}`
 for the kinds `python-file` (how a Python file reads) and `bandit` (what Bandit said about a set of files): how much
 of the work this run took from `LANTERN_HOME/cache` and how much it worked out anew, also said in the log as
@@ -941,7 +1068,7 @@ project's own choice (an `==` pin or a lock file, named in `locked`) and `checke
 project names; at the top `exact` is true when every version was, `checked` counts the fingerprints the project
 names, `added` is what Lantern asked for itself (the test runner), `notes` are Lantern's own sentences about what it
 passed over or did not do (an option of pip's it does not take, the libraries the project names as optional and
-whether they were fetched too or left out, install scripts that were not run, a `package.json` with no lock file), `reached` and `refused` are the places the
+whether they were fetched too or left out, install scripts that were not run, a `package.json` with no lock file and the workspaces that were then not handed to npm), `reached` and `refused` are the places the
 fetch reached and how many it was refused, `walls` says what held the fetch to its doorkeeper (`own-network`, `port-rule` or `told`: `lantern/libraries.py`;
 `told` also inside a sandbox whose doorman makes every connection for what runs in it, where no rule of the run's own decides),
 `built` (Python on Linux, since 2026-11-14) is on a package that the store did not have ready-built for this system and that Lantern
@@ -962,6 +1089,8 @@ or a folder that the project names itself);
 `lantern.trace.counted` says whether anything of the run is in the results; tests the person stopped leave no record,
 because a stopped run writes no file), `baseline.json` (first-run findings for "fixed since"),
 `cache/` (explanation cache).
+
+With no lock file npm is handed a `package.json` Lantern wrote, never the project's own (`libraries._for_npm`): the four tables of libraries, each library by a package name and by a version, a range, a tag or the store's own name for it (`npm:<name>@<versions>`); the `optional` marks of `peerDependenciesMeta`; `overrides` of the same form. A library or an override that names a folder, a file, a link, a repository or an address means npm is not started and the tests are not run (`trace.unavailable`, `not_run_for: "libraries"`), and so does a package in npm's own record of the fetch that did not come from the store (`libraries.not_from_the_store`). With a lock file nothing changed: a library kept in a folder of the project is fetched as the lock file names it.
 
 What `lantern analyze` reads back from an earlier run of the same folder (`lantern/results.py`, `earlier`):
 `security.json` (which findings were there before), `baseline.json` and `explanations.json` (for the report). Each is
@@ -1012,18 +1141,28 @@ analyse a repository from the website without installing anything. Plan and late
 **Sign-in.** Two ways, same accounts:
 
 * *The website* (`/`, same origin as the API, so no CORS is offered): `POST /v1/signin/start {provider}` makes a
-  one-time code, keeps it in an HttpOnly cookie `lsi` (path `/v1/signin`, 10 min, SameSite=Strict) and answers the
-  gateway page to open (`<gateway>/v1/auth/<provider>/start?cli=<code>`, which goes straight to GitHub or Google).
-  The page then calls `POST /v1/signin/poll` every 1.5 s; the server collects the token from the gateway's
-  `/v1/auth/claim` and puts it in an HttpOnly cookie `lt` (path `/`, 30 days, SameSite=Strict, Secure on https).
+  secret and a mark, keeps both in an HttpOnly cookie `lsi` (path `/v1/signin`, 10 min, SameSite=Lax: the browser
+  must send it when the gateway sends it back here) and answers the gateway page to open
+  (`<gateway>/v1/auth/<provider>/start?challenge=<SHA-256 of the secret>&return=<this site>/v1/signin/return&nonce=<mark>`,
+  which goes straight to GitHub or Google). The gateway sends the browser that finished the sign-in to
+  `GET /v1/signin/return?code=<one-time code>&state=<mark>`; when the mark is this browser's own, the server
+  collects the token from the gateway's `POST /v1/auth/redeem` with the code and the secret and puts it in an
+  HttpOnly cookie `lt` (path `/`, 30 days, SameSite=Strict, Secure on https); a code with any other mark signs
+  nobody in and is used up. The tab the person started in asks `POST /v1/signin/poll` every 1.5 s, which only says
+  whether this browser is signed in yet.
   The page's script never sees the token. A request authenticated by the cookie that changes something (anything
   but GET) must also carry `X-Lantern-Site: 1`, which another site's page cannot send here; without it: 403.
 * *Apps and scripts*: sign in at the gateway (`lantern login`) and send `Authorization: Bearer lt_...`.
 
-Either way the cloud service asks the gateway `GET /v1/whoami` → `{account, label}` and remembers the answer for 5
-minutes, keyed by the token's SHA-256 in memory. Runs belong to the account (`github:<id>`, `google:<sub>`), so they
-survive a new sign-in. Each sign-in gets its own token and earlier ones keep working (up to 8 places per
-account, sharing one allowance). Nothing about the token is stored on disk.
+Either way the cloud service asks the gateway `GET /v1/whoami` → `{account, label}` on every request, so a sign-in
+that was ended anywhere is refused at the next one (since 2026-11-15; before, a "yes" was remembered for 5 minutes).
+With `LANTERN_CLOUD_IDENTITY_TTL` above 0 a "yes" is used again for that many seconds, keyed by the token's SHA-256
+in memory, for a read (`GET`) only: a request that changes something or makes a link always asks. Runs belong to the
+account (`github:<id>`, `google:<sub>`), so they survive a new sign-in. Each sign-in gets its own token and earlier
+ones keep working (up to 8 places per account, sharing one allowance). Nothing about the token is stored on disk. A
+sign-in that was signed out on the website while the gateway could not be reached is refused by the website from
+then on (its SHA-256 in memory, at most 5,000 of them; the token itself is held in memory only for the few minutes
+the website tries again to end it at the gateway: after 5, 15, 45, 120 and 300 seconds).
 
 **Errors** are `{"error": {"type", "message"}}`; `message` is a plain sentence the UI may show as is. Types:
 `signed_out` (401: no token, or an expired/replaced one: sign in again), `forbidden` (403), `not_found` (404),
@@ -1038,17 +1177,18 @@ account, sharing one allowance). Nothing about the token is stored on disk.
 | `GET /react.production.min.js` · `/react-dom.production.min.js` · `/intro-runtime.js` · `/intro.js` | none | The home page's intro: React 18.3.1 (vendored) and the landing page's intro files (copies of `site/intro/`, a test keeps them equal), loaded under the page's nonce |
 | `GET /v1/signin/providers` | none | `{providers: ["github", "google"]}` as switched on at the gateway; 503 when it does not answer |
 | `POST /v1/signin/start` `{provider}` | `X-Lantern-Site` | `{url}` to open; sets `lsi`. 400 for a provider that is not switched on |
-| `POST /v1/signin/poll` | `X-Lantern-Site` + `lsi` | `{signed_in: false}` while waiting; `{signed_in: true, label}` + `lt` cookie once; 400 with no sign-in in progress |
-| `POST /v1/signout` | `X-Lantern-Site` | Ends this browser's sign-in at the gateway (`POST /v1/auth/signout`) and clears `lt`; `{"everywhere": true}` ends every sign-in of the account (website, app, CLI) → `{signed_in: false, ended}`; 503 when the gateway is unreachable and `everywhere` was asked |
+| `GET /v1/signin/return?code=&state=` | `lsi` | The page the gateway sends the browser back to. With this browser's own mark: collects the token (gateway `POST /v1/auth/redeem`), sets `lt`, clears `lsi`, and shows "You're signed in" (200). Any other mark, or no `lsi`: the code is used up, nobody is signed in (400). The gateway not answering: 503 |
+| `POST /v1/signin/poll` | `X-Lantern-Site` | `{signed_in: false}` while a sign-in of this browser is going (`lsi`); `{signed_in: true, label}` once `lt` is a sign-in; 400 with neither |
+| `POST /v1/signout` | `X-Lantern-Site` | Ends this browser's sign-in at the gateway (`POST /v1/auth/signout`) and clears `lt`; `{"everywhere": true}` ends every sign-in of the account (website, app, CLI) → `{signed_in: false, ended, confirmed: true}`. The links to results made for the account (`/view`) open nothing from then on. When the gateway cannot be reached: with `everywhere`, 503, nothing is signed out and `lt` stays; without it, `lt` is cleared, the website itself takes that sign-in no more and tries again for a few minutes to end it at the gateway, and the answer is `{signed_in: false, ended: 0, confirmed: false, message}`: the sign-in is not ended at the gateway yet, and `message` is the sentence for the person (the page shows it). `Cache-Control: no-store` |
 | `GET /v1/me` | Bearer or `lt` | `{account: "github"\|"google"\|"token", label, runs_today, runs_active, limits, connect_url}` (`connect_url`: the GitHub App's install page when Connect GitHub is on, else null) |
 | `GET /v1/samples` | none | `{samples: [{id, title, stack, level, summary}]}`: Lantern's built-in starter apps (`lantern.learn.catalog`), each with planted problems, for people with no repository to hand |
 | `POST /v1/repos` `{link \| sample, privacy?, stored_snippets_ok?}` | Bearer or `lt` | 202 + a **run** (status `queued`). `link`: https link to a public repository on a host `lantern.remote` accepts (and `LANTERN_CLOUD_HOSTS`, when set). `sample`: a starter id from `/v1/samples` instead of a link; the run's `link` is then `lantern:sample/<id>` and its `host` is `sample`, and the worker writes the starter from the package (`learn.scaffold`) instead of cloning (400 "Choose one of the sample apps…" for any other value). `privacy`: `"structure"` (default, no code kept) or `"full"` (short snippets kept; needs `stored_snippets_ok: true`, else 400 with the sentence to show). 400 for a bad link or privacy, 429 over a limit (one active run per person, runs per day, runs for everyone per day) |
 | `POST /v1/uploads?name=&privacy=&snippets_ok=` (body: the .zip, `Content-Type: application/zip`) | Bearer or `lt` (+ `X-Lantern-Site: 1` with the cookie) | 202 + a **run**, as `/v1/repos`, with `link` `lantern:upload/<name>` (`name` cut to letters, digits, `._-`, at most 80; a label only) and `host` `upload`. The website zips a chosen or dropped folder in the browser (leaving out `node_modules`, `.git`, virtual environments, build output) or sends a chosen .zip. The body must start with `PK` (400 otherwise) and stay under `LANTERN_CLONE_MAX_MB` (413, checked on `Content-Length` and while receiving). It waits in the uploads folder (`LANTERN_CLOUD_UPLOADS`) until the run starts, is then moved into the run's temp folder and unpacked by `python -m lantern.archive` in the restricted process with no network (relative names only, no links or special files, no passwords, unpacked size capped while writing; a refusal ends the run with the unpacker's sentence), and is gone when the run ends. `snippets_ok=1` plays the part of `stored_snippets_ok`. Same limits as `/v1/repos`. `POST /v1/runs/{id}/explain` on an upload run is 409: the code is no longer there to read again |
 | `GET /v1/runs` | Bearer or `lt` | `{runs: [run]}`, the person's runs, newest first (at most 100) |
 | `GET /v1/runs/{id}` | Bearer or `lt` | the run; 404 when it is not the caller's (same answer as a missing id) |
-| `GET /v1/runs/{id}/stream` | Bearer or `lt` | `text/event-stream`: `event: log` with one JSON string per line, then one `event: end` with the run, then the stream closes. A finished run sends its saved tail and `end` at once |
-| `POST /v1/runs/{id}/view` | Bearer or `lt` | `{expires_in, report, evidence, badge, findings, graph, readiness}`: absolute links that open the run's results in a browser for the next `LANTERN_CLOUD_VIEW_MINUTES` (60). Each carries `?k=<expiry>.<HMAC>` for this run only. 404 when not the caller's run, 409 when it has no report (not `done`). Open the link at once; never store or share it (anyone holding it can open it until it expires; to show someone, use Share) |
-| `GET /r/{id}/report.html` · `evidence.html` · `badge.svg` · `findings.json` (= `security.json`) · `graph.json` · `readiness.json` | `?k=` from `/view`, or the `lv` cookie the first page sets for `/r/{id}/` | Rebuilt from Lantern's templates (`lantern.server.result_page`, the same code as `lantern serve`): the stored files are read for data only, pages get a per-response nonce CSP plus the report's own hash CSP, `live` is null (no actions), privacy as chosen before the run. Headers: `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. 401 with a sentence for a missing, wrong or expired key; 404 for other names |
+| `GET /v1/runs/{id}/stream` | Bearer or `lt` | `text/event-stream`: `event: log` with one JSON string per line, then one `event: end` with the run, then the stream closes. A finished run sends its saved tail and `end` at once. While it is open the stream looks again, at every round, at whether its reader may still read the run and the same layers of it, and asks the gateway about the sign-in every 15 seconds: when something was taken away it closes with no `end` (ask for the run again to learn why); a gateway that cannot be reached ends nothing |
+| `POST /v1/runs/{id}/view` | Bearer or `lt` | `{expires_in, report, evidence, badge, findings, graph, readiness}`: absolute links that open the run's results in a browser for the next `LANTERN_CLOUD_VIEW_MINUTES` (60). Each carries `?k=<expiry>.<layers>.<who>.<HMAC>` for this run only: `layers` is `all` or the code of the layers the caller may see, `who` a keyed fingerprint of the caller's account (it says nobody's name), and the signature covers those, the run and the account's round of links. A link opens what the person it was made for may read at the moment it is used: nothing once they are taken out of the workspace, the run leaves it, or they may see fewer layers than the link names (more layers later change nothing: it opens what it was made for), and nothing after they sign out on the website (since 2026-11-15; before, a link kept the run and the layers of the moment it was made, for the hour). 404 when not the caller's run, 409 when it has no report (not `done`). Open the link at once; never store or share it (until one of those ends it, anyone holding it can open it; to show someone, use Share) |
+| `GET /r/{id}/report.html` · `evidence.html` · `badge.svg` · `findings.json` (= `security.json`) · `graph.json` · `readiness.json` | `?k=` from `/view`, or the `lv` cookie the first page sets for `/r/{id}/` | Rebuilt from Lantern's templates (`lantern.server.result_page`, the same code as `lantern serve`): the stored files are read for data only, pages get a per-response nonce CSP plus the report's own hash CSP, `live` is null (no actions), privacy as chosen before the run. Headers: `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. 401 with a sentence for a missing, wrong, expired or ended key (one page for all of them: it does not say which); 404 for other names |
 | `GET /v1/runs/{id}/share` | Bearer or `lt` | `{shared, url}`; `url` is null while sharing is off (the default) |
 | `POST /v1/runs/{id}/share` | Bearer, or `lt` + `X-Lantern-Site` | Turns sharing on: `{shared: true, url}`, `url` = `<public url>/s/<slug>/report.html`, the slug 24 random characters, not the run id. Asking again returns the same link. 404 when not the caller's run, 409 when the run is not `done` |
 | `DELETE /v1/runs/{id}/share` | Bearer, or `lt` + `X-Lantern-Site` | Turns sharing off: `{shared: false, url: null}`. The old link stops working at once and never comes back; sharing again makes a new one |
@@ -1073,7 +1213,7 @@ account, sharing one allowance). Nothing about the token is stored on disk.
 | `GET /v1/runs/{id}/notes` | Bearer or `lt` (the run's owner, or a member of its workspace) | `{notes: [{id, node, body, by, mine, created, can_delete}]}`: notes people left on functions in this run's map, oldest first. A member who sees only some layers gets only the notes on functions in those layers |
 | `POST /v1/runs/{id}/notes` | the same, + `X-Lantern-Site` with `lt` | `{node, body}` → 201 `{id}`. `node` must be a function on this run's map (and in a layer the caller can see), else 404; `body` is 1 to 1000 characters of text, else 400; 409 before the run is done; 429 past `LANTERN_CLOUD_NOTES_PER_RUN` (300). A note is words only: it never changes the analysis and is never sent to a model |
 | `DELETE /v1/notes/{id}` | the note's author or the run's owner | `{deleted: id}`; 403 for anyone else who can open the run, 404 for people who can't. Deleting a run or an account deletes its notes |
-| `PUT /v1/workspaces/{id}/people/{person}` | owner | `{lanes: ["browser", "frontend", "server", "data"] (any of them) or null}` → the workspace: per-layer permissions. That member's `/view` links open a report built without the other layers (`lantern/scope.py`): calls into them end at a sealed node; the evidence report and raw JSON answer 403; `GET /v1/runs/{id}` has no summary or log and lists `lanes`; the stream sends no log lines; Ask Lantern with that run answers 403. Choosing all four is the same as null. 400 for anything else; 409 for the owner, who always sees everything |
+| `PUT /v1/workspaces/{id}/people/{person}` | owner | `{lanes: ["browser", "frontend", "server", "data"] (any of them) or null}` → the workspace: per-layer permissions. That member's `/view` links open a report built without the other layers (`lantern/scope.py`): calls into them end at a sealed node; the report's data has `readiness` null (the score with its checks, the release decision and the protections are worked out from every layer, so the Readiness and Protections pages say they are not shown in this view) and of each scanner in `security.tools` only `tool`, `version`, `state` and `status` (= the state's word); the evidence report, the badge (it shows the whole app's score and its critical and high counts; since 2026-11-15, before it was served and the report kept the readiness data with the hidden names taken out) and raw JSON answer 403; `GET /v1/runs/{id}` has no summary or log and lists `lanes`; the stream sends no log lines; Ask Lantern with that run answers 403. Choosing all four is the same as null. 400 for anything else; 409 for the owner, who always sees everything |
 | `DELETE /v1/workspaces/{id}/people/{person}` | owner, or the person themselves | `{removed, left}`: the owner takes someone out, or a member leaves. Their runs in it go back to being theirs alone. 409 for the owner (close the workspace instead) |
 | `PUT /v1/runs/{id}/workspace` | the run's owner | `{workspace: id \| null}` → the run: puts a finished run in a workspace the caller is in, or takes it out. Members of that workspace can then read it (`GET /v1/runs/{id}`, its stream, `/view` links, Ask Lantern), never share, explain, move or delete it |
 

@@ -83,6 +83,7 @@ databases are not started yet (see Limits).
 | `redirect` | the answer does not send the visitor to another site (`own_hosts`) | one | sent elsewhere |
 | `address` | the app sets out for no address but `may_reach` | one | outside address |
 | `limit` | after `times` tries the next is refused (`limited`, default 429 or 423), straight after, after a restart, and on another copy of the app | three | unlimited; forgotten |
+| `ended` | `request` works for `who`; after the `end` request (a sign-out, an account switched off, an invitation taken back; `{"request": …, "as": …}` when somebody else makes it) the same request is refused (`refused`, default 401 or 403; name 302 where the app sends people to its sign-in page): straight after, after a restart, and on another copy of the app that had answered the request before (`across` picks some of `same`, `restart`, `other-worker`) | three | lived on (the request was accepted again). Inconclusive when the request did not work before, when `end` did not work, or when the answer afterwards is neither a refusal the check names nor accepted |
 | `once` | two of the same request at the same moment end as one after the other does | one | raced |
 | `retry` | the same request sent again, or sent again after the answer was lost, is not done twice | two | repeated |
 | `faults` | the request is made to fail at each of its database writes and commits, and is cut off before each and before the answer leaves; afterwards all of its work is there or none, and `then` (somebody else's ordinary request) works and saves only its own | one per place | partial; carried over; stuck |
@@ -95,7 +96,7 @@ Every check can have `arrange` (steps run before each of its cases) and `about` 
 
 * **held**: the app did what the plan says must hold, and the control beside it worked.
 * **broken**, with codes: `let-in`, `refused-but-changed`, `leaked`, `accepted`, `took-effect`, `sent-elsewhere`,
-  `outside-address`, `outside-file`, `unlimited`, `forgotten`, `raced`, `repeated`, `partial`, `carried-over`,
+  `outside-address`, `outside-file`, `unlimited`, `forgotten`, `lived-on`, `raced`, `repeated`, `partial`, `carried-over`,
   `stuck`, `crashed`; `saw` holds the status, what changed (`{"notes": [added, removed, changed]}`), what the app
   asked about names, what it set out for, what the sandbox refused, and the files outside its folders that it
   made, removed or changed.

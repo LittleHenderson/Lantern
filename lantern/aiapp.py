@@ -4,7 +4,8 @@ Everything here is deterministic pattern work on the graph and the source, like 
 
   * `find_calls(g)`   — every call into a model, embedding, vector-store or other pay-per-use API (Stripe, email,
                         SMS), pinned to the function that makes it. The viewer marks those functions and the paths
-                        that reach them ("click → route → model call"). Stored in `security["ai"]`.
+                        that reach them ("click → route → model call"). Stored in `security["ai"]`. Read from the
+                        code only: a remark and a text that runs over several lines make no call (`read_as_code`).
   * `LA-WALLET-DRAIN` — a route that reaches a paid call with no login check and no rate limiting anywhere in the
                         app: one script in a loop spends the owner's money. HIGH when neither protection is visible,
                         MEDIUM when only rate limiting is missing. Heuristic (`tool_confidence: LOW`): it reuses the
@@ -120,6 +121,96 @@ def _comment(line: str) -> bool:
     return s.startswith(("#", "//", "*", "/*", "--", "'''", '"""'))
 
 
+# What a file writes about and does not do (2026-11-16). Until then every line that did not begin as a comment was
+# read as code: a remark at a line's end, the later lines of a block comment or a docstring, and a text kept over
+# several lines (a help text, a tiny app in a test) all "made" paid calls. Lantern's check of itself pinned a payment
+# to `lantern/flow_js.py` for a remark there, and the first pull request that got the comment "what this change does"
+# was told its code leads to a call that costs money. One pass over the file; every alternative has one way through
+# its text, and what nothing closes is taken to the file's end and left as it is written, so no start is looked at
+# twice. A text on one line is left to the line's own reading (`QUOTES`): here it only keeps a `#`, a `//` or a `/*`
+# inside it from starting a remark, as a backslash or a colon in front of `//` does (a pattern, an address).
+_ONE_LINE = r"\"(?:\\.|[^\"\\\n])*\"?|'(?:\\.|[^'\\\n])*'?"
+_SLASHES = r"(?<![\\:])//[^\n]*|(?<!\\)/\*[\s\S]*?(?:\*/|\Z)|"
+_READ = {
+    "python": re.compile(r"#[^\n]*|\"\"\"[\s\S]*?(?:\"\"\"|\Z)|'''[\s\S]*?(?:'''|\Z)|" + _ONE_LINE),
+    "ruby": re.compile(r"#[^\n]*|" + _ONE_LINE),
+    "go": re.compile(_SLASHES + r"`[^`]*(?:`|\Z)|" + _ONE_LINE),
+    # every other language Lantern maps: a text block in three double quotes runs over lines (Java, Kotlin, Swift,
+    # C#, Dart); a JavaScript template is taken on one line only, because a backtick also stands in a page's own
+    # words and in a pattern, and one read as a template's start would take the code after it for text
+    "other": re.compile(_SLASHES + r"\"\"\"[\s\S]*?(?:\"\"\"|\Z)|`[^`\n]*`|" + _ONE_LINE),
+}
+_OVER_LINES = ('"""', "'''", "`")
+_STARTS_A_LINE = re.compile(r"[ \t]*[A-Za-z]{0,2}")     # what may stand before a text that is a statement by itself
+
+
+def _blank(text: str) -> str:
+    return " " * len(text) if "\n" not in text else "\n".join(" " * len(part) for part in text.split("\n"))
+
+
+def read_as_code(lines: list[str], rel: str) -> tuple[list[str], list[str]]:
+    """A file's lines twice over, every character where it was: `code` without its remarks and without the texts
+    that run over several lines, and `text` without its remarks only (a vector store is read out of the text of its
+    query, which may be kept over several lines). A Python text that is a statement by itself, a docstring, is a
+    remark: it is handed to nothing. It is told by where it stands: at the start of its line, inside no bracket,
+    and not after a line that ends in a backslash."""
+    whole = "\n".join(lines)
+    end = rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
+    python = end == "py"
+    rx = _READ["python" if python else "ruby" if end in ("rb", "rake") else "go" if end == "go" else "other"]
+    code, text, at = [], [], 0
+    depth, done = 0, 0              # Python: the brackets open in the code so far, and where the last token ended
+    for m in rx.finditer(whole):
+        tok = m.group(0)
+        mark = next((q for q in _OVER_LINES if tok.startswith(q)), "")
+        closed = len(tok) >= 2 * len(mark or tok[0]) and tok.endswith(mark or tok[0])
+        alone = False
+        if python:
+            between = whole[done:m.start()]
+            depth += sum(between.count(c) for c in "([{") - sum(between.count(c) for c in ")]}")
+            line = whole.rfind("\n", 0, m.start()) + 1
+            if tok[0] in "\"'" and closed and depth == 0 and line >= done:
+                alone = (bool(_STARTS_A_LINE.fullmatch(whole, line, m.start()))
+                         and not whole[done:line].rstrip().endswith("\\"))
+            done = m.end()
+        if tok[0] == "#" or tok.startswith("//") or alone:
+            remark, over = True, False
+        elif tok.startswith("/*"):
+            remark, over = len(tok) >= 4 and tok.endswith("*/"), False
+        else:
+            remark = False
+            over = bool(mark) and closed and "\n" in tok
+        if not (remark or over):
+            continue
+        same = whole[at:m.start()]
+        code += [same, _blank(tok)]
+        text += [same, _blank(tok) if remark else tok]
+        at = m.end()
+    code.append(whole[at:])
+    text.append(whole[at:])
+    return "".join(code).split("\n"), "".join(text).split("\n")
+
+
+def named(lines: list[str], rel: str, patterns: list | None = None) -> list[tuple[int, str, str]]:
+    """The calls a file's code makes into a model, a vector store or another paid service: `(line, kind, provider)`,
+    one for a line (the first pattern that finds one). `patterns`: the rows of `CALL_PATTERNS` to try."""
+    patterns = CALL_PATTERNS if patterns is None else patterns
+    out: list[tuple[int, str, str]] = []
+    if not patterns:
+        return out
+    code_of, text_of = read_as_code(lines, rel)
+    for i, raw in enumerate(lines, 1):
+        if _comment(raw) or len(raw) > MAX_LINE:
+            continue
+        said, kept = code_of[i - 1], text_of[i - 1]
+        code = strings.sub(QUOTES, "''", said) if "'" in said or '"' in said else said
+        for kind, provider, rx in patterns:
+            if rx.search(code) or (kind == "vector" and rx.search(kept)):
+                out.append((i, kind, provider))
+                break
+    return out
+
+
 def find_calls(g: Graph, cache: dict[str, list[str]] | None = None) -> list[dict]:
     """Every paid-API or vector-store call, pinned to the callable whose lines hold it."""
     repo = Path(g.repo_root)
@@ -138,26 +229,19 @@ def find_calls(g: Graph, cache: dict[str, list[str]] | None = None) -> list[dict
         patterns = [row for row in CALL_PATTERNS if whole.may_match(row[2])]
         if not patterns:
             continue
-        for i, raw in enumerate(lines, 1):
-            if _comment(raw) or len(raw) > MAX_LINE:
+        for i, kind, provider in named(lines, rel, patterns):
+            # the innermost callable holding this line
+            owner = None
+            for n in nodes:
+                if n.start_line <= i <= (n.end_line or n.start_line):
+                    if owner is None or (n.end_line or n.start_line) - n.start_line <= (owner.end_line or owner.start_line) - owner.start_line:
+                        owner = n
+            key = (rel, i, kind)
+            if key in seen:
                 continue
-            code = strings.sub(QUOTES, "''", raw) if "'" in raw or '"' in raw else raw
-            for kind, provider, rx in patterns:
-                if not (rx.search(code) or (kind == "vector" and rx.search(raw))):
-                    continue
-                # the innermost callable holding this line
-                owner = None
-                for n in nodes:
-                    if n.start_line <= i <= (n.end_line or n.start_line):
-                        if owner is None or (n.end_line or n.start_line) - n.start_line <= (owner.end_line or owner.start_line) - owner.start_line:
-                            owner = n
-                key = (rel, i, kind)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append({"node": owner.id if owner else None, "file": rel, "line": i, "kind": kind, "provider": provider,
-                            "snippet": raw.strip()[:160]})
-                break
+            seen.add(key)
+            out.append({"node": owner.id if owner else None, "file": rel, "line": i, "kind": kind, "provider": provider,
+                        "snippet": lines[i - 1].strip()[:160]})
     return out
 
 

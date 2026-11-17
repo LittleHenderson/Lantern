@@ -707,7 +707,7 @@ def test_in_the_app_the_sheet_takes_the_memory_limit_and_remembers_it(tmp_path, 
                            {"command": " ".join(PYTEST), "confirm": True, "memory_mb": bad})
             assert code == 400 and "from 128 to 1048576" in e["error"], (bad, code, e)
         code, j = call(base, f"/api/projects/{pid}/trace", "POST",
-                       {"command": " ".join(PYTEST), "confirm": True, "memory_mb": 4096})
+                       {"command": " ".join(PYTEST), "confirm": True, "memory_mb": 4096, "reach": sandbox.reach("python")["ask"]})
         assert code == 202, j
         done = wait(base, j["id"], timeout=180)
         assert done["status"] == "done" and done["result"]["returncode"] == 0, done

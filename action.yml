@@ -1,7 +1,8 @@
 name: Lantern report
 description: >-
-  Check this repository with Lantern and leave the report on it: a comment with Passed, Blocked or Incomplete on each
-  pull request, a pull request that saves the report in .lantern/report, and the badge for the front page.
+  Check this repository with Lantern and leave the report on it: a comment on each pull request with Passed, Blocked
+  or Incomplete and with what the pull request changes (new routes, login checks, broken links, findings), a pull
+  request that saves the report in .lantern/report, and the badge for the front page.
 author: LittleHenderson
 branding:
   icon: shield
@@ -14,6 +15,18 @@ inputs:
   comment:
     description: Post the result on each pull request as one comment that is updated on every push (true or false).
     default: "true"
+  change:
+    description: >-
+      On a pull request: also check the code as it was before the pull request, and say what the pull request
+      changes: routes and pages added or removed, login checks that changed, links between page and server that
+      broke, findings that are new, fixed or reached now, and the release decision before and after (true or false).
+    default: "true"
+  code-scanning:
+    description: >-
+      Hand the findings to GitHub's code scanning as well (true or false). The workflow then needs
+      'security-events: write' under permissions, and GitHub adds a check of its own to pull requests. The findings
+      are in the full report as lantern.sarif either way.
+    default: "false"
   save-report:
     description: >-
       On the default branch: open, or bring up to date, one pull request that saves the report in .lantern/report
@@ -101,6 +114,59 @@ runs:
         echo "decision=$decision" >> "$GITHUB_OUTPUT"
         echo "results=$out" >> "$GITHUB_OUTPUT"
         echo "Lantern's decision: $decision"
+        # The findings in the form other tools read (SARIF), kept with the full report.
+        lantern export "$TARGET" --out "$out" --sarif "$out/lantern.sarif" >/dev/null \
+          || echo "::warning title=Lantern::The findings could not be written as lantern.sarif."
+
+    - name: See what this pull request changes
+      id: change
+      if: github.event_name == 'pull_request' && inputs.change == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TARGET: ${{ inputs.path }}
+        RESULTS: ${{ steps.check.outputs.results }}
+        OFFLINE: ${{ inputs.offline }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BASE_NAME: ${{ github.event.pull_request.base.ref }}
+      run: |
+        set -uo pipefail
+        say() {
+          echo "::warning title=Lantern::$1"
+          printf '\n> **Lantern could not say what this pull request changes.** %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+        }
+        # What is checked out for a pull request is GitHub's merge of it into the branch it is for, so the code
+        # before the change is that commit's first parent. A workflow that checks out something else is compared
+        # with the commit where its branch began, which needs the branch's history.
+        parents="$(git -C "$TARGET" cat-file -p HEAD 2>/dev/null | sed -n 's/^parent \([0-9a-f]\{40\}\)$/\1/p')"
+        if [ -n "$HEAD_SHA" ] && [ "$(printf '%s\n' "$parents" | sed -n 2p)" = "$HEAD_SHA" ]; then
+          base="$(printf '%s\n' "$parents" | sed -n 1p)"
+        else
+          base="$(git -C "$TARGET" merge-base "$BASE_SHA" HEAD 2>/dev/null || true)"
+        fi
+        if ! [[ "$base" =~ ^[0-9a-f]{40}$ ]]; then
+          say "This workflow checks out something other than GitHub's merge of the pull request, without the history that shows where the branch began. Leave 'ref' out of the checkout step, or give that step 'fetch-depth: 0'."
+          exit 0
+        fi
+        if ! git -C "$TARGET" cat-file -e "$base^{commit}" 2>/dev/null; then
+          auth=()
+          if [ -n "$GH_TOKEN" ] && ! git -C "$TARGET" config --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then
+            basic="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+            echo "::add-mask::$basic"
+            auth=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic")
+          fi
+          git -C "$TARGET" ${auth[@]+"${auth[@]}"} fetch -q --no-tags --depth=1 origin "$base" \
+            || { say "The code as it was before this pull request (commit ${base:0:12}) could not be fetched."; exit 0; }
+        fi
+        flags=()
+        [ "$OFFLINE" = "true" ] && flags+=(--offline)
+        if lantern diff "$TARGET" "$base" --head-results "$RESULTS" --out "$RESULTS/change" \
+             --base-label "$BASE_NAME" --head-label "this pull request" ${flags[@]+"${flags[@]}"}; then
+          echo "receipt=$RESULTS/change/change.json" >> "$GITHUB_OUTPUT"
+        else
+          say "The comparison with the code before this pull request did not finish. This step's log says why."
+        fi
 
     - name: Keep the full report with this run
       id: upload
@@ -117,12 +183,16 @@ runs:
         RESULTS: ${{ steps.check.outputs.results }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+        RECEIPT: ${{ steps.change.outputs.receipt }}
       run: |
         set -euo pipefail
+        # On a pull request the page and the comment begin with what the pull request changes.
+        change=()
+        [ -n "${RECEIPT:-}" ] && change=(--change "$RECEIPT")
         lantern github summary "$TARGET" --out "$RESULTS" --run-url "$RUN_URL" --report-url "$REPORT_URL" \
-          > "$RUNNER_TEMP/lantern-summary.md"
+          ${change[@]+"${change[@]}"} > "$RUNNER_TEMP/lantern-summary.md"
         lantern github summary "$TARGET" --out "$RESULTS" --short --run-url "$RUN_URL" --report-url "$REPORT_URL" \
-          > "$RUNNER_TEMP/lantern-comment.md"
+          ${change[@]+"${change[@]}"} > "$RUNNER_TEMP/lantern-comment.md"
         cat "$RUNNER_TEMP/lantern-summary.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Comment on the pull request
@@ -150,6 +220,40 @@ runs:
         else
           gh api "repos/$REPO/issues/$PR/comments" -F "body=@$body" >/dev/null \
             || say "Posting was refused. A pull request from a fork gets a read-only token; the result is on this run's page."
+        fi
+
+    - name: Hand the findings to GitHub's code scanning
+      if: inputs.code-scanning == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        RESULTS: ${{ steps.check.outputs.results }}
+      run: |
+        set -uo pipefail
+        note() {
+          echo "$1"
+          printf '\n> **Lantern did not hand its findings to code scanning.** %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+        }
+        sarif="$RESULTS/lantern.sarif"
+        if [ ! -s "$sarif" ]; then note "The file lantern.sarif was not written."; exit 0; fi
+        if ! command -v gh >/dev/null; then note "GitHub's gh program is not on this runner."; exit 0; fi
+        packed="$RUNNER_TEMP/lantern-sarif.b64"
+        gzip -c "$sarif" | base64 | tr -d '\n' > "$packed"
+        # GitHub maps each finding to a file through the folder that was checked out.
+        if said="$(gh api -X POST "repos/$REPO/code-scanning/sarifs" -f "commit_sha=$GITHUB_SHA" -f "ref=$GITHUB_REF" \
+                     -f "checkout_uri=file://$GITHUB_WORKSPACE" -f "tool_name=Lantern" -F "sarif=@$packed" 2>&1)"; then
+          echo "Lantern's findings were handed to GitHub's code scanning."
+        else
+          printf '%s\n' "$said" | head -n 5
+          case "$said" in
+            *"not accessible by integration"*)
+              note "The workflow may not write code-scanning results. Add 'security-events: write' under permissions in the workflow file. A pull request from a fork never may.";;
+            *"dvanced Security"*|*"ode scanning is not enabled"*|*"ode Security"*)
+              note "Code scanning is not switched on for this repository. GitHub offers it for public repositories, and for private ones with GitHub Code Security.";;
+            *)
+              note "GitHub did not take them. This step's log has GitHub's answer.";;
+          esac
         fi
 
     - name: Save the report through a pull request

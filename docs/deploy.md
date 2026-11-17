@@ -80,6 +80,15 @@ account's other sign-ins keep working (up to 8 places, least recently used signe
 usage count. The gateway stores the provider's stable user id and, for GitHub, the login name;
 never an email address.
 
+How a sign-in reaches the app that started it (gateway 0.2.7). The terminal, the app and the website each give the
+gateway the fingerprint of a secret they keep and the address their browser should come back to. The gateway sends
+the browser that finished the sign-in back there with a one-time code, and the app collects its token with the code
+and the secret (`POST /v1/auth/redeem`, once, within two minutes). The address is one on the person's own computer
+(`http://127.0.0.1:<port>/…`) or a website the gateway names: the one in `LANTERN_HOME_URL` (default
+`https://lantern-cloud.fly.dev`) and those in `LANTERN_RETURN_ORIGINS` (`https://host[:port]`, separated by commas).
+**A website at any other address must be named there on the gateway**, or its sign-in button ends on a gateway
+page that says the link is not complete. A sign-in started by hand at `/v1/login` ends on a page with a Copy button.
+
 **GitHub** (GitHub → Settings → Developer settings → OAuth Apps → New OAuth App):
 - Application name: `Lantern`
 - Homepage URL: `https://lantern-gateway.fly.dev/v1/login`
@@ -123,7 +132,7 @@ here; `fly secrets list` shows names only. **Bold** marks a value that is unset 
 | Model order | Anthropic `claude-haiku-5-5` first, DeepSeek `deepseek-flash` when Anthropic fails; `LANTERN_PRIMARY=deepseek` swaps them (**not set**, so Anthropic first) | `app.py:58`, `:61`, `:67`, `Settings.order()` `:112` |
 | Token hash retention | 90 days (`LANTERN_RETENTION_DAYS`, **not set in fly.toml**, so the code default applies). The SHA-256 of a token in `users` is deleted 90 days after its last request or sign-in, together with the account mapping in `accounts` that points at it; a hash disabled by a re-sign-in is deleted 90 days after that re-sign-in | default `app.py:90`, `Store.prune` `:248`, `users` `:141` |
 | Per-day counters | 90 days: rows in `daily`, `spend`, `models` and `usage` dated more than 90 days ago, and `installs` not seen for 90 days, are deleted. Pruning runs at start-up and on the first request of each UTC day. `LANTERN_RETENTION_DAYS=0` keeps everything | `Store.prune` `:248`, `daily` `:144` |
-| Unclaimed sign-in tokens | the token waits in `pending` for one claim, deleted after 10 minutes. Since gateway 0.2.6 it waits sealed with the app's own code (the gateway keeps a hash of that code), and a row left in clear by an earlier version is deleted at start-up; until then the plain token waited there | `_seal`, `Store.park`, `Store.claim` in `app.py` |
+| A finished sign-in that waits for its app | Since gateway 0.2.7 no token waits. The account's id and label, a hash of a one-time code and the fingerprint the app gave at the start wait in `handover` for one collection, two minutes at most (`REDEEM_TTL`); the token is made when the app collects. The table `pending` of earlier versions (a token waited there, sealed since 0.2.6, in clear before) is dropped and written over at start-up | `Store.hand_over`, `Store.redeem`, `auth_redeem` in `app.py` |
 
 `GET /v1/health` is public and returns `{ok, version, model, configured, primary, fallback}`: no counters, users or
 spend. CI (`gateway` job in `ci.yml`) and the release workflow (`gateway-up`) curl it and print it to the job summary.
@@ -140,6 +149,13 @@ send"). They apply only once that version is deployed: `/v1/health` then says `"
 deploy a person who is in the middle of signing in signs in again (the token that waited for their app was kept in
 clear by the version before and is deleted, not handed out), and the counts of the limits start empty at every
 restart. Nothing needs setting: the four new variables have defaults.
+
+Version 0.2.7 changes how a finished sign-in reaches the app that started it (above), and the website
+(`lantern-cloud`) signs in the new way from the same commit on. **Deploy the two one after the other, the gateway
+first.** Between the two deploys the website's sign-in button does not finish; people who are signed in stay signed
+in, at the website, in the app and in the terminal. A Lantern app or terminal from before this change (0.11.0 and
+older) no longer picks its sign-in up by itself: the gateway's page tells its person to press Copy and paste the
+token into Lantern (`lantern login --token …`, or the box in Settings). `/v1/health` then says `"version": "0.2.7"`.
 
 ## Cloud service on Fly.io (cloud mode)
 
@@ -172,7 +188,7 @@ From the **repository root** (not `cloud/`: the image also packs the analysis en
 ```bash
 # 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.5 or later).
 cd gateway && fly deploy --depot=false && cd ..
-curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.6" (0.2.5 before the limits of 0.2.6)
+curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.7" (the website's sign-in needs 0.2.7 or later)
 
 # 1. Create the empty app (once). `fly orgs list` shows your organisation's short name.
 fly apps create lantern-cloud --org <your-org>
@@ -211,7 +227,8 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_CLOUD_JOB_SECONDS` | 1200 | Wall clock per run; the analysis is stopped after it |
 | `LANTERN_CLOUD_IDLE_MINUTES` | 0 (10 in `cloud/fly.toml`) | Minutes with no visitor and no run before the service stops itself; 0 = never |
 | `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them (Delete on a run, or Delete my account); a number N deletes finished runs older than N days, checked every hour by the clean-up pass ("Clean-up" below; a pass that failed is tried again five minutes later and shown in the owner's statistics) |
-| `LANTERN_CLOUD_VIEW_MINUTES` | 60 | How long a "open my report" link works |
+| `LANTERN_CLOUD_VIEW_MINUTES` | 60 | How long a "open my report" link works at most: it opens only what the person it was made for may read at that moment, and ends when they sign out on the website |
+| `LANTERN_CLOUD_IDENTITY_TTL` | 0 | Seconds an answer of the gateway about a sign-in may be used again for a read. 0: the gateway is asked on every request, so a sign-in ended anywhere is refused at the next one (before 2026-11-15 the default was 300). A request that changes something or makes a link always asks |
 | `LANTERN_CLOUD_VIEW_SECRET` | derived from the admin secret | Signs those links; set it only to make all open links stop working at once (`fly secrets set`) |
 | `LANTERN_CLOUD_HOSTS` | (empty) | Comma-separated clone hosts; empty = every public forge Lantern knows |
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |

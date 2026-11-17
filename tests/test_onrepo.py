@@ -6,6 +6,10 @@ ordinary report that must read well: a title that tries to mention a person, lin
 table stays text, and a file of the wrong shape gives a report with no decision, never an error."""
 from __future__ import annotations
 
+import base64
+import gzip
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -257,7 +261,7 @@ def _steps():
 def test_every_script_of_the_action_is_valid_shell_and_takes_outside_values_only_from_its_environment():
     bash = shutil.which("bash")
     runs = [s for s in _steps() if "run" in s]
-    assert len(runs) == 6
+    assert len(runs) == 8
     for s in runs:
         # a value written into a script by ${{ }} is run as part of it: a branch name could become a command
         assert "${{" not in s["run"], s["name"]
@@ -274,12 +278,20 @@ def test_the_action_uses_versioned_steps_and_writes_only_where_github_allows():
             assert re.fullmatch(r"actions/[a-z-]+@v\d+", s["uses"]), s["uses"]
     names = {s["name"] if "name" in s else s["uses"]: s for s in steps}
     assert names["Comment on the pull request"]["if"].startswith("github.event_name == 'pull_request'")
+    assert names["See what this pull request changes"]["if"] == "github.event_name == 'pull_request' && inputs.change == 'true'"
+    assert names["Hand the findings to GitHub's code scanning"]["if"] == "inputs.code-scanning == 'true'"
+    order = [s.get("name") or s["uses"] for s in steps]
+    # the comparison is made before the report is kept with the run (so it is in it) and before the words are written
+    assert order.index("See what this pull request changes") < order.index("Keep the full report with this run") \
+        < order.index("Write the result on this run's page") < order.index("Comment on the pull request")
     save = names["Save the report through a pull request"]
     assert "github.event_name != 'pull_request'" in save["if"]
     assert "default_branch" in save["if"]
     assert "lantern/report" in save["run"] and "git add -f" in save["run"]
     inputs = yaml.safe_load(ACTION.read_text(encoding="utf-8"))["inputs"]
     assert inputs["require"]["default"] == "not-blocked" and inputs["save-report"]["default"] == "pull-request"
+    # GitHub adds a check of its own to pull requests once it is handed findings: that is the owner's choice
+    assert inputs["change"]["default"] == "true" and inputs["code-scanning"]["default"] == "false"
     docs = (lantern_files.ROOT / "docs" / "github.md").read_text(encoding="utf-8")
     for name in inputs:
         assert f"`{name}`" in docs, name
@@ -295,3 +307,236 @@ def test_the_last_step_passes_or_fails_on_the_decision(require, decision, fails)
     r = subprocess.run([shutil.which("bash"), "-c", step["run"]], capture_output=True, text=True, encoding="utf-8",
                        env={"REQUIRE": require, "DECISION": decision, "PATH": "/usr/bin:/bin"})
     assert (r.returncode != 0) == fails, r.stdout
+
+
+# ------------------------------------------------------------------ the Action's own scripts on a practice pull request
+BASH = shutil.which("bash")
+ON_POSIX = pytest.mark.skipif(os.name != "posix" or not BASH or not GIT,
+                              reason="the Action's scripts are run here as GitHub's Linux machines run them: bash and git")
+
+
+def _step(name):
+    return next(s for s in _steps() if s.get("name") == name)
+
+
+def _run_step(name, env, cwd):
+    return subprocess.run([BASH, "-c", _step(name)["run"]], cwd=cwd, env=env, capture_output=True, text=True,
+                          encoding="utf-8", timeout=900)
+
+
+def _outputs(env) -> dict:
+    p = env["GITHUB_OUTPUT"]
+    lines = open(p, encoding="utf-8").read().splitlines() if os.path.exists(p) else []
+    return dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+HEALTH = """\
+from fastapi import APIRouter
+
+router = APIRouter()
+
+
+@router.get("/api/health")
+def health():
+    return {"ok": True}
+"""
+
+
+class Practice:
+    """A practice pull request as GitHub hands one to a workflow: a repository with a main branch, a branch that adds
+    a route which asks nobody who is calling, a main branch that went on meanwhile (it gained a route of its own),
+    GitHub's merge of the two under `pull/1/merge`, and the programs the Action's scripts call."""
+
+    def __init__(self, tmp_path):
+        from test_commit_copy import commit, git
+        from test_diff import BASE, EXPORT_OPEN, changed
+        self.tmp, self.git = tmp_path, git
+        self.origin = tmp_path / "origin"
+        self.began = commit(self.origin, BASE, "the app")
+        git("checkout", "-q", "-b", "feature", cwd=self.origin)
+        self.head = commit(self.origin, changed(BASE, app=EXPORT_OPEN), "an export for admins")
+        git("checkout", "-q", "main", cwd=self.origin)
+        self.main = commit(self.origin, {"api/health.py": HEALTH}, "main went on")
+        git("checkout", "-q", "-b", "pull/1/merge", cwd=self.origin)
+        git("merge", "-q", "--no-ff", "-m", "Merge feature into main", "feature", cwd=self.origin)
+        self.merge = git("rev-parse", "HEAD", cwd=self.origin)
+        git("config", "uploadpack.allowAnySHA1InWant", "true", cwd=self.origin)    # GitHub serves a commit by its name
+        tools = tmp_path / "bin"
+        tools.mkdir()
+        lantern = tools / "lantern"       # this checkout's own Lantern, started by the Python that runs the tests
+        lantern.write_text(f'#!/bin/sh\nexec "{sys.executable}" -m lantern.cli "$@"\n', encoding="utf-8")
+        lantern.chmod(0o755)
+        (tmp_path / "runner").mkdir()
+        self.env = {**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "PYTHONPATH": os.pathsep.join(x for x in (str(lantern_files.ROOT), os.environ.get("PYTHONPATH")) if x),
+                    "RUNNER_TEMP": str(tmp_path / "runner"), "GITHUB_OUTPUT": str(tmp_path / "output.txt"),
+                    "GITHUB_STEP_SUMMARY": str(tmp_path / "page.md"), "TARGET": ".", "OFFLINE": "true", "GH_TOKEN": "",
+                    "BASE_SHA": self.main, "HEAD_SHA": self.head, "BASE_NAME": "main",
+                    "RUN_URL": "https://github.com/o/r/actions/runs/1", "REPORT_URL": ""}
+
+    def checkout(self, branch: str, *how: str):
+        work = self.tmp / ("work-" + branch.replace("/", "-") + "".join(how).replace("-", ""))
+        self.git("clone", "-q", *how, "--branch", branch, self.origin.as_uri(), str(work), cwd=self.tmp)
+        return work
+
+    def check(self, work) -> dict:
+        r = _run_step("Check the repository", self.env, work)
+        assert r.returncode == 0, r.stdout + r.stderr
+        self.env["RESULTS"] = _outputs(self.env)["results"]
+        return _outputs(self.env)
+
+    def page(self) -> str:
+        p = self.tmp / "page.md"
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+@pytest.fixture
+def practice(tmp_path):
+    if os.name != "posix" or not BASH or not GIT:
+        pytest.skip("the Action's scripts are run here as GitHub's Linux machines run them: bash and git")
+    return Practice(tmp_path)
+
+
+@ON_POSIX
+def test_on_a_practice_pull_request_the_comment_says_what_the_pull_request_changes(practice):
+    work = practice.checkout("pull/1/merge", "--depth", "1")           # what actions/checkout leaves for a pull request
+    assert practice.git("rev-parse", "HEAD", cwd=work) == practice.merge
+    said = practice.check(work)
+    assert said["decision"] in ("Passed", "Blocked", "Incomplete")
+    results_dir = said["results"]
+    sarif = json.loads(open(os.path.join(results_dir, "lantern.sarif"), encoding="utf-8").read())
+    assert sarif["version"] == "2.1.0" and sarif["runs"][0]["tool"]["driver"]["name"] == "Lantern"
+
+    r = _run_step("See what this pull request changes", practice.env, work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    receipt_file = _outputs(practice.env)["receipt"]
+    assert receipt_file == os.path.join(results_dir, "change", "change.json")
+    receipt = json.loads(open(receipt_file, encoding="utf-8").read())
+    assert [d["words"] for d in receipt["doors"]["added"]] == ["POST /api/admin/export"]
+    assert receipt["doors"]["removed"] == [] and receipt["counts"]["doors_added_open"] == 1
+    # compared with the main branch as it was merged into (its newest commit), not with where the branch began
+    assert (receipt["base"]["commit"], receipt["base"]["label"]) == (practice.main, "main")
+    assert (receipt["head"]["commit"], receipt["head"]["label"]) == (practice.merge, "this pull request")
+    assert "could not" not in practice.page()
+
+    practice.env["RECEIPT"] = receipt_file
+    r = _run_step("Write the result on this run's page", practice.env, work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    comment = open(os.path.join(practice.env["RUNNER_TEMP"], "lantern-comment.md"), encoding="utf-8").read()
+    assert comment.startswith(onrepo.MARKER) and len(comment) <= onrepo.MOST_COMMENT
+    assert f"Compared `main ({practice.main[:10]})` (before) with `this pull request ({practice.merge[:10]})` (after)." in comment
+    assert "**Added** `POST /api/admin/export`" in comment
+    assert "## The project as a whole, after this change" in comment and "| Critical | High |" in comment
+    assert "what this change does" in practice.page() and "The functions" in practice.page()      # the page: the long form
+    # nothing of the checkout was changed: the results are beside it, on the runner
+    assert practice.git("status", "--porcelain", cwd=work) == ""
+
+
+@ON_POSIX
+def test_a_push_or_a_run_with_no_comparison_writes_the_report_as_before(practice):
+    work = practice.checkout("main", "--depth", "1")
+    practice.check(work)
+    practice.env["RECEIPT"] = ""                 # the comparison's step did not run: its output is empty
+    r = _run_step("Write the result on this run's page", practice.env, work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    comment = open(os.path.join(practice.env["RUNNER_TEMP"], "lantern-comment.md"), encoding="utf-8").read()
+    assert comment.startswith(onrepo.MARKER) and "what this change does" not in comment and "| Critical | High |" in comment
+
+
+@ON_POSIX
+def test_another_checkout_is_compared_from_where_its_branch_began_or_not_at_all(practice):
+    """A workflow may check out the pull request's own last commit. Compared with the main branch as it is now, the
+    route main gained meanwhile would read as taken away by the pull request, which it was not."""
+    # with the branch's history: from the commit where the branch began
+    work = practice.checkout("feature")
+    practice.check(work)
+    r = _run_step("See what this pull request changes", practice.env, work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    receipt = json.loads(open(_outputs(practice.env)["receipt"], encoding="utf-8").read())
+    assert receipt["base"]["commit"] == practice.began and receipt["head"]["commit"] == practice.head
+    assert [d["words"] for d in receipt["doors"]["added"]] == ["POST /api/admin/export"] and receipt["doors"]["removed"] == []
+    # with that one commit only: no comparison, a sentence that says what to change, and the check goes on
+    os.remove(practice.env["GITHUB_OUTPUT"])
+    shallow = practice.checkout("feature", "--depth", "1")
+    practice.check(shallow)
+    r = _run_step("See what this pull request changes", practice.env, shallow)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "receipt" not in _outputs(practice.env)
+    assert "Lantern could not say what this pull request changes." in practice.page() and "fetch-depth: 0" in practice.page()
+    assert not os.path.exists(os.path.join(practice.env["RESULTS"], "change", "change.json"))
+
+
+@ON_POSIX
+def test_a_commit_that_cannot_be_fetched_is_said_and_the_check_goes_on(practice):
+    work = practice.checkout("pull/1/merge", "--depth", "1")
+    practice.check(work)
+    os.rename(practice.origin, practice.tmp / "gone")
+    r = _run_step("See what this pull request changes", practice.env, work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "receipt" not in _outputs(practice.env)
+    assert f"(commit {practice.main[:12]}) could not be fetched" in practice.page()
+
+
+GH = """\
+#!/bin/sh
+printf '%s\\n' "$@" > "$GH_SAID"
+for a in "$@"; do case "$a" in sarif=@*) cp "${a#sarif=@}" "$GH_SAID.sent";; esac; done
+if [ -n "${GH_ANSWERS:-}" ]; then echo "$GH_ANSWERS" >&2; exit 1; fi
+echo '{"id": "x"}'
+"""
+
+
+def _scanning(tmp_path, answers=None, gh=True):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name in ("gzip", "base64", "tr", "head", "cp"):         # what the script and the stand-in for gh call
+        os.symlink(shutil.which(name), tools / name)
+    if gh:
+        (tools / "gh").write_text(GH, encoding="utf-8")
+        (tools / "gh").chmod(0o755)
+    out = tmp_path / "results"
+    out.mkdir()
+    (out / "lantern.sarif").write_text(json.dumps({"version": "2.1.0", "runs": []}), encoding="utf-8")
+    env = {"PATH": str(tools), "RUNNER_TEMP": str(tmp_path), "GITHUB_STEP_SUMMARY": str(tmp_path / "page.md"),
+           "RESULTS": str(out), "REPO": "o/r", "GH_TOKEN": "", "GITHUB_SHA": "c" * 40, "GITHUB_REF": "refs/pull/1/merge",
+           "GITHUB_WORKSPACE": "/home/runner/work/r/r", "GH_SAID": str(tmp_path / "said.txt")}
+    if answers:
+        env["GH_ANSWERS"] = answers
+    r = _run_step("Hand the findings to GitHub's code scanning", env, tmp_path)
+    page = (tmp_path / "page.md").read_text(encoding="utf-8") if (tmp_path / "page.md").exists() else ""
+    return r, page
+
+
+@ON_POSIX
+def test_the_findings_are_handed_to_code_scanning_the_way_github_takes_them(tmp_path):
+    r, page = _scanning(tmp_path)
+    assert r.returncode == 0 and "were handed to GitHub's code scanning" in r.stdout and page == "", r.stderr
+    said = (tmp_path / "said.txt").read_text(encoding="utf-8").splitlines()
+    assert said[:4] == ["api", "-X", "POST", "repos/o/r/code-scanning/sarifs"]
+    for field in ("commit_sha=" + "c" * 40, "ref=refs/pull/1/merge", "checkout_uri=file:///home/runner/work/r/r",
+                  "tool_name=Lantern"):
+        assert field in said, field
+    sent = (tmp_path / "said.txt.sent").read_bytes()
+    assert b"\n" not in sent                        # gzip, then base64 on one line: the form GitHub's API asks for
+    assert json.loads(gzip.decompress(base64.b64decode(sent)))["version"] == "2.1.0"
+
+
+@ON_POSIX
+@pytest.mark.parametrize("answers, words", [
+    ("gh: Resource not accessible by integration (HTTP 403)", "Add 'security-events: write' under permissions"),
+    ("gh: Advanced Security must be enabled for this repository to use code scanning. (HTTP 403)", "is not switched on"),
+    ("gh: Code scanning is not enabled for this repository. (HTTP 403)", "is not switched on"),
+    ("gh: Server Error (HTTP 500)", "GitHub did not take them"),
+])
+def test_a_refusal_of_code_scanning_is_one_sentence_and_never_fails_the_check(tmp_path, answers, words):
+    r, page = _scanning(tmp_path, answers=answers)
+    assert r.returncode == 0, r.stderr
+    assert "Lantern did not hand its findings to code scanning." in page and words in page
+    assert "were handed" not in r.stdout
+
+
+@ON_POSIX
+def test_with_no_gh_program_nothing_is_handed_over_and_the_check_goes_on(tmp_path):
+    r, page = _scanning(tmp_path, gh=False)
+    assert r.returncode == 0 and "gh program is not on this runner" in page, r.stderr
+    assert not (tmp_path / "said.txt").exists()
