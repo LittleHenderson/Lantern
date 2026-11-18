@@ -16,6 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -50,6 +51,7 @@ jobs:
   test-wheel:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 130          # the order of every limit: tests/test_time_limits.py
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -62,6 +64,7 @@ jobs:
           name: dist
           path: built
       - name: Tests against the built wheel in a clean venv (the source package is moved away first)
+        timeout-minutes: 100
         env:
           LANTERN_TESTS_COMPLETE: required   # a test skipped for a missing library fails the release (tests/conftest.py)
         run: |
@@ -76,6 +79,7 @@ jobs:
   gateway-up:
     # The free allowance must answer before a build that points testers at it goes out.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: curl the live gateway's health check
         run: |
@@ -87,6 +91,7 @@ jobs:
     needs: [build, test-wheel, gateway-up]
     if: github.event_name == 'push'      # a pushed tag only: a rehearsal (workflow_dispatch) ends before this job
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:

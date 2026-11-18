@@ -9,6 +9,15 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Every check of CI has a time limit, and a check that hangs says where it stood. A test that runs past 15 minutes
+  has every thread of the run print where it waits, while it is still running (pytest's `faulthandler_timeout`,
+  `pyproject.toml`). The no-network runner takes `--deadline MINUTES` (`tools/netless.py`): a run still going then
+  has every process of it listed, thread by thread, the tests asked to end so that pytest says where it stood, and
+  what is left ended (result 7). Every job of every workflow, and every step that runs tests, has a limit of its
+  own, in the order `tests/test_time_limits.py` keeps. Until now a run of CI's tests that printed 89% and then
+  nothing went on for 2 h 39 min, until it was cancelled by hand, and nothing said where it stood. The runner also
+  says when its recorder (strace) stopped before the command did (result 6), where strace's own result read like
+  failed tests.
 - The badge `lantern serve` and the website serve beside a report (`badge.svg`) follows the release decision, as
   the `badge.svg` a check writes into its results folder already did: it says "blocked" or "incomplete" where the
   decision does, and "scan incomplete" in grey where a scanner that applies did not finish. Until now it was

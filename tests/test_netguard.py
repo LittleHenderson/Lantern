@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1534,6 +1535,160 @@ def test_a_marked_test_names_its_try_where_the_runner_reads_it(tmp_path, monkeyp
         if f.name != "test_netguard.py" and "pytest.mark.tries_outside(" in text:
             marked[f.name] = text.count("pytest.mark.tries_outside(")
     assert marked == {"test_library_build.py": 2, "test_sandbox_own_network.py": 1}, marked
+
+
+# ----------------------------------------------------------------------------- the recorder's own end, and a deadline
+# Twice in CI the recorder (strace) stopped in the middle of a run ("ptrace(PTRACE_LISTEN, ...): Input/output error"):
+# strace then tells its command to end and ends with 1 at once, and the step read like failed tests. On 2026-11-17 a
+# run of the tests printed 89% and then nothing for 2 h 39 min, until it was cancelled, with nothing that said where
+# it stood. These tests start the runner's watch with a program that stands in for strace: it starts the command and
+# writes the command's start and end the way strace writes them with -q, or stops the way strace stops.
+STAND_IN = """
+import ctypes, os, signal, subprocess, sys
+args = sys.argv[1:]
+assert "-qq" not in args and "-q" in args, args             # -qq would leave the end of every process unwritten
+record, command = args[args.index("-o") + 1], args[args.index("--") + 1:]
+ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)                     # PR_SET_CHILD_SUBREAPER: what the command leaves comes here
+child = subprocess.Popen(command)
+with open(record, "w", encoding="utf-8") as f:
+    f.write(f'{child.pid} execve("{command[0]}", ["{os.path.basename(command[0])}"], 0x1 /* 1 vars */) = 0\\n')
+    f.flush()
+    if os.environ.get("STAND_IN") == "stops":
+        os.kill(child.pid, signal.SIGTERM)
+        sys.exit(1)
+    code = child.wait()
+    f.write(f"{child.pid} +++ exited with {code} +++\\n" if code >= 0 else
+            f"{child.pid} +++ killed by {signal.Signals(-code).name} +++\\n")
+while True:                                                 # like strace -f: the run ends when every process of it has
+    try:
+        os.wait()
+    except ChildProcessError:
+        break
+sys.exit(code if code >= 0 else 128 - code)
+"""
+ON_LINUX = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the no-network runner is for Linux only")
+
+
+def _stand_in(tmp_path, monkeypatch, how):
+    folder = tmp_path / "bin"
+    folder.mkdir(exist_ok=True)
+    program = folder / "strace"
+    program.write_text(f"#!{sys.executable}\n{STAND_IN}", encoding="utf-8")
+    program.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("STAND_IN", how)
+
+
+def _handlers():
+    return {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+
+
+def test_the_record_says_whether_the_command_itself_ended(tmp_path):
+    """strace -q writes `+++ exited with N +++` or `+++ killed by SIG +++` when a process ends (-qq does not); the
+    command is the process of the record's first line, and only its own end counts."""
+    trace = tmp_path / "trace"
+    start = '7 execve("/usr/bin/python3", ["python3"], 0x1 /* 1 vars */) = 0\n'
+    child = ("7 clone(child_stack=NULL, flags=SIGCHLD) = 8\n"
+             '8 execve("/usr/bin/git", ["git", "status"], 0x1 /* 1 vars */) = 0\n8 +++ exited with 0 +++\n'
+             "7 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=8, si_status=0} ---\n")
+    for text, ended in ((start + child + "7 +++ exited with 3 +++\n", True),
+                        (start + "7 +++ killed by SIGTERM +++\n", True),
+                        (start + "7 +++ killed by SIGKILL (core dumped) +++\n", True),
+                        (start + child, False),                          # a child's end is not the command's
+                        (start, False),
+                        ("", None)):                                     # nothing was started under the recorder
+        trace.write_text(text, encoding="utf-8")
+        s = netless.summarize(str(trace))
+        assert s["command_end_recorded"] is ended, text
+        assert s["outside"] == [] and s["connections_on_this_computer"] == 0, text   # an end is no network
+
+
+@ON_LINUX
+def test_a_recorder_that_stops_before_the_command_ends_gives_no_result_of_the_command(tmp_path, monkeypatch, capsys):
+    before = _handlers()
+    out = tmp_path / "watch.json"
+    _stand_in(tmp_path, monkeypatch, "stops")
+    code = netless.watched([sys.executable, "-c", "import time; time.sleep(30)"], str(out), set())
+    said, seen = capsys.readouterr().err, json.loads(out.read_text(encoding="utf-8"))
+    assert code == netless.RECORDER_STOPPED == 6, said
+    assert "the recorder (strace) stopped before the command ended (strace's result: 1)" in said, said
+    assert seen["command_end_recorded"] is False and seen["result"] == 1 and seen["past_deadline"] is False
+    # the twins: a recorder that sees the command to its end gives the command's own result, a failure among them
+    _stand_in(tmp_path, monkeypatch, "whole")
+    for wanted in (0, 1, 3):
+        assert netless.watched([sys.executable, "-c", f"raise SystemExit({wanted})"], str(out), set()) == wanted
+        seen = json.loads(out.read_text(encoding="utf-8"))
+        assert seen["command_end_recorded"] is True and seen["result"] == wanted and seen["outside"] == []
+    assert "stopped before" not in capsys.readouterr().err
+    assert _handlers() == before                            # the runner's own signal handlers are taken off again
+
+
+@ON_LINUX
+def test_a_command_past_its_deadline_is_listed_thread_by_thread_and_ended(tmp_path, monkeypatch, capsys):
+    before = _handlers()
+    out = tmp_path / "watch.json"
+    _stand_in(tmp_path, monkeypatch, "whole")
+    deaf = tmp_path / "waits_deaf.py"                       # it does not end when asked to
+    deaf.write_text("import signal, threading, time\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+                    "threading.Thread(target=time.sleep, args=(60,), daemon=True).start()\ntime.sleep(60)\n",
+                    encoding="utf-8")
+    code = netless.watched([sys.executable, str(deaf)], str(out), set(), deadline=1.5, grace=1)
+    said, seen = capsys.readouterr().err, json.loads(out.read_text(encoding="utf-8"))
+    assert code == netless.LATE == 7, said
+    assert seen["past_deadline"] is True and seen["deadline_seconds"] == 1.5 and seen["ended_at_deadline"] == "killed"
+    rows = seen["still_running_at_deadline"]
+    assert rows[0]["parent"] == os.getpid() and rows[0]["program"] == "strace", rows       # the recorder first
+    mine = [r for r in rows if r["program"].endswith(" waits_deaf.py")]
+    assert len(mine) == 1 and mine[0]["parent"] == rows[0]["pid"], rows
+    threads = mine[0]["threads"]
+    assert sum(t["count"] for t in threads) >= 2 and all(t["state"] in netless.STATES for t in threads), threads
+    assert all(set(t) == {"state", "waits_in", "count"} for t in threads), threads
+    assert "ran past its deadline (1.5 seconds)" in said and f"{mine[0]['pid']} (under {rows[0]['pid']})" in said, said
+    assert "did not end when asked" in said and "waits_deaf.py" in said, said
+    for r in rows:                                          # nothing it listed is left running
+        now = netless._stat(str(r["pid"]))
+        assert now is None or now[1] in "ZX" or now[3] != r["started"], (r, now)
+    # one that ends when asked (SIGINT: a test run then says where it was) is not ended by force
+    polite = tmp_path / "waits.py"
+    polite.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    assert netless.watched([sys.executable, str(polite)], str(out), set(), deadline=1.5, grace=20) == netless.LATE
+    seen, said = json.loads(out.read_text(encoding="utf-8")), capsys.readouterr().err
+    assert seen["ended_at_deadline"] == "asked" and seen["command_end_recorded"] is True, said
+    assert "was asked to end (SIGINT) and did" in said and "waits.py" in said, said
+    # one that ends when asked and leaves a program of its own running: that one is ended, and only that one
+    leaves = tmp_path / "leaves.py"
+    leaves.write_text("import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', 'import time; "
+                      "time.sleep(60)'])\ntime.sleep(60)\n", encoding="utf-8")
+    assert netless.watched([sys.executable, str(leaves)], str(out), set(), deadline=1.5, grace=20) == netless.LATE
+    seen, said = json.loads(out.read_text(encoding="utf-8")), capsys.readouterr().err
+    assert seen["ended_at_deadline"] == "left" and seen["command_end_recorded"] is True, said
+    forced = seen["ended_by_force"]
+    assert len(forced) == 1 and forced[0]["program"].endswith(" -c ...") and "time.sleep" not in said, (forced, said)
+    assert "asked to end (SIGINT) and did; what it had started and left running was ended (SIGKILL)" in said, said
+    left = [r for r in seen["still_running_at_deadline"] if r["pid"] == forced[0]["pid"]]
+    assert len(left) == 1 and netless._ended(left[0]), left
+    # the twin: a command that ends before its deadline gives its own result, and nothing is listed
+    assert netless.watched([sys.executable, "-c", "raise SystemExit(3)"], str(out), set(), deadline=60, grace=1) == 3
+    seen = json.loads(out.read_text(encoding="utf-8"))
+    assert seen["past_deadline"] is False and "still_running_at_deadline" not in seen and "ended_at_deadline" not in seen
+    assert "deadline" not in capsys.readouterr().err
+    assert _handlers() == before
+
+
+def test_a_deadline_is_whole_minutes_and_needs_the_watch(tmp_path):
+    out = str(tmp_path / "watch.json")
+    for argv in (["--deadline", "5", "--", "true"],                     # no watch: nothing would see the deadline
+                 ["--watch", out, "--deadline", "0", "--", "true"],
+                 ["--watch", out, "--deadline", "1.5", "--", "true"],
+                 ["--watch", out, "--deadline", "--", "true"],
+                 ["--watch", out, "--deadline", "5"],
+                 ["--frob", "--", "true"]):
+        r = subprocess.run([sys.executable, str(NETLESS), *argv], capture_output=True, text=True, encoding="utf-8",
+                           timeout=60)
+        assert r.returncode == 2 and "--deadline MINUTES" in r.stderr, (argv, r.stderr)
+    assert "--deadline needs --watch" in subprocess.run(
+        [sys.executable, str(NETLESS), "--deadline", "5", "--", "true"], capture_output=True, text=True,
+        encoding="utf-8", timeout=60).stderr
 
 
 def _being_recorded() -> bool:
