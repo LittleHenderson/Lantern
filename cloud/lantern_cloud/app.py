@@ -103,7 +103,10 @@ def _note_page(title: str, text: str) -> str:
 
 SHARE_GONE = _note_page("This link is off", "Its owner stopped sharing this report, or deleted it. "
                         "<a href=\"/\" style=\"color:#0B5F5A\">Check your own app with Lantern</a>.")
-SHAREABLE = {"report.html", "evidence.html", "badge.svg"}     # a shared run shows its pages, not its raw data files
+# A shared run shows its pages, not its raw data files: the report, the evidence page, the badge, and (since
+# 2026-11-17, roadmap stage 6) the page the badge links to, which says what the check is tied to and how to repeat it
+# (`lantern.evidence.check_html`).
+SHAREABLE = {"report.html", "evidence.html", "badge.svg", "check.html"}
 
 
 def sweep(store, results_dir: str, days: int, cleanup: Cleanup | None = None) -> list[str]:
@@ -577,7 +580,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return r
 
     def share_view(slug: str | None) -> dict:
-        return {"shared": bool(slug), "url": f"{s.public_url}/s/{slug}/report.html" if slug else None}
+        """The share link, and for a README the badge with the page it links to (`markdown`, to copy)."""
+        if not slug:
+            return {"shared": False, "url": None}
+        at = f"{s.public_url}/s/{slug}"
+        return {"shared": True, "url": f"{at}/report.html", "check": f"{at}/check.html", "badge": f"{at}/badge.svg",
+                "markdown": f"[![Lantern check]({at}/badge.svg)]({at}/check.html)"}
 
     @app.get("/v1/runs/{rid}/share")
     async def share_state(rid: str, request: Request):
@@ -604,6 +612,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if name not in SHAREABLE or not r or r["status"] != "done":
             return Response(SHARE_GONE, 404, media_type="text/html; charset=utf-8",
                             headers=_page_headers({"X-Robots-Tag": "noindex"}))
+        if name == "check.html":    # the link as this service took it when the run was asked for, never the results'
+            from lantern.server import check_page
+            code, body, ctype, headers = check_page(Path(s.results_dir) / r["id"], r["link"])
+            return Response(body, code, media_type=ctype, headers=_page_headers({**headers, "X-Robots-Tag": "noindex"}))
         return result_response(Path(s.results_dir) / r["id"], VIEWABLE[name], request, {"X-Robots-Tag": "noindex"})
 
     @app.delete("/v1/runs/{rid}")

@@ -36,7 +36,10 @@ from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE,
 from .python_frontend import inside_repo, project_bytes, skipped
 
 MAX_BYTES = 1_500_000
-SKIP_DART = {".dart_tool", "build", ".pub-cache", "ios", "android", "macos", "windows", "linux", "web"}
+SKIP_DART = {".dart_tool", "build", ".pub-cache"}
+# A Flutter project's platform folders, beside its pubspec.yaml: generated code (ios/Runner, android/app/…), not the
+# app's Dart. A folder of the same name anywhere else is a project's own (`web/` of a repository, a workspace's `web`).
+PLATFORMS = {"ios", "android", "macos", "windows", "linux", "web"}
 TEST_FILE_RE = re.compile(r"(^|/)(test|integration_test|test_driver)/|_test\.dart$")
 GENERATED_RE = re.compile(r"\.(g|freezed|gr|config|mocks|pb|pbenum|pbjson|pbserver)\.dart$")
 WIDGET_BASES = {"StatelessWidget", "StatefulWidget", "ConsumerWidget", "ConsumerStatefulWidget", "HookWidget",
@@ -130,6 +133,19 @@ def nid(key: str) -> str:
     return f"dt:{key}"
 
 
+def _not_the_apps(parts: tuple[str, ...], repo: Path) -> bool:
+    """A folder of tools' output anywhere, or a platform folder beside a pubspec.yaml, on the way to a file."""
+    return any(x in SKIP_DART or (x in PLATFORMS and _pubspec_in(repo.joinpath(*parts[:i])))
+               for i, x in enumerate(parts))
+
+
+def _pubspec_in(folder: Path) -> bool:
+    try:
+        return (folder / "pubspec.yaml").is_file()
+    except OSError:          # a place this user may not look at: no Flutter project Lantern can read
+        return False
+
+
 def discover(repo: Path) -> list[Path]:
     out = []
     for p in repo.rglob("*.dart"):
@@ -137,8 +153,8 @@ def discover(repo: Path) -> list[Path]:
         parts = rel.parts[:-1]
         if skipped(parts, repo) or not p.is_file() or not inside_repo(p, repo):
             continue
-        # a Flutter project's platform folders hold generated code (ios/Runner, android/app/…), not the app's Dart
-        if any(x in SKIP_DART for x in parts) and not any(x in ("lib", "test", "bin") for x in parts):
+        # tools' output, and a Flutter project's platform folders (generated code, not the app's Dart)
+        if _not_the_apps(parts, repo) and not any(x in ("lib", "test", "bin") for x in parts):
             continue
         if GENERATED_RE.search(p.name):
             continue

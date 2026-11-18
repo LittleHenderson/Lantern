@@ -164,15 +164,40 @@ async function until(p, fn, timeout) {
     await p.screenshot({ path: `${out}-${tag}-share.png` });
     await p.click('#doshare'); await p.waitForSelector('#shareurl');
     const shareUrl = await p.$eval('#shareurl', i => i.value);
+    // the badge for a README links to the page that says how to check the run (roadmap stage 6)
+    const badgeMd = await p.$eval('#sharebadge', i => i.value).catch(() => '');
+    const checkUrl = (badgeMd.match(/^\[!\[Lantern check\]\([^)]+\/badge\.svg\)\]\(([^)]+\/check\.html)\)$/) || [])[1];
+    if (!checkUrl) errs.push(`${tag}: the share sheet has no badge for a README that links to its check page (${badgeMd})`);
     await p.screenshot({ path: `${out}-${tag}-shared.png` });
     const anon = await b.newContext({ viewport, colorScheme: scheme }); await outside.watch(anon, errs, outside.FONTS);
     const q = await anon.newPage(); watch(q);
     const got = await q.goto(shareUrl);
     if (!got || got.status() !== 200) errs.push(`${tag}: the share link did not open (${got && got.status()})`);
     await q.waitForSelector('#tabs'); await clean(q, 'shared report');
+    if (checkUrl) {
+      const cp = await q.goto(checkUrl);
+      if (!cp || cp.status() !== 200) errs.push(`${tag}: the badge's check page did not open (${cp && cp.status()})`);
+      else {
+        await q.waitForSelector('h1'); await clean(q, 'check page');
+        // the badge loads, and stays inside its card on a phone too
+        await q.waitForFunction(() => { const i = document.querySelector('img.badge'); return !i || i.complete; }, null, { timeout: 5000 }).catch(() => {});
+        const past = await q.evaluate(() => {
+          const i = document.querySelector('img.badge'), s = i && i.closest('section');
+          if (!i || !s) return 'it has no badge';
+          if (!i.naturalWidth) return 'its badge did not load';
+          const r = i.getBoundingClientRect(), c = s.getBoundingClientRect();
+          return r.left >= c.left && r.right <= c.right ? '' : `its badge runs past its card (${Math.round(r.right)} > ${Math.round(c.right)})`;
+        });
+        if (past) errs.push(`${tag}: the check page: ${past}`);
+        await q.screenshot({ path: `${out}-${tag}-check-page.png`, fullPage: true });
+        await a11y.axe(q, `${tag} check page`, errs);
+      }
+    }
     await p.click('#unshare'); await p.waitForSelector('#doshare');
-    allow404 = true; const off = await q.goto(shareUrl); await q.waitForTimeout(200); allow404 = false;
+    allow404 = true; const off = await q.goto(shareUrl); await q.waitForTimeout(200);
+    const checkOff = checkUrl ? await q.goto(checkUrl) : null; await q.waitForTimeout(200); allow404 = false;
     if (!off || off.status() !== 404) errs.push(`${tag}: the share link still opens after Stop sharing (${off && off.status()})`);
+    if (checkUrl && (!checkOff || checkOff.status() !== 404)) errs.push(`${tag}: the check page still opens after Stop sharing (${checkOff && checkOff.status()})`);
     await anon.close();
     await p.click('.sheet [data-close]');
     await p.click('#who'); await p.waitForSelector('#signout');

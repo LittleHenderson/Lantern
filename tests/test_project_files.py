@@ -153,6 +153,8 @@ OWN_FILES = {
     ("python_frontend.py", "project_sha256"): "the opener", ("seal.py", "_key"): "LANTERN_HOME",
     ("results.py", "plain"): "the opener for result files", ("gitfacts.py", "_text"): "the opener for git's files",
     ("gitfacts.py", "copy"): "the one archive git wrote of a commit, in a folder of Lantern's own made for this copy; read as a plain tar, every member written out by Lantern itself",
+    ("hook.py", "_ours"): "the pre-push hook in the repository's git folder, to see whether it carries Lantern's mark: opened as itself, never through a link at its name and never waiting on a pipe, at most MOST_HOOK bytes",
+    ("workspace.py", "_read"): "a plain file of a member, to copy it byte for byte into the workspace's own folder: opened as itself, never through a link and never waiting on a pipe, taken only while it is a plain file of at most MOST_FILE bytes",
     ("results.py", "write"): "writes", ("removal.py", "_write"): "writes", ("server.py", "FileLock.__enter__"): "a lock",
     ("_jail.py", "_landlock"): "a folder handle for Landlock", ("_jail.py", "_stat"): "/proc",
     ("_jail.py", "_landlock.opens"): "a handle for Landlock: one place that stays open to the tests' reads, never through a link",

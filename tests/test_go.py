@@ -183,3 +183,61 @@ func main() { run() }
     g = build_graph(tmp_path)
     assert edge(g, "go:app::run", "go:app::Base.Log").via == "embedded"
     assert edge(g, "go:app::main", "go:app::run").confidence == "resolved"
+
+
+# ---------------------------------------------------------------------- a Go module that is not at the top
+# Found by bench/workspace.py (2026-11-17): the reader took `go.mod` from the top of the repository only, so a Go
+# module in a folder of its own (`backend/` beside `frontend/`, or a project in a workspace) linked none of its own
+# imports: `store.Open()` was a library call, and what a route reached through it was not followed.
+
+STORE = ("package store\n\n"
+         "type Repo struct{}\n\n"
+         "func Open() *Repo { return &Repo{} }\n\n"
+         "func (r *Repo) Get(id string) string { return id }\n")
+MAIN = ("package main\n\n"
+        "import \"{module}/internal/store\"\n\n"
+        "func main() {{\n"
+        "\tr := store.Open()\n"
+        "\tr.Get(\"x\")\n"
+        "}}\n")
+
+
+def test_a_go_module_in_a_folder_of_its_own_links_its_own_imports(tmp_path):
+    _write(tmp_path, {"backend/go.mod": "module example.com/notes\n\ngo 1.22\n",
+                      "backend/main.go": MAIN.format(module="example.com/notes"),
+                      "backend/internal/store/store.go": STORE,
+                      "frontend/package.json": "{\"name\": \"web\"}\n"})
+    g = build_graph(tmp_path)
+    e = edge(g, "go:example.com/notes::main", "go:example.com/notes/internal/store::Open")
+    assert e is not None and e.via == "import" and e.confidence == "resolved"
+    e = edge(g, "go:example.com/notes::main", "go:example.com/notes/internal/store::Repo.Get")
+    assert e is not None and e.via == "receiver-type"
+    assert g.meta["languages"]["go"]["packages"] == 2
+
+
+def test_two_go_modules_each_link_their_own_imports(tmp_path):
+    """Each file belongs to the module of the nearest go.mod above it, as the go tool reads it."""
+    _write(tmp_path, {"api/go.mod": "module example.com/api\n",
+                      "api/main.go": MAIN.format(module="example.com/api"),
+                      "api/internal/store/store.go": STORE,
+                      "worker/go.mod": "module example.com/worker\n",
+                      "worker/main.go": MAIN.format(module="example.com/worker"),
+                      "worker/internal/store/store.go": STORE})
+    g = build_graph(tmp_path)
+    for mod in ("example.com/api", "example.com/worker"):
+        e = edge(g, f"go:{mod}::main", f"go:{mod}/internal/store::Open")
+        assert e is not None and e.via == "import" and e.confidence == "resolved", mod
+
+
+def test_a_go_module_at_the_top_reads_as_before_and_a_module_nobody_declares_stays_outside(tmp_path):
+    _write(tmp_path, {"go.mod": "module example.com/notes\n",
+                      "main.go": MAIN.format(module="example.com/notes"),
+                      "internal/store/store.go": STORE,
+                      "tool/main.go": MAIN.format(module="example.com/elsewhere")})
+    g = build_graph(tmp_path)
+    assert edge(g, "go:example.com/notes::main", "go:example.com/notes/internal/store::Open").via == "import"
+    # an import path no go.mod of the repository declares is a library's, whatever the folders are called
+    e = edge(g, "go:example.com/notes/tool::main", "ext:store.Open")
+    assert e is not None
+    assert not [x for x in g.edges if x.src == "go:example.com/notes/tool::main" and x.dst.startswith("go:")
+                and "internal/store" in x.dst]

@@ -401,6 +401,27 @@ def _trusted() -> list[str]:
     return p.stdout.split("\0")[:-1] if p.returncode == 0 else []      # each value ends with a NUL
 
 
+def person_setting(name: str) -> str | None:
+    """A git setting as the person's and this computer's settings give it (`git config --get NAME`), asked inside a
+    git folder made here, so no project's settings answer. None where git is not installed, nothing is set, or git
+    could not be asked."""
+    git = programs.find("git")
+    made = _own_folder(["[core]", "\trepositoryformatversion = 0", "\tbare = true"], "ref: refs/heads/none") \
+        if git and re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*", name or "") else None
+    if made is None:
+        return None
+    env = {k: v for k, v in os.environ.items() if k not in _PLACES and k != "GIT_CONFIG"}
+    env.update({"GIT_DIR": str(made), "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
+    try:
+        p = remote.run_bounded([git, "config", "--get", name], cwd=made, env=env, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
+    said = p.stdout.rstrip("\r\n") if p.returncode == 0 else ""
+    return said or None
+
+
 def _said_safe(top: Path, asked: Path) -> bool:
     """Whether the person's `safe.directory` list names the repository whose files are in `top`, read the way git
     reads it (`safe_directory_cb` in its setup.c): the last word wins; an empty entry forgets the ones before it;

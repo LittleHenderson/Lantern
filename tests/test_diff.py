@@ -993,3 +993,28 @@ def test_a_folder_in_no_repository_is_said_so(tmp_path, capsys):
     write(tmp_path / "plain", BASE)
     code, out, err = run(["diff", str(tmp_path / "plain"), "--offline"], capsys)
     assert code == 2 and "is in no git repository Lantern reads" in err
+
+
+def test_libraries_not_looked_up_by_an_offline_check_are_said_as_that_and_not_as_a_scanner_that_did_not_finish(
+        checks, tmp_path):
+    """A check made offline looks up no library (the check before each push is made that way). The receipt says so,
+    with what it means for the change: a library with a known problem that came with it is not listed. Until
+    2026-11-17 it said that the audits "did not finish or did not cover everything", which reads as a failure and
+    names a consequence (a finding listed as new or fixed) that cannot follow from an audit that ran on neither side.
+    The twin: an audit that failed is still said as one that did not finish."""
+    base, head = checks.of(BASE, "before"), checks.of(changed(BASE, app=EXPORT_OPEN), "after")
+    r = diff.compare(base, head)
+    looked = [x for x in r["limits"] if "no library was looked up" in x]
+    assert len(looked) == 1 and "(offline: pip-audit)" in looked[0], r["limits"]   # npm's: no lock file, no audit
+    assert "known problem" in looked[0] and looked[0].startswith("In both checks"), looked
+    assert not any("did not finish" in x for x in r["limits"]), r["limits"]
+    assert not diff.standing(looked[0])                     # the check before each push prints it under "not checked"
+
+    def failed(t):
+        t["incomplete"] = [{"tool": "bandit", "state": "failed", "status": "failed: it stopped", "applicable": True},
+                           *t.get("incomplete", [])]
+    broke = diff.load(another(tmp_path / "broke", base["out"], security=failed), label="before")
+    r = diff.compare(broke, head)
+    assert any("did not finish" in x and "(bandit)" in x and x.startswith("In the check of the code before")
+               for x in r["limits"]), r["limits"]
+    assert any("no library was looked up" in x and x.startswith("In both checks") for x in r["limits"]), r["limits"]
