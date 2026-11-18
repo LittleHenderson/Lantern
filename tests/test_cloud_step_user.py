@@ -406,6 +406,27 @@ def test_what_the_former_user_of_the_service_made_becomes_the_services_own(tmp_p
     assert c.discard("results", SOMEONE) is True and not (data / "results" / SOMEONE).exists()
 
 
+def test_where_the_system_has_no_owner_numbers_the_service_starts_and_closes_nothing(tmp_path, data, monkeypatch):
+    """Windows has no owner numbers (`os.geteuid` is not there). CI's Windows job of 2026-11-18 failed 18 tests of the
+    website, each when the service started: the step that closes the service's own files to others asked for the
+    service's user number. There nothing is closed by number (the service runs on Linux, in its image) and the
+    service starts with its steps under its own user ("shared"). The twin: where the numbers exist the database is
+    closed to others when the service starts, whoever the service is."""
+    db = data / "lantern_cloud.db"
+    Store(str(db))
+    os.chmod(db, 0o644)
+    start(tmp_path, data)
+    assert _mode(db) == 0o600 and _mode(data / "results") == 0o700
+    os.chmod(db, 0o644)
+    os.chmod(data / "results", 0o755)
+    monkeypatch.delattr(os, "geteuid")
+    (tmp_path / "again").mkdir()
+    cloud, _gw, _s = start(tmp_path / "again", data)
+    health = cloud.get("/v1/health").json()
+    assert health["steps"] == "shared", health
+    assert _mode(db) == 0o644 and _mode(data / "results") == 0o755
+
+
 # ---------------------------------------------------------------------------- a service that cannot keep checks apart
 def test_where_checks_must_be_kept_apart_a_service_that_cannot_starts_none(tmp_path, data, clone_from, monkeypatch):
     """Not root (the service cannot change a step's user): with LANTERN_CLOUD_STEPS_APART=required, as in the

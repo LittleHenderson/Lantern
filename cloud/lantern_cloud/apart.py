@@ -153,7 +153,10 @@ def close_up(db: str, results: str, uploads: str, work: str, home: str | None) -
     the service's own places becomes root's (the place, and each entry at its top: the clean-up asks only there),
     and the uploads and Lantern's own folder are made where they are missing. Then, whoever the service is: the
     database and its journal files are owner only, and so are the results, the uploads and Lantern's own folder.
-    The work folder is the worker's (`Worker.__init__`: others may pass through it, not list it)."""
+    The work folder is the worker's (`Worker.__init__`: others may pass through it, not list it). Where the system
+    has no owner numbers (Windows) nothing is done: the service runs on Linux, in its image."""
+    if not hasattr(os, "geteuid"):
+        return
     files = [db + x for x in ("", "-wal", "-shm", "-journal")]
     folders = [f for f in (results, uploads, home) if f]
     me = os.geteuid()
