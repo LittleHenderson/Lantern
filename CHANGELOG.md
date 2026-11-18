@@ -9,6 +9,50 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The badge `lantern serve` and the website serve beside a report (`badge.svg`) follows the release decision, as
+  the `badge.svg` a check writes into its results folder already did: it says "blocked" or "incomplete" where the
+  decision does, and "scan incomplete" in grey where a scanner that applies did not finish. Until now it was
+  drawn from the open critical and high findings only, and was green with "0 critical" for a release that was
+  Incomplete, or Blocked by something other than an open finding (its tests, a behaviour check).
+- A shared check has a badge for a README and a page the badge links to. Share on the website now also gives
+  `[![Lantern check](…/badge.svg)](…/check.html)` to copy, and `/s/<slug>/check.html` says which commit was
+  checked, a fingerprint of its code (SHA-256 of every file by its path and what it holds), the release decision
+  and what it is made of, how many of the scanners that apply finished, and one line anyone can run to repeat the
+  check: it copies the project, checks out the commit, installs the Lantern that made the check and runs `lantern
+  verify . --digest sha256:…`, which ends with MATCH when the results are the same. What the page says the check
+  found is read from the part of the record that fingerprint is made of, and only when the fingerprint is that
+  part's own, so the line checks it. Stop sharing takes the badge and the page away with the report
+  (`docs/api.md`, "Cloud service").
+- The check page gives no line where a line cannot repeat the check (files no commit holds, such as an upload or
+  a sample app; several projects read as one map; a check that ran the project's tests or this computer's type
+  checkers), and says why. The project's link in the line is the one the run was asked for, put together again
+  from its parts (`https://host/owner/name`); a link with anything else in it is left out of the line. Nothing on
+  the page is signed with a key: it is believed because the website serves it while its owner shares it, and the
+  line lets anyone make the fingerprint again.
+- A check before each push, opt-in: `lantern hook install` writes git's pre-push hook, and from then on every
+  `git push` of that repository is checked first. Each commit pushed is compared with what the other side already
+  has, by the same two checks as `lantern diff` (offline), and the push is stopped when the change itself brings
+  what blocks a release: a critical or high finding that is new, that a page or route reaches only now, that is
+  ranked critical or high only now or that is open again (a secret written into a file is one); a request the
+  page still makes that a route answered before and none answers now; a required part of the release decision
+  that failed only with this change. What blocked the project before the push and still does is the project's and
+  does not stop it. The hook is written only where no pre-push hook is (or where the one there is Lantern's own),
+  never over one of yours: Lantern prints the line to add to it instead, and says so where git runs hooks from
+  another folder (`core.hooksPath`). It runs the Lantern and the Python that wrote it, never a copy in the
+  project, runs nothing of the project, and only its owner may run or change it. `lantern hook status`,
+  `lantern hook remove`; `git push --no-verify` pushes once without the check. Receipts in
+  `.lantern/push/<branch>/`, which git leaves out (`docs/diff.md`, "Before each push").
+- `lantern diff … --require not-blocked` ends with 1 when the change itself brings what blocks a release, and
+  with 0 otherwise, for any CI system.
+- A change receipt of two checks made offline says that no library was looked up, and that a library with a known
+  problem that came with the change is therefore not listed. Until now it said the audits "did not finish or did
+  not cover everything".
+- `python bench/push_check.py`: a real `git push` through the hook on each of the 15 sample projects, and on the
+  shop sample three planted faults (a route that runs the command it is sent, a payment key in a file of the
+  page, a route renamed under the page) beside their three twins: every fault stopped, every twin and harmless
+  push let through, 1.00 to 1.42 seconds a push (`bench/push_check_results.md`). Its first run found the hook's
+  receipts taken into the next commit by `git add -A`; fixed. A push of Lantern's own repository took about 100
+  seconds: each push is two whole checks.
 - Several projects as one map: `lantern workspace FOLDER|LINK FOLDER|LINK …` copies the projects side by side
   (`LANTERN_HOME/workspaces/<name>/<project>/`) and checks them as one, so a page of one project is linked to the
   route of another that answers it, by the bridge's own rule and `via`, and a finding is reached across them as

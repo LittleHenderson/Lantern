@@ -866,6 +866,247 @@ def badge_svg(score: int | None = None, grade: str | None = None, ev: dict | Non
             f'<text x="7" y="14">Lantern</text><text x="{w1 + 6}" y="14">{html.escape(right)}</text></g></svg>')
 
 
+def badge_record(ev) -> dict:
+    """What the badge shows, out of an evidence record read back from a results folder (which a project can bring
+    along), each part only in the shape Lantern writes it: the commit's letters, when the report was made, the open
+    critical and high counts, the release decision, and whether a scanner that applies did not finish. Until
+    2026-11-17 the badge the app and the website serve (`server.result_page`) was drawn from the first three only:
+    it was green and said nothing more for a release that was Incomplete, or Blocked by its tests, where the badge
+    drawn from the whole record said "incomplete" or "blocked"."""
+    ev = ev if isinstance(ev, dict) else {}
+    h = ev.get("header") if isinstance(ev.get("header"), dict) else {}
+    sc = ev.get("scorecard") if isinstance(ev.get("scorecard"), dict) else {}
+    now = sc.get("now") if isinstance(sc.get("now"), dict) else None
+    out = {"header": {"commit": re.sub(r"[^0-9a-f]", "", str(h.get("commit") or ""))[:64] or None,
+                      "generated_at": h["generated_at"][:80] if isinstance(h.get("generated_at"), str) else None},
+           "scorecard": {"now": {k: _whole(now.get(k)) for k in ("critical", "high")} if now else {}}}
+    rel = _release(ev)
+    if rel:
+        out["release"] = {"decision": rel["decision"]}
+    if _incomplete(ev):
+        out["security"] = {"incomplete": [{}]}
+    return out
+
+
+# --------------------------------------------------------------- the page a shared badge links to (roadmap stage 6)
+# A check shared from the website has a page of its own beside its report (`/s/<slug>/check.html`, cloud/): the
+# commit, a fingerprint of the code, the release decision, how many of the scanners that apply finished, and one
+# line that repeats the check on anybody's computer and ends with MATCH when the results are the same. What the page
+# says the check found is read from the part of the record that its fingerprint (`digest`) is made of, and only when
+# the fingerprint is that part's own; so the line, which makes the fingerprint again, checks it. Two things come from
+# the rest of the record: whether a scanner that was skipped had work to do (its list of scanners that apply and did
+# not finish), and the time and the Lantern the line installs (its header, which the website writes itself: another
+# Lantern of that repository makes the line end with MATCH only where it makes the same results, which is all MATCH
+# says; a commit of a fork, which GitHub also hands out through that repository's address, could say anything, so the
+# line is as good as the website that wrote the record). The page says what it is and what it is not: it is served
+# while the owner shares it, and it is no promise that the app is safe.
+RESULTS_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+CODE_DIGEST = re.compile(r"[0-9a-f]{64}")
+CLONE_LINK = re.compile(r"https://[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[0-9]{1,5})?"
+                        r"/[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+ENGINE_REF = re.compile(r"[0-9a-f]{40}|v[0-9A-Za-z.+-]{1,40}")
+TOOL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,39}(?::[A-Za-z0-9][A-Za-z0-9_.+-]{0,39})?")
+TOOL_VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z_.+-]{0,39}")
+LANTERN_VERSION = re.compile(r"[0-9][0-9A-Za-z.+-]{0,39}")
+WHEN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?: [0-9]{2}:[0-9]{2} UTC)?")
+LANTERN_SOURCE = "https://github.com/LittleHenderson/Lantern"
+CHECK_FOLDER = "lantern-check"
+CHECK_POLICY = ("default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; "
+                "base-uri 'none'; form-action 'none'")
+CHECK_SAYS = {
+    "Passed": "Every check Lantern requires for this kind of project passed on this commit.",
+    "Incomplete": "Nothing Lantern checked failed, and something it requires was not checked on this commit.",
+    "Blocked": "Something Lantern requires failed on this commit.",
+}
+CRITERION_SAYS = {"passed": "passed", "failed": "failed", "missing": "not checked", "not-applicable": "not required"}
+SCANNER_LEFT = {"partial": "covered only part of the project", "failed": "did not finish", "timeout": "ran out of time",
+                "unavailable": "is not installed", "skipped": "was not run"}
+# a scanner's state as the fingerprinted part writes it (`digest_payload`: the first two letters of its status) and
+# the states that agree with it; a scanner that covered only part of the project or did not finish always had work
+# to do (`scanresult.applicable`), one that was skipped only where the record's own list says so
+LEFT_AS = {"pa": ("partial",), "er": ("failed", "timeout")}
+NOT_WHOLE = ("This check's record does not hold together: its fingerprint is not the one of its own data. Nothing "
+             "on this page can be checked, so no line to check it is given.")
+NOT_A_COMMIT = ("This check was of files that no commit holds (an upload, a sample app, or changes that were not "
+                "committed), so there is no commit to check out and repeat it on.")
+
+
+def install_words(engine: str | None) -> str:
+    """The command that installs the Lantern a report names (`engine_ref`: that commit or release; else the newest)."""
+    return f'pip install "lantern[scan] @ git+{LANTERN_SOURCE}{"@" + engine if engine else ""}"'
+
+
+def check_facts(ev, link: str | None = None) -> dict:
+    """What the page a shared badge links to says, from an evidence record and the link the project was cloned from
+    (None for an upload or a sample app). Read only from the part of the record its fingerprint is made of
+    (`payload`), and only when the fingerprint is that part's own (`whole`): a scanner it names as having covered only
+    part of the project, or as not having finished, is one that did not finish (the record's own list may only say
+    which way, `LEFT_AS`); one it names as skipped counts only where that list names it. Every value is taken only in
+    the shape Lantern writes it, and the link only as `remote.parse` reads it, put together again from its parts
+    and of plain letters (`CLONE_LINK`), so nothing a record or a link holds becomes words of a line to run."""
+    ev = ev if isinstance(ev, dict) else {}
+    said = ev.get("digest") if isinstance(ev.get("digest"), str) and RESULTS_DIGEST.fullmatch(ev["digest"]) else None
+    p = ev.get("payload") if isinstance(ev.get("payload"), dict) else None
+    try:
+        whole = bool(p is not None and said and digest(p) == said)
+    except (TypeError, ValueError, RecursionError):
+        whole = False
+    p = p if whole else {}
+    rd = p.get("readiness") if isinstance(p.get("readiness"), dict) else {}
+    rel = rd.get("release") if isinstance(rd.get("release"), dict) else {}
+    run = p.get("run") if isinstance(p.get("run"), dict) else {}
+    tools: dict[str, tuple[str | None, str]] = {}
+    for x in p.get("scanners") if isinstance(p.get("scanners"), list) else []:
+        if isinstance(x, str) and x.count(":") >= 2:
+            name, version, st = x.rsplit(":", 2)
+            if TOOL_NAME.fullmatch(name):
+                tools[name] = (version if TOOL_VERSION.fullmatch(version) and version != "None" else None, st)
+    finished = sorted(n for n, (_v, st) in tools.items() if st == "ok")
+    sec = ev.get("security") if isinstance(ev.get("security"), dict) else {}
+    listed: dict[str, object] = {}
+    for t in sec.get("incomplete") if isinstance(sec.get("incomplete"), list) else []:
+        if isinstance(t, dict) and isinstance(t.get("tool"), str):
+            listed[t["tool"]] = t.get("state")
+    left: dict[str, str] = {}
+    for name, (_v, st) in tools.items():
+        state = listed.get(name)
+        if st in LEFT_AS:
+            left[name] = state if state in LEFT_AS[st] else LEFT_AS[st][0]
+        elif st != "ok" and name in listed:
+            left[name] = state if state in ("unavailable", "skipped") else "skipped"
+    criteria = []
+    for x in rel.get("criteria") if isinstance(rel.get("criteria"), list) else []:
+        cid, _, state = x.partition(":") if isinstance(x, str) else ("", "", "")
+        if cid in release.TITLES and state in CRITERION_SAYS:
+            criteria.append((cid, state))
+    h = ev.get("header") if isinstance(ev.get("header"), dict) else {}
+    clone = name = None
+    if isinstance(link, str) and link.strip():
+        from . import remote
+        try:
+            info = remote.parse(link)
+        except (ValueError, RuntimeError, TypeError):
+            info = None
+        if info and CLONE_LINK.fullmatch(info["url"]):
+            clone, name = info["url"], f"{info['owner']}/{info['name']}"
+    applies = len(finished) + len(left)
+    text = lambda v, rx: v if isinstance(v, str) and rx.fullmatch(v) else None   # noqa: E731
+    return {
+        "whole": whole, "digest": said if whole else None, "commit": commit_named(p.get("commit")),
+        "uncommitted": p.get("uncommitted_changes") is True, "code": text(rel.get("code"), CODE_DIGEST),
+        "decision": rel.get("decision") if rel.get("decision") in release.DECISIONS else None,
+        "criteria": criteria, "finished": finished, "left": sorted(left.items()), "applies": applies,
+        "percent": 100 * len(finished) // applies if applies else None,
+        "versions": [(n, tools[n][0]) for n in sorted(tools)],
+        "when": text(h.get("generated_at"), WHEN), "lantern": text(p.get("lantern"), LANTERN_VERSION),
+        "engine": text(h.get("engine"), ENGINE_REF),
+        "scan": run.get("scan") is not False, "offline": run.get("offline") is True, "trace": bool(run.get("trace")),
+        "typecheck": run.get("typecheck") is not None, "workspace": "workspace" in p,
+        "link": clone, "name": name,
+    }
+
+
+def check_line(f: dict) -> tuple[str | None, str]:
+    """The one line that repeats a check (`check_facts`) on anybody's computer, and a sentence to say beside it;
+    `(None, why)` where no line can repeat it. A check that ran the project's tests or asked this computer's type
+    checkers gets none: `lantern verify` with a fingerprint alone does neither, and a line from a page does not start
+    the project's code."""
+    if not f["whole"]:
+        return None, NOT_WHOLE
+    if f["workspace"]:
+        return None, ("This check read several projects as one map, which is put together on the computer that holds "
+                      "them, so it cannot be repeated from a link.")
+    if not f["commit"] or f["uncommitted"]:
+        return None, NOT_A_COMMIT
+    if f["trace"]:
+        return None, ("This check ran the project's tests, which runs the project's code. Lantern does not write a "
+                      "line that runs a project's code; the evidence page names the command, word by word.")
+    if f["typecheck"]:
+        return None, ("This check also asked the type checkers of the computer it ran on, which a line from a page "
+                      "does not start; the evidence page says how to check such a report.")
+    run = (f"lantern verify . --digest {f['digest']}" + (" --offline" if f["offline"] else "")
+           + ("" if f["scan"] else " --no-scan"))
+    steps = ([f"git clone {f['link']} {CHECK_FOLDER}", f"cd {CHECK_FOLDER}"] if f["link"] else []) + [
+        f"git checkout {f['commit']}", install_words(f["engine"]), run]
+    return " && ".join(steps), ("" if f["link"] else "Run it in a copy of the project's repository.")
+
+
+CHECK_STYLE = """.verdict{margin:16px 0 20px;padding:12px 16px;border-radius:12px;background:var(--hover);color:var(--ink);font-size:15px;line-height:1.55}
+.verdict b{margin-right:6px} .verdict.good b{color:var(--good-ink)} .verdict.warning b{color:var(--warn-ink)} .verdict.critical b{color:var(--crit-ink)}
+pre.line{white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.65 var(--mono);background:var(--soft);color:var(--ink);padding:12px 14px;border-radius:10px;margin:12px 0}
+.badge{display:block;margin:0 0 6px;max-width:100%;height:auto} .muted{color:var(--muted)} a{color:var(--accent-ink)}
+.topbar a.brand{display:inline-flex;align-items:center;gap:8px;color:var(--ink);text-decoration:none;font-size:15px}
+.topbar .mark{width:24px;height:24px;flex:none}"""
+# Lantern's mark, as the report and the app draw it
+BRAND_MARK = ("<svg class='mark' viewBox='0 0 64 64' aria-hidden='true'><rect width='64' height='64' rx='15' fill='#141416'/>"
+              "<path d='M26 13h12M25 51h14' stroke='#F3F3F1' stroke-width='3' stroke-linecap='round'/>"
+              "<path d='M22 19h20l-2.5 27h-15z' fill='none' stroke='#F3F3F1' stroke-width='3' stroke-linejoin='round'/>"
+              "<path d='M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z' fill='#FFB547'/></svg>")
+
+
+def check_html(ev, link: str | None = None) -> str:
+    """The page a shared badge links to (`/s/<slug>/check.html` on the website): what the check found, what it is
+    tied to and the line that repeats it. No script; every value is escaped and was taken only in the shape Lantern
+    writes it (`check_facts`)."""
+    f = check_facts(ev, link)
+    line, beside = check_line(f)
+    title = "Lantern check" + (f" of {f['name']}" if f["name"] else "")
+    mark, look = DECISION_LOOK.get(f["decision"] or "", ("–", "none"))
+    verdict = (f"<p class='verdict {look}'><b>{mark} {E(f['decision'])}</b> {E(CHECK_SAYS[f['decision']])}</p>"
+               if f["decision"] else "<p class='verdict none'><b>– No decision</b> This record names no release "
+                                     "decision.</p>")
+    if f["applies"]:
+        scanners = (f"{len(f['finished'])} of {f['applies']} that apply finished and covered everything "
+                    f"({f['percent']}%)" + "".join(f"<br><span class='muted'>{E(n)} {E(SCANNER_LEFT[s])}</span>"
+                                                     for n, s in f["left"]))
+    else:
+        scanners = "No scanner that applies was run." if f["whole"] else "not known"
+    code = (f"<code title='{E(f['code'])}'>{E(f['code'][:12])}…</code> <span class='muted'>(SHA-256 of every file of "
+            "the project, each by its path and what it holds)</span>") if f["code"] else "not known"
+    rows = [("Commit", f"<code>{E(f['commit'])}</code>" if f["commit"] else "none"),
+            ("Code fingerprint", code),
+            ("Release decision", E(f["decision"] or "none")),
+            ("Scanners", scanners),
+            ("Checked", (E(f["when"]) if f["when"] else "at a time not known")
+             + (f" with Lantern {E(f['lantern'])}" if f["lantern"] else "")),
+            ("Results fingerprint", f"<code>{E(f['digest'])}</code>" if f["digest"] else "not known")]
+    kv = "".join(f"<div>{E(k)}</div><div>{v}</div>" for k, v in rows)
+    crit = "".join(f"<li>{E(release.TITLES[c])}: <b>{E(CRITERION_SAYS[s])}</b></li>" for c, s in f["criteria"])
+    versions = ", ".join(f"{E(n)} {E(v)}" if v else f"{E(n)} (version not known)" for n, v in f["versions"])
+    if line:
+        how = ("<p>Anyone can repeat this check on their own computer. The line "
+               + (f"copies the project into a folder called <code>{CHECK_FOLDER}</code>, " if f["link"] else "")
+               + "checks out this commit, installs the Lantern that made the check and runs it again. It ends with "
+               "MATCH when the results are the same, and with DIFFERENT when they are not.</p>"
+               + (f"<p>{E(beside)}</p>" if beside else "") + f"<pre class='line'><code>{E(line)}</code></pre>"
+               + "<p class='muted'>The same results need the same scanners at the same versions"
+               + (f": {versions}." if versions else ".")
+               + (" The check was made offline: no library was looked up, and the line looks none up either."
+                  if f["offline"] else " Libraries are looked up in live advisory databases, so an advisory "
+                  "published since this check can make that part differ.") + "</p>")
+    else:
+        how = f"<p>{E(beside)}</p>"
+    return ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'><meta name='robots' content='noindex'>"
+            f"<meta name='referrer' content='no-referrer'><title>{E(title)}</title>"
+            f"<style>{STYLE}{CHECK_STYLE}</style></head><body data-mode='simple'><main>"
+            # served only by Lantern (the website's /s/<slug>/, which has / and /guide), and with no script to choose a
+            # link: the logo opens the website, which says what Lantern is
+            "<div class='topbar'><a class='brand' href='/' title='Lantern: what it is, and how to check an app of your "
+            f"own' aria-label='Lantern: what it is, and how to check an app of your own'>{BRAND_MARK}<b>Lantern</b></a>"
+            "<span class='sp'></span><a class='btn' id='guidelink' href='/guide' title='How to use Lantern: short "
+            "animated demos'>How to use Lantern</a></div>"
+            f"<section><img class='badge' src='badge.svg' alt='The badge of this check' height='20'>"
+            f"<h1>{E(title)}</h1>{verdict}<div class='kv'>{kv}</div>"
+            + (f"<h4>What the decision is made of</h4><ul>{crit}</ul>" if crit else "") + "</section>"
+            f"<section><h2>Check it yourself</h2>{how}</section>"
+            "<section><h2>What this page does not say</h2><p>It does not say that the app is safe. It says what "
+            "Lantern's checks found on this commit and what they could not check: the <a href='evidence.html'>"
+            "evidence page</a> lists both, and the <a href='report.html'>report</a> shows every finding.</p>"
+            "<p class='muted'>The owner of this check shared this page and can take it back at any time; the link "
+            "then says that it is off.</p></section></main></body></html>")
+
+
 def E(v) -> str:
     """Escape anything for HTML. The renderer also runs on `evidence.json` read back from a repo folder, so no
     field is trusted to be the type or text we wrote."""
@@ -1229,9 +1470,8 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
         libs_html = ("<h4>Libraries the tests ran on</h4><p class='muted'>The check was offline: the tests ran on the "
                      "libraries installed on this computer, and nothing was fetched for them.</p>")
     engine = h.get("engine") if isinstance(h.get("engine"), str) and re.fullmatch(r"[0-9a-f]{40}|v[\w.-]+", h["engine"]) else ""
-    verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
-              f"{'@' + engine if engine else ''}\" "
-              f"&& lantern verify . --report evidence.html") if commit else NO_COMMIT_LINE
+    verify = (f"git checkout {commit[:12]} && {install_words(engine)} && lantern verify . --report evidence.html"
+              if commit else NO_COMMIT_LINE)
     if wsp and not commit and isinstance(wsp.get("name"), str) and workspace.NAME.fullmatch(wsp["name"]):
         verify = workspace.VERIFY_LINE.format(name=wsp["name"])
     words = _words_of(ev)

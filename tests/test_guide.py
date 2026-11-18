@@ -168,6 +168,10 @@ def test_every_page_reaches_the_guide():
     assert 'id="guidelink" href="https://lantern-cloud.fly.dev/guide"' in rep and "g.href = '/guide'" in rep
     ev = (lantern_files.PACKAGE / "evidence.py").read_text(encoding="utf-8")   # render_html's page template
     assert 'id="guidelink" href="https://lantern-cloud.fly.dev/guide"' in ev and "gl.setAttribute('href', '/guide')" in ev
+    # the page a shared badge links to (the website's /s/<slug>/check.html): no script, so the link is the site's own
+    from lantern import evidence
+    for record in ({}, {"payload": {}, "digest": "sha256:" + "0" * 64}):
+        assert "<a class='btn' id='guidelink' href='/guide'" in evidence.check_html(record)
     # the small pages: the local app's locked page, the website's notice pages, the sign-in pages, the landing page
     from lantern.server import LOCKED_PAGE
     assert 'href="/guide"' in LOCKED_PAGE

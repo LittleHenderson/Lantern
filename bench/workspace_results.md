@@ -83,6 +83,16 @@ was found, not in a workspace only: 🟥 the Dart reader skipped every Dart file
 `android`, `macos`, `windows` or `linux`, also a repository's own `web/` server, and not only a Flutter project's
 platform folders; fixed after a failing test and a twin (`tests/test_flutter.py`).
 
+## The map benchmark before and after this stage (2026-11-17, 7:15 PM PST)
+
+`python bench/run_bench.py WORK --no-trace`, offline, on the 7 public projects of the map benchmark, with stage 5's
+last code (before this stage) and with this stage's code, in two pairs of runs. Every value the benchmark writes but
+its two times (functions, files, lines, languages, links inside the project, entry points and their kinds, links
+between page and server, confidence levels, unresolved calls, findings): **0 different**, in both pairs. Time
+(reading and scanners, all 7 projects): 24.09 and 25.30 s before, 25.76 and 24.92 s after, each with the files
+already read once (the very first run, 28.68 s, read them from the disk). The two runs of one side differ by as
+much as the two sides do, so the measurement tells no difference in time.
+
 ## Readiness
 
 The shop sample split into its web page and its server and joined as a workspace grades as the whole sample does:

@@ -424,8 +424,10 @@ async function shareSheet(r) {
   const draw = (st, msg) => {
     const el = sheet(`<div class="sh"><h2>${st.shared ? 'Anyone with this link can open the report' : 'Share this report?'}</h2><button class="x" data-close aria-label="Close">×</button></div>
       ${st.shared ? `<div class="field" style="margin-top:16px">${SHARE_IC}<input type="text" id="shareurl" value="${esc(st.url)}" readonly aria-label="Share link"><button class="btn sm" id="copy">${icon('copy')}Copy</button></div>
-          <p class="muted small">The link opens the report, the evidence page and the badge, read-only. It works until you stop sharing; then it shows "This link is off".</p>`
-        : `<p>Lantern makes a link that opens this report, its evidence page and its badge, for anyone who has it. Nobody needs to sign in. You can stop sharing at any time.</p>
+          <p class="muted small">The link opens the report, the evidence page, the badge and the badge's page, read-only. It works until you stop sharing; then it shows "This link is off".</p>
+          ${st.markdown ? `<div class="field" style="margin-top:12px">${icon('check')}<input type="text" id="sharebadge" value="${esc(st.markdown)}" readonly aria-label="Badge for a README"><button class="btn sm" id="copybadge">${icon('copy')}Copy badge</button></div>
+          <p class="muted small">For your README: the badge links to a page that says what this check found, which commit and code it is tied to, and how anyone can repeat it. Stop sharing takes both away.</p>` : ''}`
+        : `<p>Lantern makes a link that opens this report, its evidence page, its badge and the badge's page, for anyone who has it. Nobody needs to sign in. You can stop sharing at any time.</p>
           ${note('warn', 'Findings can include passwords or keys Lantern found in your code (partly hidden), and where your app is weakest. Share with people you trust, or fix those first.')}
           <p class="muted small">${r.privacy === 'full' ? 'This run kept short code snippets, so the report shows them.' : 'This run kept no code: the report names files and lines only.'}</p>`}
       ${teamPick(r)}
@@ -438,10 +440,12 @@ async function shareSheet(r) {
     teamPickWire(el, r, () => draw(st, note('ok', r.workspace ? `Everyone in ${esc(teamName(r.workspace))} can open this report now.` : 'Only you can open this report now.')));
     const d = el.querySelector('#doshare'); if (d) d.onclick = () => set(true);
     const u = el.querySelector('#unshare'); if (u) u.onclick = () => set(false);
-    const c = el.querySelector('#copy'); if (c) c.onclick = async () => {
-      const i = el.querySelector('#shareurl'); i.select();
-      try { await navigator.clipboard.writeText(i.value); c.innerHTML = icon('check') + 'Copied'; } catch (e) { c.innerHTML = 'Press Ctrl+C'; }
-    };
+    for (const [btn, field] of [['#copy', '#shareurl'], ['#copybadge', '#sharebadge']]) {
+      const c = el.querySelector(btn); if (c) c.onclick = async () => {
+        const i = el.querySelector(field); i.select();
+        try { await navigator.clipboard.writeText(i.value); c.innerHTML = icon('check') + 'Copied'; } catch (e) { c.innerHTML = 'Press Ctrl+C'; }
+      };
+    }
   };
   sheet(`<div class="working"><span class="pulse"></span>Loading…</div>`);
   try { draw(await api(`/v1/runs/${encodeURIComponent(r.id)}/share`)); } catch (e) { sheet(`<div class="sh"><h2>Share</h2><button class="x" data-close aria-label="Close">×</button></div>${note('err', esc(e.message))}`); }

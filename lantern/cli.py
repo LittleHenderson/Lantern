@@ -4,6 +4,8 @@
   lantern learn [NAME [DIR]]                              create a starter app to learn Lantern step by step
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern workspace PROJECT PROJECT ... [--name NAME]     several folders or repository links checked as one map
+  lantern diff [PATH] [BASE..HEAD]                        what a change does: two versions checked and compared
+  lantern hook install [PATH]                             before each push: stop a change that blocks a release
   lantern trace PATH -- python -m pytest -q               record what actually runs
   lantern behave PATH                                     start the app in the sandbox and run its lantern-behaviour.json
   lantern behave PATH --init [--force]                    run nothing: write a first lantern-behaviour.json from the code
@@ -30,6 +32,7 @@ Results live in PATH/.lantern/ (override with --out).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -335,7 +338,66 @@ def cmd_diff(a) -> int:
     else:
         for name in ("html", "md", "json"):
             print(f"wrote   {got['paths'][name]}")
+    if a.require:
+        return _require_not_blocked(got["receipt"], quiet)
     return 0
+
+
+MOST_BLOCKERS = 12      # lines a check of a change prints of what blocks; the rest are counted (all are in the receipt)
+
+
+def _require_not_blocked(receipt: dict, quiet: bool) -> int:
+    """`lantern diff --require not-blocked`: 1 when the change itself brings what blocks a release
+    (`diff.blockers`), else 0. What blocked the project before the change and still does is the project's, not the
+    change's: a project blocked before stays allowed a change that adds nothing that blocks, and the words say so."""
+    from . import diff
+    rows = diff.blockers(receipt)
+    rel = receipt.get("release") or {}
+    if rows:
+        print(f"fail    this change brings what blocks a release ({len(rows)}):", file=sys.stderr)
+        for row in rows[:MOST_BLOCKERS]:
+            print(f"fail      - {_printable(row['words'])[:300]}", file=sys.stderr)
+        if len(rows) > MOST_BLOCKERS:
+            print(f"fail      and {len(rows) - MOST_BLOCKERS} more (all of them are in the receipt)", file=sys.stderr)
+        return 1
+    after = (rel.get("after") or {}).get("decision")
+    words = "pass    this change brings nothing that blocks a release"
+    if after == "Blocked":
+        words += " (the release decision was Blocked before it, for what was there already, and is still Blocked)"
+    print(words, file=sys.stderr if quiet else sys.stdout)
+    return 0
+
+
+def cmd_hook(a) -> int:
+    """`lantern hook install|remove|status [PATH]` and `lantern hook run` (lantern/hook.py): an opt-in check of what
+    each push sends, before it leaves this computer."""
+    from . import hook
+    if a.hook_cmd == "run":
+        for stream in (sys.stdout, sys.stderr):     # git shows the hook's words as they come: never stop on a sign
+            with contextlib.suppress(AttributeError, ValueError):
+                stream.reconfigure(errors="replace")
+        lines = sys.stdin.read().splitlines() if not sys.stdin.isatty() else []
+        return hook.run(Path.cwd(), a.remote, lines)
+    repo = Path(a.path).resolve()
+    try:
+        if a.hook_cmd == "install":
+            got = hook.install(repo)
+            print(f"wrote   {got['path']}")
+            print("Before each push Lantern now checks what the push sends, and stops it when the change brings what "
+                  "blocks a release. `git push --no-verify` pushes once without the check; `lantern hook remove` "
+                  "takes it away.")
+            return 0
+        if a.hook_cmd == "remove":
+            got = hook.remove(repo)
+            print(f"removed {got['path']}" if got["removed"] else
+                  f"There is no pre-push hook of Lantern's in this repository ({got['path']}): nothing to remove.")
+            return 0
+        got = hook.status(repo)
+        print(got["words"])
+        return 0
+    except hook.Refused as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
 
 FIX_NOT_OPEN = ("{id} is not an open finding of this project's last check (ids change when the flagged line changes, "
@@ -937,6 +999,21 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--format", choices=["line", "md", "json"], default="line",
                     help="what to print: where the files were written (default), the text for a pull request, or the data")
     sp.add_argument("--short", action="store_true", help="with --format md: without the list of changed functions")
+    sp.add_argument("--require", choices=["not-blocked"],
+                    help="exit 1 when the change itself brings what blocks a release (a critical or high finding that "
+                         "is new, reached only now, ranked higher or open again, a secret, a request of the page that "
+                         "no route answers any more); what blocked the project before the change is not the change's")
+    sp = sub.add_parser("hook", help="an opt-in check before each push: what the push sends is compared with what the "
+                                     "other side has, and a change that brings what blocks a release is stopped")
+    hsub = sp.add_subparsers(dest="hook_cmd", required=True)
+    for name, words in (("install", "write the pre-push hook into this repository (never over a hook of yours)"),
+                        ("remove", "take Lantern's pre-push hook away (never a hook of yours)"),
+                        ("status", "say whether the check before each push is on")):
+        hp = hsub.add_parser(name, help=words)
+        hp.add_argument("path", nargs="?", default=".")
+    hp = hsub.add_parser("run", help="what the hook runs: reads what git says is being pushed on its input")
+    hp.add_argument("remote", nargs="?", default=None, help="the remote's name, as git hands it to the hook")
+    hp.add_argument("url", nargs="?", default=None, help="the remote's address, as git hands it to the hook")
     sp = sub.add_parser("fix", help="the fix of one finding: what it has to show (brief), and whether a fix shows it "
                                     "(check); a fix that only hides the finding is refused")
     fsub = sp.add_subparsers(dest="fix_cmd", required=True)
@@ -1073,6 +1150,8 @@ def _main(argv: list[str]) -> int:
         return cmd_accept(a)
     if a.cmd == "diff":
         return cmd_diff(a)
+    if a.cmd == "hook":
+        return cmd_hook(a)
     if a.cmd == "fix":
         return cmd_fix(a, trace_cmd)
     if a.cmd == "github":

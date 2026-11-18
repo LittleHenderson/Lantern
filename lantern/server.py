@@ -1057,7 +1057,7 @@ def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> t
     is built from the scoped bundle, so a hidden layer never reaches the browser, and the files that describe the
     whole app (the evidence report, the raw JSON and, since 2026-11-15, the badge, which shows the whole app's
     score and its critical and high counts) are refused."""
-    from .evidence import badge_svg, render_html
+    from .evidence import badge_record, badge_svg, render_html
     from .report import read_bundle, render
     if name == "change.html":
         return _change_page(out, lanes)
@@ -1082,15 +1082,28 @@ def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> t
         if name == "badge.svg":
             rd = _load(f) or {}
             ev = _load(f.with_name("evidence.json")) or {}
+            rd = rd if isinstance(rd, dict) else {}
             grade = rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else "?"
-            # only the fields the badge shows are read back from the (plantable) file, and each is coerced
-            now = (ev.get("scorecard") or {}).get("now") if isinstance(ev.get("scorecard"), dict) else {}
-            safe = {"header": {"commit": re.sub(r"[^0-9a-f]", "", str((ev.get("header") or {}).get("commit") or ""))[:40] or None,
-                               "generated_at": _str((ev.get("header") or {}).get("generated_at"))},
-                    "scorecard": {"now": {k: _int((now or {}).get(k)) or 0 for k in ("critical", "high")} if now else {}}}
-            return 200, badge_svg(_int(rd.get("score")) or 0, grade, safe), "image/svg+xml", {
+            # only what the badge shows is read back from the (plantable) file, each part in its own shape
+            # (`evidence.badge_record`): the decision and the scanners that did not finish too, since 2026-11-17
+            return 200, badge_svg(_int(rd.get("score")) or 0, grade, badge_record(ev)), "image/svg+xml", {
                 "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
         return 200, json.dumps(_load(f)), "application/json", {}
+    except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
+        return (409, f"<p>This result file can't be read ({html.escape(type(exc).__name__)}). Analyze the project again.</p>",
+                "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+
+
+def check_page(out: Path, link: str | None = None) -> tuple[int, str, str, dict]:
+    """(status, body, content type, headers) for the page a shared badge links to (`evidence.check_html`, the
+    website's `/s/<slug>/check.html`): rebuilt from `evidence.json` like every result page, with no script, and with
+    the link the project was cloned from as the service knows it, never as the results folder says it."""
+    from .evidence import CHECK_POLICY, check_html
+    ev = _load(out / "evidence.json")
+    if not isinstance(ev, dict):
+        return 404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)}
+    try:
+        return 200, check_html(ev, link), "text/html; charset=utf-8", {"Content-Security-Policy": CHECK_POLICY}
     except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
         return (409, f"<p>This result file can't be read ({html.escape(type(exc).__name__)}). Analyze the project again.</p>",
                 "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
