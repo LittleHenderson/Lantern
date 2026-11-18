@@ -234,6 +234,8 @@ file. New entries go under `## Unreleased`, on top.
   the finding). Measured on 30 folders (benchmark projects, sample apps, Lantern itself): 805 files read, 24
   places that give such a setting a value, no finding. So no false alarm and no true case there, and no
   precision is claimed. Tests: `tests/test_public_values.py` (6).
+- Website: the GitHub screen lists the signed-in person's own GitHub repositories, newest first, with a search box past eight; a click starts the check. Private ones show once the GitHub App is installed on their account (`GET /v1/github/repos`, `ghapp.your_repos`). The GitHub logo on that screen was drawn at the full width of the page; it is icon-sized again.
+
 - A first behaviour plan written from the code (roadmap stage 4; `lantern/behave_init.py`, `docs/behaviour.md`).
   New: `lantern behave PATH --init` reads a FastAPI app and writes `PATH/lantern-behaviour.json`; it runs nothing of
   the project, asks no model, and the same code gives the same plan. A plan that is there is left as it is
