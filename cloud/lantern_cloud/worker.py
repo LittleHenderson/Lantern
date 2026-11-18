@@ -43,6 +43,7 @@ import httpx
 
 from lantern import _jail, gitfacts, learn, programs, remote, removal, sandbox
 
+from . import apart
 from .cleanup import Cleanup
 from .ghapp import NoAccess
 from .settings import Settings
@@ -242,7 +243,15 @@ class Worker:
         self.work.mkdir(parents=True, exist_ok=True)
         self.uploads = Path(settings.uploads())
         self.uploads.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.work, 0o711)   # nosec B103 - a folder: others may pass through (the analysis user, when we run as root), not list
+        os.chmod(self.work, 0o711)   # nosec B103 - a folder: others may pass through (each check's user, when we run as root), not list
+        # Before any step can run: the service's own files closed to others, and what the user the website's image
+        # ran the service as until 2026-11-18 made in them taken over, so the clean-up may remove it (`apart.py`).
+        apart.close_up(settings.db_path, str(self.results), str(self.uploads), str(self.work), _lantern_home())
+        # Each check's steps run as a user of its own where the service is root (`apart.StepUsers`); the health
+        # page's `steps` says what the last proof showed ("apart", "open"), "unchecked" before the first, "shared"
+        # where the service is not root and its steps run as its own user.
+        self.users = apart.StepUsers()
+        self.steps = "unchecked" if self.users.on else "shared"
         self.pool = ThreadPoolExecutor(max_workers=max(1, settings.concurrent_jobs), thread_name_prefix="lantern-run")
         self.stopping = threading.Event()   # shutdown(): the steps that are running end, with all they started
         self.tokens: dict[str, str] = {}    # run id -> allowance token, only while its explanations wait
@@ -262,6 +271,10 @@ class Worker:
                                  error="Lantern restarted while this run was going. Start it again.")
             else:
                 self.submit(r["id"])
+        if self.users.on and settings.steps_apart == "required":
+            # Where checks must be kept apart the health page says at once whether they are (each check proves it
+            # again before its first step).
+            threading.Thread(target=self._prove_at_start, name="lantern-apart", daemon=True).start()
 
     @staticmethod
     def _sweep(sweep, *args) -> None:
@@ -311,6 +324,7 @@ class Worker:
             scrub += [str(root), os.path.realpath(root)]
             tmp = root / "tmp"
             tmp.mkdir()
+            self._keep_apart(rid, root, log)    # before anything of the check is copied
             free = shutil.disk_usage(root).free / 1_000_000
             if free < 2.5 * self.s.clone_max_mb:   # the download and its files, with room to spare
                 raise RunFailed(f"Lantern's server is short of space right now ({free:,.0f} MB free). "
@@ -383,6 +397,7 @@ class Worker:
             # 2026-11-10 a folder that could not be deleted raised here, before the record. The run then stayed
             # "running" for good and its owner could not start another.
             try:
+                self._give_back(root)
                 self._tidy(root, [("upload", f"{rid}.zip")] + ([] if status == "done" else [("results", rid)]), log)
             finally:
                 self.store.update_run(rid, status=status, error=error, summary=summary, commit_sha=commit,
@@ -454,6 +469,8 @@ class Worker:
                 raise RunFailed("Lantern restarted while these were waiting. Click Explain again.")
             if is_upload(r["link"]):
                 raise RunFailed(UPLOAD_EXPLAIN)
+            (root / "tmp").mkdir()
+            self._keep_apart(key, root, log)    # before the code is copied again
             log("· Copying the repository again to read the code (nothing is run or installed)")
             try:
                 repo = get_source(r["link"], root / "src" / source_name(r["link"]), log, self.access(r))
@@ -530,6 +547,7 @@ class Worker:
             log(f"internal error ({type(e).__name__})")
         finally:
             try:
+                self._give_back(root)
                 self._tidy(root, [], log)
             finally:
                 self.store.update_run(rid, explain_status=status, explain_error=error, explain_summary=summary)
@@ -545,12 +563,84 @@ class Worker:
             raise RunFailed(f"The run used its {self.s.job_timeout // 60} minutes before the analysis could start.")
         return left
 
+    # ------------------------------------------------------------------ each check under a user of its own
+    def _keep_apart(self, key: str, root: Path, log) -> None:
+        """Before a check's first step (`apart.py`): a user of its own for its steps, and the proof that this user
+        can read none of the service's own files. The check goes on only then. Where checks must be kept apart
+        (`steps_apart = "required"`), a service that cannot give a check a user of its own starts none either.
+        Nothing of the check has been copied yet."""
+        if self.users.take(root) is None:
+            if self.s.steps_apart == "required":
+                raise RunFailed(apart.NOT_APART)
+            return
+        read = self._prove(key, root)
+        if read is None:
+            log(apart.UNANSWERED)
+            raise RunFailed(apart.UNPROVEN)
+        if read:
+            log(apart.OPEN.format(", ".join(read)))
+            raise RunFailed(apart.NOT_APART)
+        log(apart.APART)
+
+    def _prove(self, key: str, root: Path) -> list[str] | None:
+        """A step of the check's user tries to read the service's own files (`apart.PROOF`, which says only what it
+        tried, by kind, and how it went). Returns what it could read (empty: nothing), and sets the health page; None
+        when the step did not answer (`apart.what_was_read`), which leaves the health page as it was: the check does
+        not go on, and nothing was shown of the service either way."""
+        uid = self.users.of(root)
+        args = apart.probes(os.path.abspath(self.s.db_path), os.path.abspath(self.results),
+                            os.path.abspath(self.uploads), os.path.abspath(self.work), _lantern_home(), os.getpid())
+        _rc, output, _timed_out = self._jailed(key, root, [sys.executable, "-I", "-S", "-c", apart.PROOF, *args],
+                                               cwd=root / "tmp", net=False, log=lambda m: None, timeout=60)
+        read = apart.what_was_read(output, uid, len(args) // 3) if uid is not None else ["user"]
+        if read is None:
+            _log.warning("the proof that a check's user can read none of the service's own files did not answer, so "
+                         "that check was not started")
+            return None
+        self.steps = "open" if read else "apart"
+        if read:    # for the owner (fly logs): what, by kind only, never a place or a file's text
+            _log.warning("a check's user could read what is the service's own (%s), so no check starts until that "
+                         "is put right (docs/deploy.md, \"Each check as a user of its own\")", ", ".join(read))
+        return read
+
+    def _prove_at_start(self) -> None:
+        """The proof once when the service starts, for the health page. Never raises."""
+        root = None
+        try:
+            root = self.cleanup.fresh("run-")
+            (root / "tmp").mkdir()
+            if self.users.take(root) is not None:
+                self._prove("start", root)
+        except Exception as e:  # noqa: BLE001 - each check proves it again before its first step
+            _log.warning("the proof that checks are kept apart could not be made at start-up (%s)", type(e).__name__)
+        finally:
+            self._give_back(root)
+            self._tidy(root, [], lambda m: None)
+
+    def _give_back(self, root: Path | None) -> None:
+        """The check is over: whatever still runs as its user is ended, and the user may be given to another check
+        once nothing of it runs (`apart.StepUsers.give_back`). Never raises."""
+        if root is None:
+            return
+        try:
+            left = self.users.give_back(root)
+        except Exception as e:  # noqa: BLE001 - the check still has to be recorded as ended
+            _log.warning("ending what was left of a check's user failed (%s)", type(e).__name__)
+            return
+        if left:
+            _log.warning("%d program(s) of a check's user could not be ended; no other check is given that user "
+                         "while they run", left)
+
     def _jailed(self, rid, root: Path, cmd: list[str], *, cwd: Path, net: bool, log, timeout: float,
                 audits: Path | None = None, extra: dict | None = None):
-        """Run `cmd` in the restricted process: writes only under root/tmp, no network unless `net`. `ShutDown`
-        when the service is stopping: the step is then not started, or ended with everything it had started."""
+        """Run `cmd` in the restricted process: writes only under root/tmp, no network unless `net`, and, where the
+        service is root, as the check's own user (`apart.py`). `ShutDown` when the service is stopping: the step is
+        then not started, or ended with everything it had started."""
         if self.stopping.is_set():
             raise ShutDown()
+        user = self.users.of(root)
+        if self.users.on and user is None:      # never as root, and never as another check's user
+            raise RunFailed(apart.NOT_APART)
         tmp = root / "tmp"
         env = sandbox._env_base(tmp)
         hook = root / "hook"
@@ -577,20 +667,27 @@ class Worker:
         if net:
             env.update({k: os.environ[k] for k in PROXY_VARS if k in os.environ})
         env.update(extra or {})
-        as_nobody = hasattr(os, "geteuid") and os.geteuid() == 0
-        if as_nobody:   # root ignores file modes; the analysis runs as nobody, who owns only the temp folder
-            for dirpath, _dirs, files in os.walk(tmp):
-                os.chown(dirpath, 65534, 65534)
-                for f in files:
-                    os.chown(os.path.join(dirpath, f), 65534, 65534)
-            os.chmod(root, 0o711)   # nosec B103 - a folder: the analysis user may pass through to its own temp folder, not list
+        if user is not None:
+            # The check's temp folder, what the service made in it for this step and its copy of the code become
+            # its user's, and no other user may enter them; nothing a link names is handed over (`apart.hand_over`).
+            # Until 2026-11-18 the steps of every check ran as one user: `nobody` where the service was root, and
+            # the service's own user where it was not, as in the website's image then.
+            apart.hand_over(root, user)
             if not net:   # where root's files are made owner-only (umask 077) the step ran with no guard, unsaid
                 sandbox._others_may_read(hook)
         if os.name == "posix":
             # no "must": these steps read a project and never run it, so where the kernel has no Landlock, or
             # refuses it, they say so in the log and carry on (lantern/_jail.py). "parent": a launcher whose service
-            # is gone does not start its step, and one whose service ends, ends its step.
-            policy = {"writable": [str(tmp)], "nobody": as_nobody, "python": True, "net": not net, "parent": os.getpid()}
+            # is gone does not start its step, and one whose service ends, ends its step. "user": the launcher starts
+            # nothing where it cannot hand the step to that user, whatever "must" says.
+            policy = {"writable": [str(tmp)], "python": True, "net": not net, "parent": os.getpid()}
+            if user is not None:
+                policy["user"] = user
+                if not net:
+                    # A network of the step's own, which holds nothing but its own address: what the step runs below
+                    # Python's guard reaches nothing of this computer either. The guard is not told of it, and goes on
+                    # refusing every address.
+                    policy.update(own_net=True, net_told=False)
             cmd = [sys.executable, "-I", "-c",
                    f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])",
                    json.dumps(policy), "--", *cmd]
@@ -604,6 +701,11 @@ class Worker:
 def _now() -> str:
     from .store import now
     return now()
+
+
+def _lantern_home() -> str:
+    """Lantern's own folder of the service (`removal.home`, the place every part of Lantern uses), made absolute."""
+    return os.path.abspath(removal.home())
 
 
 def _model_name() -> str:

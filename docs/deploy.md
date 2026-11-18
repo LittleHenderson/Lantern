@@ -206,7 +206,9 @@ fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --depot=false
 
 # 5. Check.
 curl https://lantern-cloud.fly.dev/v1/health
-#    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.11.0", "limits": {...}, "hosts": "all"}
+#    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.11.0", "limits": {...}, "hosts": "all",
+#        "cleanup": "ok", "steps": "apart"}
+#    ("steps": "apart" a moment after the start: each check runs as a user of its own, "Each check as a user of its own" below)
 #    Then open https://lantern-cloud.fly.dev/ in a browser, press Sign in, and paste a repository link.
 ```
 
@@ -234,6 +236,7 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |
 | `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK` | on the volume | Run list (SQLite), result folders, temp folders of runs in progress. Each run's temp folder is removed when the run ends, and the ones cut-off runs left are removed at start-up. The service removes only the folders it made there (each carries its mark file `.lantern-work`); anything else in these folders is left alone and counted ("Clean-up" below). Until 2026-11-10 start-up deleted everything in the work folder, whatever it was |
 | `LANTERN_CLOUD_UPLOADS` | `<LANTERN_CLOUD_WORK>-uploads` (on the volume) | Uploaded .zip files waiting for their run to start; each is moved into its run's temp folder when the run starts. At start-up half-received uploads and the uploads of runs that are over are removed; a waiting run's upload stays, and so does anything that is not an upload of the service's (counted, "Clean-up" below) |
+| `LANTERN_CLOUD_STEPS_APART` | (empty; `required` in `cloud/Dockerfile`) | `required`: the service starts no check that it cannot keep apart from the other checks and from its own files ("Each check as a user of its own" below). Empty: where the service is root each check still gets a user of its own; where it is not (a person's own computer), the steps run as the service's own user, as before 2026-11-18 |
 
 Explanations and Ask Lantern (milestone 6) need no new setting or secret: they go to the same gateway the
 sign-in uses, with each person's own allowance token, and only after that person agrees on the website. The gateway's
@@ -253,14 +256,51 @@ repository's files.
 | The first request after a quiet spell takes a few seconds | The service was asleep (normal, it saves money) | nothing |
 | A large repository's run ends with an error about memory | 1 GB is not enough for it | `fly scale memory 2048 -a lantern-cloud` (doubles the running cost) |
 | The uptime mail says `lantern-cloud clean-up` is `OWED` | Files the service should have removed (a deleted run's results, a run's temp folder) have been waiting for more than a day, or runs past the retention time are still there | "Clean-up" below: read the reason in the owner's statistics first |
+| The website says it cannot keep checks apart right now, and starts no check; the uptime mail says `lantern-cloud checks kept apart` is `OPEN` or `SHARED` | A check's user could read something of the service's, or the service does not run as root | "Each check as a user of its own" below |
+| A check says Lantern's server could not finish making sure that it is kept apart from the others | That check's first step, which makes sure of it, did not finish (most often the machine was too busy for it): the check was not started, and nothing was shown either way | Try the check again; if every check says it, `fly logs -a lantern-cloud` ("did not answer") and restart the machine |
 | After deleting a run the website says "Deleted, with one thing still to do" | The run is gone for everyone, but the server could not remove its files from its disk yet. It has written that down and tries again at every start and every hour | Nothing, unless the uptime mail above arrives a day later |
+
+### Each check as a user of its own
+
+Since 2026-11-18 the website's image starts the service as root (`cloud/Dockerfile` has no `USER` line), so that it
+can run each check's steps (unpacking an upload, the dependency audit, the analysis, the explanations) as a user of
+that check's own: a number from 300,000 to 799,999 that no other check has while it runs, and never root. That user
+may read its own check's folder and what every user of the machine may read (the installed program), and nothing of
+the service's: the database, the results, the uploads waiting for their checks, Lantern's own folder and the
+service's running program are closed to it, and so are the folders of every other check. When the check ends,
+whatever still runs as its user is ended. Until that day every check's steps ran as one user, the service's own.
+
+`LANTERN_CLOUD_STEPS_APART=required` (set in the image) makes the service start no check that it cannot keep apart:
+before anything of a check is copied, a step of that check's user tries to read each of those places, and the check
+starts only where every one of them was refused. Otherwise the person is told that the server cannot keep checks
+apart right now and that nothing of their project was copied, and the service's log (`fly logs -a lantern-cloud`)
+says what was read, by kind only (for example `database` or `work-folder`), never a place or a file. The
+health page says how it went, under `"steps"`:
+
+| Word | Meaning | What to do |
+|---|---|---|
+| `apart` | The last proof (when the service started, or before a check) found that the check's user could read nothing of the service's | Nothing |
+| `unchecked` | Not asked yet: the service asks a moment after it starts | Nothing; it changes by itself |
+| `open` | A check's user could read something of the service's, so no check starts | Below |
+| `shared` | The service does not run as root, so its checks cannot be given users of their own, and no check starts | Deploy the image from `cloud/Dockerfile` as it is (no `USER` line) |
+
+The uptime check fails on `open` and `shared`, which mails you. A check's user must be able to pass through every
+folder on the way to its own: `/home/app` (the image makes it `0711`), the volume (Fly gives its top folder to the
+image's user when it mounts it, which is root since this change) and the work folder (the service makes it `0711`
+itself). The service closes the database, the results, the uploads and Lantern's own folder to others whenever it
+starts, and on the first start after this change it makes what the service's former user (`app`) left on the volume
+its own, so the clean-up can still remove it. `open` most often means a folder on that way does not let other users
+pass, or something on the volume was opened to others by hand:
+`fly ssh console -a lantern-cloud -C "ls -ld /home/app /home/app/data /home/app/data/work"` shows the folders (each
+needs the last `x`, as in `drwx--x--x` or `drwxr-xr-x`), and a restart (`fly machine restart -a lantern-cloud`)
+closes the service's own places again.
 
 ### Watching the live services (uptime, and "is the live version behind?")
 
 `.github/workflows/uptime.yml` asks both services for `/v1/health` every 30 minutes (`tools/uptime.py`). A run fails,
 and GitHub emails the repository owner, when either service is down, answers without `"ok": true`, takes more than
 5 seconds, when lantern-cloud's engine version is older than the latest GitHub release (the live service is behind;
-redeploy, below), or when lantern-cloud's health page says its clean-up is behind ("Clean-up" below). The health pages are public and show versions and limits only, so the check needs no secret.
+redeploy, below), when lantern-cloud's health page says its clean-up is behind ("Clean-up" below), or when it says its checks are not kept apart (`"steps"` is `open` or `shared`: "Each check as a user of its own" above). The health pages are public and show versions and limits only, so the check needs no secret.
 `python tools/uptime.py --cloud https://lantern-cloud.fly.dev --gateway https://lantern-gateway.fly.dev` runs the same
 check by hand. Fly's own status page is https://status.flyio.net/. To get the mails, keep "Actions: send notifications
 for failed workflows" on in your GitHub notification settings (it is on by default for the repository owner).

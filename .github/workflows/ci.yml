@@ -131,6 +131,22 @@ jobs:
           if [ -n "$was" ]; then sudo sysctl -w "$rule=$was"; fi
           [ "$status" -eq 0 ] || exit "$status"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/own-network.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
+      - name: The website's tests of each check under a user of its own, a second time as root (the pass above skips them)
+        # The cloud service runs each check's steps as a user of that check's own (cloud/lantern_cloud/apart.py,
+        # 2026-11-18), which only root can do, so the tests of it need root and the pass above names them as skipped.
+        # Here the file runs as root, and no test may be skipped. A check's user is none of this machine's users, and
+        # the twins run Lantern's own analysis as that user, which reads Lantern's code from this checkout as it
+        # reads it from the website's image: the folders above the checkout are opened for passing through (not for
+        # listing) first. As above, the rule is written on the sudo line and then looked for in the run's own words.
+        env:
+          LANTERN_TESTS_COMPLETE: no-skips
+        run: |
+          set -o pipefail   # piped into tee, as above
+          d="$GITHUB_WORKSPACE"
+          while [ "$d" != "/" ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
+          sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" PYTHONDONTWRITEBYTECODE=1 \
+            python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py | tee "$RUNNER_TEMP/step-user.log"
+          grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/step-user.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
         run: python tools/netguard/lantern_netguard.py --allow pypi.org,registry.npmjs.org,api.osv.dev -- lantern analyze . --out /tmp/self --fail-on medium
@@ -178,8 +194,9 @@ jobs:
           PY
 
   cloud-image:
-    # Cloud mode's server image (cloud/Dockerfile, built from the repository root) builds, starts as a non-root
-    # user, and answers its health check with the engine inside.
+    # Cloud mode's server image (cloud/Dockerfile, built from the repository root) builds, starts as root, keeps each
+    # check's steps apart (its health page says "apart" once a step of a check's user could read none of the
+    # service's own files: cloud/lantern_cloud/apart.py), and answers its health check with the engine inside.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
@@ -191,7 +208,13 @@ jobs:
           docker run -d --name lc -p 8090:8080 -e LANTERN_CLOUD_DB=/tmp/c.db -e LANTERN_CLOUD_RESULTS=/tmp/r lantern-cloud
           curl -fsS --retry 10 --retry-delay 2 --retry-all-errors --max-time 10 http://127.0.0.1:8090/v1/health | tee health.json
           echo
-          test "$(docker exec lc id -u)" != "0"
+          test "$(docker exec lc id -u)" = "0"   # root, so that each check's steps run as a user of their own
+          for i in $(seq 1 30); do   # the service proves it at start-up, in the background
+            curl -fsS --max-time 10 http://127.0.0.1:8090/v1/health -o health.json
+            grep -q '"steps":"unchecked"' health.json || break
+            sleep 1
+          done
+          cat health.json; echo
           docker exec lc git --version
           docker exec lc npm --version
           test "$(docker exec lc gitleaks version)" = "8.30.1"
@@ -200,6 +223,7 @@ jobs:
           d = json.load(open("health.json"))
           want = re.search(r'^version = "([^"]+)"', open("pyproject.toml").read(), re.M).group(1)
           assert d["ok"] is True and d["service"] == "lantern-cloud" and d["engine"] == want, d
+          assert d["steps"] == "apart", d
           PY
       - name: the website is served, built from the app's own stylesheet, with a nonce policy
         run: |
