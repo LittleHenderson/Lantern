@@ -9,6 +9,13 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The Python library audit asks pypi.org again when pypi.org fails it. pip-audit does not ask again itself, so
+  one slow answer ("Read timed out"), a cut connection, or an error answer of the service (5xx, 429) ended the
+  whole audit, and Lantern's check of itself read as not done (CI, 2026-11-18). pip-audit is started again then,
+  at most 3 times in all, after a pause of 2 and then 5 seconds, and only while a minute of the audit's 5 minutes
+  is left; what the last try found is the audit's, and the record says how often it was started and why (`tries`,
+  `asked_again`). A failure another try would not change (a certificate, a proxy that refuses, the service's
+  refusal, a file pip-audit refuses) is still the audit's one try.
 - Every check of CI has a time limit, and a check that hangs says where it stood. A test that runs past 15 minutes
   has every thread of the run print where it waits, while it is still running (pytest's `faulthandler_timeout`,
   `pyproject.toml`). The no-network runner takes `--deadline MINUTES` (`tools/netless.py`): a run still going then

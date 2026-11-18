@@ -57,6 +57,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -406,6 +407,63 @@ def python_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str
 
 
 PIP_AUDIT_TIMEOUT = 300
+# pip-audit asks pypi.org about each package and does not ask again itself when the service fails it (2.10.1: one
+# slow answer ends the whole audit). Lantern then starts it again, at most PIP_AUDIT_TRIES times in all, after these
+# pauses, and only while PIP_AUDIT_AT_LEAST seconds of the audit's time are left after the pause.
+PIP_AUDIT_TRIES = 3
+PIP_AUDIT_PAUSES = (2, 5)
+PIP_AUDIT_AT_LEAST = 60
+_clock = time.monotonic
+_pause = time.sleep
+# What pip-audit writes when the service it asks failed it, read from whole lines, and the record's words for it: a
+# traceback's last line names the error `requests` raised, and a connection pip-audit could not make it says in a line
+# of its own after its logger's prefix (pip_audit/_service/pypi.py, pip_audit/_cli.py). What another try would not
+# change (a certificate, a proxy that refuses, the service's refusal, a file pip-audit refuses) is none of these.
+PYPI_FAILED = (
+    (re.compile(r"^requests\.exceptions\.(?:ReadTimeout|Timeout)\b", re.M), "pypi.org did not answer in time"),
+    (re.compile(r"^requests\.exceptions\.(?:ConnectionError|ChunkedEncodingError)\b", re.M),
+     "the connection to pypi.org failed"),
+    (re.compile(r"^requests\.exceptions\.HTTPError: (?:5\d\d|429) ", re.M), "pypi.org answered with an error"),
+    (re.compile(r"^ERROR:pip_audit\._cli:(?:Could not connect to PyPI's vulnerability feed|PyPI is not redirecting "
+                r"properly)$", re.M), "the connection to pypi.org failed"),
+)
+
+
+def _service_failed(run: scanresult.ToolRun) -> str | None:
+    """The record's words when pip-audit ended because the service it asks failed it, else None: it ran to its own
+    end (not stopped, not at the time limit), with its result for a failure, wrote nothing to stdout, and said why in
+    one of the lines of PYPI_FAILED."""
+    if run.timed_out or run.error or run.returncode != 1 or run.stdout.strip():
+        return None
+    return next((words for line, words in PYPI_FAILED if line.search(run.stderr or "")), None)
+
+
+def _ask_pip_audit(cmd: list[str]) -> tuple[scanresult.ToolRun, list[str], int]:
+    """pip-audit, started again after a pause where the service it asks failed it (`_service_failed`), within the
+    audit's one time limit. Returns the last run, the words for each failure after which it was started again, and
+    how long all the runs took (ms)."""
+    began, again, spent = _clock(), [], 0
+    while True:
+        run = scanresult.run_tool(cmd, timeout=PIP_AUDIT_TIMEOUT - (_clock() - began))
+        spent += run.duration_ms
+        failed = _service_failed(run)
+        if failed is None or len(again) + 1 >= PIP_AUDIT_TRIES:
+            return run, again, spent
+        pause = PIP_AUDIT_PAUSES[min(len(again), len(PIP_AUDIT_PAUSES) - 1)]
+        if PIP_AUDIT_TIMEOUT - (_clock() - began) < PIP_AUDIT_AT_LEAST + pause:
+            return run, again, spent
+        again.append(failed)
+        _pause(pause)
+
+
+def _started_again(again: list[str]) -> str:
+    """The record's words for an audit pip-audit was started again for: what failed, and how often it was started."""
+    more = "once more" if len(again) == 1 else f"{len(again)} more times"
+    return f"{' and '.join(dict.fromkeys(again))}, so pip-audit was started {more}"
+
+
+def _then(*parts: str) -> str:
+    return "; ".join(x for x in parts if x)
 
 
 def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
@@ -440,21 +498,26 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
         req = Path(td) / "requirements.txt"
         req.write_text("".join(f"{n}=={v}\n" for n, (v, _) in sorted(pins.items())), encoding="utf-8")
         cmd = [pip_audit, "-r", str(req), "-f", "json", "--progress-spinner", "off", "--no-deps", "--disable-pip"]
-        run = scanresult.run_tool(cmd, timeout=PIP_AUDIT_TIMEOUT)
-    info |= {"exit_code": run.returncode, "duration_ms": run.duration_ms}
+        run, again, spent = _ask_pip_audit(cmd)
+    info |= {"exit_code": run.returncode, "duration_ms": spent}
+    said = ""       # an audit pip-audit was started again for says so, before the last try's own reason for failing
+    if again:
+        said = _started_again(again)
+        info |= {"tries": len(again) + 1, "asked_again": again}
     if run.timed_out:
-        return [], scanresult.record("pip-audit", "timeout", f"after {PIP_AUDIT_TIMEOUT} s", **info)
+        return [], scanresult.record("pip-audit", "timeout", _then(f"after {PIP_AUDIT_TIMEOUT} s", said), **info)
     if run.error:
-        return [], scanresult.record("pip-audit", "failed", f"{run.error} (network needed?)", **info)
+        return [], scanresult.record("pip-audit", "failed", _then(said, f"{run.error} (network needed?)"), **info)
     err = scanresult.tail(run.stderr)
     if run.returncode not in (0, 1):
-        return [], scanresult.record("pip-audit", "failed", f"exit code {run.returncode}: {err or 'no message'} "
-                                     "(network needed?)", **info)
+        return [], scanresult.record("pip-audit", "failed", _then(said, f"exit code {run.returncode}: "
+                                                                  f"{err or 'no message'} (network needed?)"), **info)
     data, why = scanresult.parse_json(run.stdout, dict)
     if data is None:
-        return [], scanresult.record("pip-audit", "failed", why + (f"; stderr: {err}" if err else ""), **info)
+        return [], scanresult.record("pip-audit", "failed", _then(said, why + (f"; stderr: {err}" if err else "")),
+                                     **info)
     if not isinstance(data.get("dependencies"), list):
-        return [], scanresult.record("pip-audit", "failed", "no dependencies list in the output", **info)
+        return [], scanresult.record("pip-audit", "failed", _then(said, "no dependencies list in the output"), **info)
     out, errors = [], []
     for dep in data["dependencies"]:
         if not isinstance(dep, dict):
@@ -477,9 +540,9 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     info["findings"] = len(out)
     if errors or odd.count:
         also = f"{len(errors)} package{'s' if len(errors) != 1 else ''} could not be checked" if errors else ""
-        return out, scanresult.record("pip-audit", "partial", odd.why(also), **(info | odd.fields()
-                                                                               | {"errors": odd.lines + errors}))
-    return out, scanresult.record("pip-audit", "ok", **info)
+        return out, scanresult.record("pip-audit", "partial", _then(odd.why(also), said),
+                                      **(info | odd.fields() | {"errors": odd.lines + errors}))
+    return out, scanresult.record("pip-audit", "ok", said, **info)
 
 
 def _advisories(vulns: list[dict]) -> list[tuple[dict, list[str]]]:
