@@ -3,8 +3,12 @@
   lantern serve [PATH ...]                                the local app in your browser (start here)
   lantern learn [NAME [DIR]]                              create a starter app to learn Lantern step by step
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
+  lantern workspace PROJECT PROJECT ... [--name NAME]     several folders or repository links checked as one map
+  lantern diff [PATH] [BASE..HEAD]                        what a change does: two versions checked and compared
+  lantern hook install [PATH]                             before each push: stop a change that blocks a release
   lantern trace PATH -- python -m pytest -q               record what actually runs
   lantern behave PATH                                     start the app in the sandbox and run its lantern-behaviour.json
+  lantern behave PATH --init [--force]                    run nothing: write a first lantern-behaviour.json from the code
   lantern explain PATH                                    add Three-Lens explanations (Claude Haiku by default)
   lantern login --github | --google                        get a free allowance (sign in once)
   lantern login --token TOKEN                             use a token you already have
@@ -28,6 +32,7 @@ Results live in PATH/.lantern/ (override with --out).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -124,6 +129,57 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
 
 
 RANKS = ["critical", "high", "medium", "low"]
+
+
+def cmd_workspace(a) -> int:
+    """`lantern workspace` (lantern/workspace.py): several projects copied side by side and checked as one map, so a
+    request one of them makes is linked to the route of another that answers it."""
+    from . import workspace
+    from .pipeline import analyze
+
+    def say(line):
+        print(line, file=sys.stderr)
+
+    try:
+        if a.list:
+            recs = workspace.listed()
+            if not recs:
+                print("No workspace yet: `lantern workspace FOLDER FOLDER ...` makes one.")
+            for rec in recs:
+                print(f"{rec['name']}   made {rec.get('made') or '?'}   {workspace.folder_of(rec['name'])}")
+                for m in rec["members"]:
+                    at = str(m.get("commit") or "")[:12] or "no commit"
+                    print(f"  {_printable(str(m.get('name')))}   {_printable(str(m.get('source')))}   ({at}"
+                          f"{', changes not committed' if m.get('dirty') else ''})")
+            return 0
+        if a.remove:
+            workspace.remove(a.remove)
+            print(f"removed  the workspace {a.remove}: its copies and its record (the projects themselves are untouched)")
+            return 0
+        if a.members:
+            rec = workspace.make(a.members, name=a.name, log=say)
+        elif a.name:
+            rec = workspace.again(a.name, log=say)
+        else:
+            print("error: name two projects or more (folders or repository links), or give --name of a workspace "
+                  "made before, --list or --remove NAME", file=sys.stderr)
+            return 2
+    except workspace.Refused as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    folder = workspace.folder_of(rec["name"])
+    print(f"workspace {rec['name']}: " + ", ".join(
+        f"{m['name']}" + (f" at {str(m['commit'])[:12]}" if m.get("commit") else " (no commit)")
+        for m in rec["members"]) + f"  ({folder})")
+    out = _out(folder, a.out)
+    try:
+        analyze(folder, out, a.privacy, offline=a.offline or None)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(f"again   lantern workspace --name {rec['name']}   (copies the projects anew and checks them)")
+    print(f"serve   lantern serve {folder}")
+    return 0
 
 
 def cmd_evidence(a) -> int:
@@ -282,7 +338,66 @@ def cmd_diff(a) -> int:
     else:
         for name in ("html", "md", "json"):
             print(f"wrote   {got['paths'][name]}")
+    if a.require:
+        return _require_not_blocked(got["receipt"], quiet)
     return 0
+
+
+MOST_BLOCKERS = 12      # lines a check of a change prints of what blocks; the rest are counted (all are in the receipt)
+
+
+def _require_not_blocked(receipt: dict, quiet: bool) -> int:
+    """`lantern diff --require not-blocked`: 1 when the change itself brings what blocks a release
+    (`diff.blockers`), else 0. What blocked the project before the change and still does is the project's, not the
+    change's: a project blocked before stays allowed a change that adds nothing that blocks, and the words say so."""
+    from . import diff
+    rows = diff.blockers(receipt)
+    rel = receipt.get("release") or {}
+    if rows:
+        print(f"fail    this change brings what blocks a release ({len(rows)}):", file=sys.stderr)
+        for row in rows[:MOST_BLOCKERS]:
+            print(f"fail      - {_printable(row['words'])[:300]}", file=sys.stderr)
+        if len(rows) > MOST_BLOCKERS:
+            print(f"fail      and {len(rows) - MOST_BLOCKERS} more (all of them are in the receipt)", file=sys.stderr)
+        return 1
+    after = (rel.get("after") or {}).get("decision")
+    words = "pass    this change brings nothing that blocks a release"
+    if after == "Blocked":
+        words += " (the release decision was Blocked before it, for what was there already, and is still Blocked)"
+    print(words, file=sys.stderr if quiet else sys.stdout)
+    return 0
+
+
+def cmd_hook(a) -> int:
+    """`lantern hook install|remove|status [PATH]` and `lantern hook run` (lantern/hook.py): an opt-in check of what
+    each push sends, before it leaves this computer."""
+    from . import hook
+    if a.hook_cmd == "run":
+        for stream in (sys.stdout, sys.stderr):     # git shows the hook's words as they come: never stop on a sign
+            with contextlib.suppress(AttributeError, ValueError):
+                stream.reconfigure(errors="replace")
+        lines = sys.stdin.read().splitlines() if not sys.stdin.isatty() else []
+        return hook.run(Path.cwd(), a.remote, lines)
+    repo = Path(a.path).resolve()
+    try:
+        if a.hook_cmd == "install":
+            got = hook.install(repo)
+            print(f"wrote   {got['path']}")
+            print("Before each push Lantern now checks what the push sends, and stops it when the change brings what "
+                  "blocks a release. `git push --no-verify` pushes once without the check; `lantern hook remove` "
+                  "takes it away.")
+            return 0
+        if a.hook_cmd == "remove":
+            got = hook.remove(repo)
+            print(f"removed {got['path']}" if got["removed"] else
+                  f"There is no pre-push hook of Lantern's in this repository ({got['path']}): nothing to remove.")
+            return 0
+        got = hook.status(repo)
+        print(got["words"])
+        return 0
+    except hook.Refused as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
 
 FIX_NOT_OPEN = ("{id} is not an open finding of this project's last check (ids change when the flagged line changes, "
@@ -425,13 +540,62 @@ def _printable(text: str) -> str:
     return "".join(ch if ch.isprintable() else "?" for ch in text)
 
 
+MOST_SAID = 12        # `behave --init` prints this many lines of a kind; the rest are counted (all are in the file)
+
+
+def _behave_init(repo: Path, a) -> int:
+    """Write a first behaviour plan from the code (`lantern behave --init`, lantern/behave_init.py). Nothing of the
+    project is run. 0 when a plan was written; 2 when none was, with the reason."""
+    from . import behave, behave_init, results
+
+    def say(label: str, text: str) -> None:
+        # route paths, file names and settings names are the project's own text
+        print(_printable(f"{label:13} {text}"))
+
+    def listed(label: str, rows: list[str], what: str) -> None:
+        for row in rows[:MOST_SAID]:
+            say(label, row)
+        if len(rows) > MOST_SAID:
+            say(label, f"and {len(rows) - MOST_SAID} more {what} (all of them are in the file, under \"notes\")")
+
+    try:
+        made = behave_init.write(repo, force=a.force)
+    except results.Refused as e:
+        print(_printable(f"error: {e}"), file=sys.stderr)
+        return 2
+    plan = made["plan"]
+    if plan is None or not made["written"]:
+        print(_printable(f"not written   {made['why_not']}")
+              + (" (--force writes a new one over it)" if made["exists"] and not a.force else ""))
+        return 2
+    app = plan["app"]
+    say("app", app["asgi"] + (f" (started in {app['cwd']})" if app.get("cwd") else "")
+        + (", made by calling that function" if app.get("factory") else ""))
+    for name, value in (app.get("env") or {}).items():
+        say("setting", f"{name}={value}")
+    say("people", ", ".join(plan["people"]) + " (accounts made by the plan's first steps), and \"nobody\" with no login")
+    say("plan", f"{len(plan['checks'])} checks, {made['cases']} requests")
+    listed("read first", made["notes"], "notes")
+    listed("look at", [f"{r['check']}: {r['why']}" for r in made["review"]], "checks to look at")
+    listed("left out", [f"{r['route']}: {r['why']}" for r in made["left_out"]], "routes with no check")
+    say("wrote", made["written"])
+    say("next", f"read {behave.PLAN_NAME}, change what does not fit the app, then: lantern behave {a.path}")
+    return 0
+
+
 def cmd_behave(a) -> int:
     """Run the project's behaviour plan (docs/behaviour.md). 0 only when every case held; 1 when a case is broken,
-    undecided or was not run; 2 when there is no plan or it cannot be used; 3 when the app was not started."""
+    undecided or was not run; 2 when there is no plan or it cannot be used; 3 when the app was not started.
+    With `--init` nothing is run: a first plan is written from the code (0 written, 2 not written)."""
     from . import behave
     repo = Path(a.path).resolve()
     if not repo.is_dir():
         print(f"error: {a.path} is not a folder", file=sys.stderr)
+        return 2
+    if a.init:
+        return _behave_init(repo, a)
+    if a.force:
+        print("error: --force goes with --init (it writes a new plan over the one that is there)", file=sys.stderr)
         return 2
     out = _out(repo, a.out)
     try:
@@ -734,6 +898,21 @@ def _main(argv: list[str]) -> int:
                     help="exit 1 unless this run's release decision is good enough (for CI): not-blocked stops on "
                          "Blocked; passed also stops on Incomplete, so it needs the tests run (--trace) and passing")
 
+    sp = sub.add_parser("workspace", help="several projects (folders or repository links) checked as one map: a "
+                                          "request one makes is linked to the route of another that answers it")
+    sp.add_argument("members", nargs="*", metavar="PROJECT",
+                    help="a folder or a repository link; NAME=FOLDER or NAME=LINK gives it its name in the map")
+    sp.add_argument("--name", help="the workspace's name (default: made from its projects' names); given alone, the "
+                                   "projects of that workspace are copied anew from where they came from and checked")
+    sp.add_argument("--out", help="results folder (default: the workspace's own folder/.lantern)")
+    sp.add_argument("--offline", action="store_true",
+                    help="skip dependency audits (pip-audit, npm audit), the only steps that use the network")
+    sp.add_argument("--privacy", choices=["full", "structure"], default="full",
+                    help="full embeds function source in the report; structure leaves it out")
+    sp.add_argument("--list", action="store_true", help="name the workspaces and their projects")
+    sp.add_argument("--remove", metavar="NAME",
+                    help="remove a workspace: its copies and its record (the projects themselves are not touched)")
+
     sp = sub.add_parser("trace", help="run a command and mark calls that actually happen")
     common(sp)
     sp.add_argument("--test-minutes", type=_minutes, metavar="N",
@@ -741,6 +920,11 @@ def _main(argv: list[str]) -> int:
 
     sp = sub.add_parser("behave", help="start the app in the test sandbox and run the project's lantern-behaviour.json")
     common(sp)
+    sp.add_argument("--init", action="store_true",
+                    help="run nothing: write a first lantern-behaviour.json from the code (a FastAPI app), to read, "
+                         "change and commit; what Lantern was not sure of and what it left out is listed")
+    sp.add_argument("--force", action="store_true",
+                    help="with --init: write the new plan over a lantern-behaviour.json that is there")
 
     sp = sub.add_parser("explain", help="add Three-Lens explanations")
     common(sp)
@@ -815,6 +999,21 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--format", choices=["line", "md", "json"], default="line",
                     help="what to print: where the files were written (default), the text for a pull request, or the data")
     sp.add_argument("--short", action="store_true", help="with --format md: without the list of changed functions")
+    sp.add_argument("--require", choices=["not-blocked"],
+                    help="exit 1 when the change itself brings what blocks a release (a critical or high finding that "
+                         "is new, reached only now, ranked higher or open again, a secret, a request of the page that "
+                         "no route answers any more); what blocked the project before the change is not the change's")
+    sp = sub.add_parser("hook", help="an opt-in check before each push: what the push sends is compared with what the "
+                                     "other side has, and a change that brings what blocks a release is stopped")
+    hsub = sp.add_subparsers(dest="hook_cmd", required=True)
+    for name, words in (("install", "write the pre-push hook into this repository (never over a hook of yours)"),
+                        ("remove", "take Lantern's pre-push hook away (never a hook of yours)"),
+                        ("status", "say whether the check before each push is on")):
+        hp = hsub.add_parser(name, help=words)
+        hp.add_argument("path", nargs="?", default=".")
+    hp = hsub.add_parser("run", help="what the hook runs: reads what git says is being pushed on its input")
+    hp.add_argument("remote", nargs="?", default=None, help="the remote's name, as git hands it to the hook")
+    hp.add_argument("url", nargs="?", default=None, help="the remote's address, as git hands it to the hook")
     sp = sub.add_parser("fix", help="the fix of one finding: what it has to show (brief), and whether a fix shows it "
                                     "(check); a fix that only hides the finding is refused")
     fsub = sp.add_subparsers(dest="fix_cmd", required=True)
@@ -926,6 +1125,8 @@ def _main(argv: list[str]) -> int:
         atexit.register(usage.send, gateway_url(), 3.0)
     if a.cmd == "analyze":
         return cmd_analyze(a, trace_cmd if a.trace else [])
+    if a.cmd == "workspace":
+        return cmd_workspace(a)
     if a.cmd == "trace":
         return cmd_trace(a, trace_cmd)
     if a.cmd == "behave":
@@ -949,6 +1150,8 @@ def _main(argv: list[str]) -> int:
         return cmd_accept(a)
     if a.cmd == "diff":
         return cmd_diff(a)
+    if a.cmd == "hook":
+        return cmd_hook(a)
     if a.cmd == "fix":
         return cmd_fix(a, trace_cmd)
     if a.cmd == "github":

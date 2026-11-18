@@ -70,6 +70,7 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | Route | Body | Returns |
 |---|---|---|
 | `POST /api/projects` | `{"path": "/folder or https://github.com/owner/repo"}` | A folder: the project summary (200). A link: `{"job", "project"}` (202) while it clones and analyzes |
+| `POST /api/projects` | `{"paths": ["/folder", "https://github.com/owner/repo", "name=/folder", …], "name"?: "notes"}` | Several projects as one map (`lantern workspace`, `docs/workspaces.md`): `{"job", "project"}` (202), the job's `kind` is `workspace`; the project is the workspace's folder (`LANTERN_HOME/workspaces/<name>`), listed at once under the name it will have, made (links cloned, each project copied) and analyzed in the job, and forgotten again when no workspace of that name was made. 400 before anything is listed for what cannot be one (`workspace.plan`): not a list of two to 12 texts, a project's name that is not lowercase letters, digits and dashes or one Lantern's folder rules give a meaning, a link that is none, a folder that is not there, a workspace's name that cannot be one, or a folder or record under that name that Lantern did not make |
 | `DELETE /api/projects/<id>` | | `{"ok": true, "note"}`; files are never deleted |
 | `POST /api/projects/<id>/analyze` | | job (202). Builds the map, scans, scores readiness, writes report and Evidence Report |
 | `GET /api/projects/<id>/plan?depth=3&limit=40` | | `{"nodes": N, "input_tokens", "output_tokens", "note"}`: what an explain run would cover (an estimate, no model call) |
@@ -78,6 +79,7 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | `POST /api/projects/<id>/accept` | `{"finding": id, "reason": "≥10 letters, two words", "by": name}` or `{"finding", "remove": true}` | job (202): writes `lantern-accepted.json` in the repo and re-analyzes. A weak reason → 400 |
 | `POST /api/projects/<id>/cmd` | `{"argv": ["analyze", "--offline"]}` | The terminal drawer. job (202) whose log the drawer prints. `argv` is a list of strings (never a shell line; at most 64 items). Allowed: `analyze [--offline] [--no-scan] [--privacy]`, `trace [--anyway] [--] TEST COMMAND` (through the test sandbox; typing it counts as the confirmation of the command; since 2026-11-15, where this system's sandbox does not hold every program of the tests, the first try is refused with the sentence that says what they can reach, and `--anyway` is the person's word for it, remembered like the sheet's tick), `explain [--node ID…] [--depth N] [--max-nodes N]`, `report [--privacy]`, `verify [--report FILE]`, `accept ID --reason "…" [--by]` / `accept ID --remove` (same reason check as the UI), `packs`, `export [--sarif FILE]` (default `.lantern/findings.sarif`), `learn [--check]`, `diff [BASE..HEAD] [--offline]` (the job of `/change` below; the two versions must be written as commit names, and no other option of `lantern diff` is taken); a leading `lantern` is dropped. `--out` is always the project's `.lantern/`; path arguments must resolve inside the project. Anything else → 400 `{"error", "allowed": [...], "help"}`. Token and Host checks as on every write |
 | `POST /api/projects/<id>/change` | `{}` or `{"range": "main..my-branch"}` | "What changed" (since stage 2 of the 2026-11-14 roadmap). job (202), kind `change`: two versions of the project are checked and what the two checks found is compared (`lantern/diff.py`, see `change/` under Result files). With no `range`: the last commit and the files as they are now. `range` is what `lantern diff` takes: `BASE`, `BASE..HEAD` or `BASE...HEAD` (from the commit where the two parted), one line of at most 300 characters, each side written as a commit's name (a branch, a tag, `HEAD`, a commit's number, with `~1` or `^`); anything else → 400 with a sentence. A commit is copied out of the repository into a folder of Lantern's own and checked there; the project's folder is not touched and no test is run. Everything is written to `.lantern/change/`, so the project's own report and results stay as they were. The job always ends `done`; `result` is `{"compared": true, "line", "same", "counts", "release": "Passed → Blocked"}` or `{"compared": false, "why": "<Lantern's sentence>"}` (the folder is in no git repository, no such commit, git is not installed). The person's `privacy` setting holds for the two checks' own reports. 409 while another job of the project runs |
+| `POST /api/projects/<id>/behaviourplan` | `{}` or `{"force": true}` | "Behaviour plan" (since stage 4 of the 2026-11-14 roadmap). job (202), kind `plan`: a first `lantern-behaviour.json` is written into the project from its code (`lantern/behave_init.py`, as `lantern behave --init` does; nothing of the project is run and no model is asked). Result `{"written": true, "exists", "file", "line", "next", "checks", "requests", "counts": {"read_first", "look_at", "left_out"}, "read_first": […], "look_at": […], "left_out": […]}` (each list holds at most 12 sentences; the file's own `notes` hold all of them), or `{"written": false, "exists", "why"}`: a plan that is there is left as it is (`exists: true`) unless `force` is `true` (a `force` that is neither `true` nor `false` → 400), and `why` says so, or says that the code holds no FastAPI app, or no sign-up and sign-in Lantern can read. Every sentence is made by the server; the page prints none of its own about the plan. |
 | `GET /api/projects/<id>/testcmd` | | The command the "Watch my tests run" sheet shows first: `{"command", "how", "language": "python\|node\|go\|rust\|java", "supported", "traced", "note", "cwd"?, "sandbox": {"name": "docker\|subprocess", "label", "image", "details": [lines]}, "minutes", "minutes_range": [1, 240], "memory_mb", "memory_range": [128, 1048576], "leaves", "reach": {"network", "files", "ask", "accepted"}, "confirmed"}`. `details` lists the walls this computer's sandbox has (fewer on macOS and on a Linux kernel without Landlock; since 2026-11-13 they say whether the tests get a network of their own, in which they may start a server and call it, and how long and how much memory they get); its last line says that the tests are not run when any of them cannot be set up. `leaves` (the sheet's last line) and `reach` (since 2026-11-15) are what this run keeps the tests from on this computer, for this kind of tests (`sandbox.reach`): `network` and `files` are each `all` (every program of the tests is held), `python` (Python code only) or `none`; `ask` is the sentence the person agrees to before the tests start, empty where everything is held, and `accepted` says whether they already did for this command. The page prints `leaves` as it is and adds no words of its own (until then the line said on every system that nothing leaves the computer). `minutes` and `memory_mb` (since 2026-11-13) are what a run started now would get: what the person last set in the sheet, else what the installation says (`LANTERN_TEST_MINUTES`, `LANTERN_TEST_MEMORY_MB`), else 10 minutes and 2048 MB; the two ranges are what the sheet's fields (`#testmin`, `#testmem`) may hold. `traced` is true for Python only ("Tests run; your map upgrades for Python only for now") |
 | `POST /api/projects/<id>/trace` | `{"command": "python -m pytest -q", "confirm": true, "minutes"?: 1…240, "memory_mb"?: 128…1048576, "reach"?: "<the sheet's sentence>"}` | job (202). `minutes` and `memory_mb` (since 2026-11-13) are how long the tests may take and how much memory they and everything they start may have in use; a value that is no whole number in its range → 400 (never quietly another number); one that is given is remembered for the next run (settings `test_minutes`, `test_memory_mb`), one left out means the last one set, else the installation's, else 10 minutes and 2048 MB. Only test runners (`sandbox.check_command`; anything else → 400). The first run of a command for a project needs `confirm: true` (409 otherwise); later runs of the same command do not. Where `testcmd`'s `reach.ask` is not empty (since 2026-11-15) the tests start only when `reach` is that sentence, letter for letter, or the person agreed to it for this command before: 409 `{"error", "reach": {"ask", "words"}}` otherwise, with the sentence for the kind of tests the command is (the sheet shows it with its tick box); an agreement is kept per project, command and sentence, so a system whose sandbox holds less than before asks again. Runs in `lantern/sandbox.py` and re-analyzes; the job result is `{"returncode", "observed", "recall", "backend", "language", "traced", "timed_out", "time_limit", "over_memory", "memory_limit", "blocked": [{"kind": "write\|network\|read", "what"}], "ran", "unavailable", "not_run_for", "libraries", "off_network", "cancelled", "not_ended", "note", "score_before", "score_after", "summary"}`. `blocked[].kind` (since 2026-11-13 also `read`: the tests reached for one of the person's own folders, which the sandbox closes to a Python or JavaScript run on Linux). `libraries` (since 2026-11-13): what the tests ran on, `{"state": "fetched\|installed\|none", "store", "count", "exact"}` (fetched for this run from the store named, with how many libraries and whether every version was the project's own choice; the ones installed on this computer, when the check was offline; or none, when the project names none), null when there is no such record; the libraries themselves are in `run.json`. `off_network` (since 2026-11-14): true when this run's own walls kept the tests from the network, false when they did not (tests that are not Python on macOS and Windows, where Lantern's guard is inside Python only; the run's log says why), null for a run that does not say (one before that date, or one that did not run); the page says "with the network off" only for true, and for false that the tests were not kept from the network by this run. `ran` false + `unavailable` (a sentence, always Lantern's own words): the sandbox could not be set up on this computer, or (`not_run_for: "libraries"`, since 2026-11-13) the libraries the project names could not be had for the tests, so the tests were **not run**; the job still ends `done`, because everything that only reads the code was checked: `returncode` is null and `observed` 0, the score's "Tests pass" check is `skip` (not `fail`), and the Evidence Report names no test command. `cancelled`: the person stopped the tests (below); the job ended there, **no result file was written** (the project shows what its last finished check found, `score_after` equals `score_before`, `summary` is null). `returncode` null with `timed_out`: stopped at the time limit (`time_limit`, the seconds the tests had); `returncode` null with `over_memory`: stopped because the tests, with what they started, had more memory in use than `memory_limit` megabytes. Either way the tests did not finish, which is no pass and no failure: the check goes on, "Tests pass" is `skip` with `required: true` (its points stay in the sum and earn none; until 2026-11-13 a run stopped by the clock read `fail` there) and the release decision is Incomplete, with the way to give the tests more time or memory. Whatever way a test run ends, every process it started is ended too; `not_ended` lists, in Lantern's own words, anything that could not be (normally `[]`; the page then says so and never says beside it that everything was ended) |
 | `POST /api/jobs/<id>/stop` | `{}` | Ends a running test run: the tests and every process they started. Returns the job (`stopping: true`); the job then ends `done` with `result.cancelled` true and no result file changed (`pipeline.Stopped`). 404 for an unknown job, 400 for a job that cannot be stopped part-way (`can_stop` false), 403 without the app's token. Asking again, or after the job has ended, changes nothing |
@@ -201,6 +203,20 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   seconds it gets for one file (`deep.PARSE_SECONDS`; the first 40 by name). Such a file is on the map as a file and
   nothing written in it is; the log's `deep` line and the Limits say so. Only the Dart reader's parser has such a
   limit so far).
+* `meta.workspace` (since 2026-11-17, roadmap stage 6; only on the map of a workspace, `lantern/workspace.py`):
+  `{"name", "made", "members": [{"name", "from": "folder"|"link", "source", "commit", "dirty", "branch", "remote",
+  "files", "links", "left_out", "accepted"}], "across": {"requests", "code", "rows": [{"from", "to", "kind":
+  "request"|"code", "via", "confidence", "src", "dst", "call"?, "route"?}], "more"}, "shared": {"names", "examples"}}`.
+  `source` is a link as it was given, or a folder's own name (the whole path stays in the record beside the
+  workspace). `files`, `links` count what was copied of the member, `left_out` `{why: count}` what was not (`folder`,
+  `link-out`, `kind`, `large`, `name`, `unreadable`); `accepted` says the member has a `lantern-accepted.json`, which is
+  not read in the workspace. `across.rows`: a request one member makes that another answers (`kind` `request`, the
+  bridge's own `via` and confidence, `call` what was asked, `route` the route that answers) and code of one member
+  linked into another (`code`, always `possible`); at most 200, `more` counts the rest. `shared.names`: names on the
+  map that more than one member writes (found when the workspace was made, each member read alone); every link that
+  touches one is `possible`, and `examples` names the first 20 with the members that write them. The call-site
+  inventory's records of such links say `possible` too. A reader whose rule is about the project's own top reckons
+  from the member's folder (`workspace.below`: a plain PHP page's address). The log's line is `across  …`.
 * `meta.db_calls` (since 2026-11-14, roadmap stage 1; only when the project has one): the calls into database tables
   the JS/TS reader wrote down, one row per call written `<client>.from("<table>").<op>(…)` with `<op>` one of
   `select`, `insert`, `update`, `upsert`, `delete`: `{"src"` (the function the call is written in), `"table",
@@ -530,7 +546,9 @@ maven-audit, composer-audit, gem-audit, copied-audit, lantern-web, lantern-ai, l
 `timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
-patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
+patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`; for `lantern-secrets` also
+`placeholders` when the built-in patterns passed over that many keys' places kept by filler, such as `sk_live_` and
+nothing but `x`, which are no findings), `exclusions` (folders a tool was
 told to skip, and for bandit the Python files it was told to leave out because they are not files of the project: a
 link that leads out of it, a pipe), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
 `fallback_for` (the built-in secret scan when gitleaks did not finish), and for gitleaks `way` when it was started on
@@ -549,7 +567,7 @@ have no exact released version to look up: a range, a branch, a link or a folder
 a `package.json`, `composer.json` or `Gemfile` names for the shipped app where no lock file beside it says which
 version is installed, so none of them could be looked up) with `unlocked_examples` (the first five, as
 `<file>: <name>`), `other_locks` (npm-audit: up to ten folders whose versions are in a pnpm, yarn or bun lock file,
-which Lantern does not read yet; written also on a record that ends `ok` for the folders it did check), and `not_read` (how many parts of the dependency files are no package
+which Lantern does not read yet; written also on a record that ends `ok` for the folders it did check), for pip-audit `tries` and `asked_again` where it was started more than once (`tries`: how many times; `asked_again`: for each try after the first, what failed before it, in the words of the status: `pypi.org did not answer in time`, `the connection to pypi.org failed`, `pypi.org answered with an error`; `exit_code` is the last try's, `duration_ms` the time of all of them), and `not_read` (how many parts of the dependency files are no package
 name and version, or no dependency file at all: a list where a table belongs, a number where a name belongs, a file
 that is not valid TOML or JSON, a pipe, a file over 32 MB). With `not_read` the state is `partial` and `errors` names
 the first 20, each as `<file>: <what>` on one line of printable ASCII of at most 200 characters (of a path over
@@ -572,7 +590,26 @@ to code Lantern does not read), `login_read_from_code` (findings "no login check
 because the route's own code turns away whoever is not signed in), `token_check_lets_on` (routes that change data
 on whose way a login token is read and nothing turns away a request whose token does not hold), `sender_checked`
 (`LA-WALLET-DRAIN` findings that were not kept because the route goes on only with a message its provider signed
-and pays for nothing before that check)`}`; `partial` when a file could not be read, a function could not be followed or the
+and pays for nothing before that check), `webhook_routes` (only when there is one: the routes taken for a
+provider's webhook that write stored data, which is what `LW-UNSIGNED-WEBHOOK` read), `webhook_for_no_login` (only
+when there is one: the routes whose finding "no login check was found" was not kept because an `LW-UNSIGNED-WEBHOOK`
+finding names the same route: a provider cannot sign in, so that finding points to the wrong fix), `model_text` (only
+when there is one, since stage 5 of the roadmap of 2026-11-14: text a model wrote followed to an action, `{flows,
+findings` (new `LA-MODEL-OUTPUT-TO-TOOL` findings), `on_older_findings` (lines written on a finding of the older
+reading of that rule, inside one function), `checked_by_code` (findings of the older reading not kept because the
+model's text arrives on that line checked on every way)`}`), `tool_text` (only when a tool is found, since the same
+stage: what a model puts into a function of the project it is handed as a tool, followed to an action, `{tools`
+(functions a library is told are tools a model may call), `flows`, `findings` (new `LA-UNSAFE-MCP-TOOL` findings),
+`approval_asked` (flows not kept because a person is asked first: the library's approval flag, or a question in the
+function before the action), `reads_only` (flows to a file that is only read), `on_model_findings` (flows to a line
+an `LA-MODEL-OUTPUT-TO-TOOL` finding already names)`}`), `agent_loops` (only when a paid model call or a
+finding is there, since the same stage: loops and functions that call themselves with a paid model call in each
+round, `{paid_calls` (model calls paid for each time, known by the library's own name for them), `loops` (rounds
+that make a paid call and that the model's answer can end), `capped` (of those, the ones where a count the loop
+changes, a clock or a budget is read where it decides to go on), `asked` (a person says yes to each round),
+`ends_otherwise` (something else can end them too: a queue that runs out, a flag the code sets, a limit a helper
+checks), `settings_off` (a library's own agent loop with its limit switched off), `findings`
+(`LA-UNBOUNDED-AGENT-LOOP` findings, the loops and the settings)`}`)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
 (22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
@@ -600,7 +637,15 @@ answer is not waited for), the name of that check is no sign, and a route that c
 the title "... changes data, and Lantern found nothing that turns away a request whose login token does not hold".
 `more_info` names what looked like a login on the route and was not taken for one, in sentences that begin "Not
 taken for a login check:" (a library's login made optional with `optional=True`; a FastAPI security scheme whose
-token the handler never looks at). A Server Action has no verb and no request to read, so it is asked in a way of
+token the handler never looks at). Two things that are named like a login ask nobody who is calling and are no
+sign by names (since 2026-11-16): a call into the management side of a sign-in service, which makes, changes or
+removes whichever account it is handed with the server's own key (`websec.MANAGES_ACCOUNTS`: Supabase's
+`auth.admin.*`, Clerk's `clerkClient.users.*` and its like, Firebase's `getAuth().setCustomUserClaims(…)` and its
+like; the calls that do ask, `getUser()`, `auth()`, `verifyIdToken()`, count as before), and a secret setting of
+the server that is read and handed on (`websec.SETTING_READ`: `process.env.NOTES_API_TOKEN`, `settings.API_TOKEN`),
+which stands in a login's place only where the statement it is in compares something or calls a function named for
+checking, or a later statement does so with the name it was kept under (a comparison with nothing, `=== undefined`,
+only asks whether it is set). A Server Action has no verb and no request to read, so it is asked in a way of
 its own (since 2026-11-14, `websec._actions_unasked`): an action that code of the project outside its tests uses,
 that is not open by its name (sign-in, a webhook), that changes data and in which no strong sign of a login is
 found gets `LW-AUTH-MISSING` with the title "The Server Action <name> changes data, the app uses it, and no login
@@ -667,14 +712,16 @@ list), in a project where some other code file shows that people sign in. Rank `
 The finding stands on the line that stores; `more_info` names the file that shows the login and says that the
 copies stay in the browser after the person has signed out. Its `scenario` is the story kind `kept-pages`.
 `LW-LIMIT-COUNTED-LATER` (367; `lantern/countlater.py`): a Python or JS/TS function that turns a request away with
-402 or 429 where a condition says a limit is reached, then waits for its work (an awaited call, a call to a model
-or another service), and writes the use down only after that (a call named for counting, a number stepped in
-place, `increment:` / `decrement:`, SQL that sets a column to itself plus or minus). Requests sent at the same
-moment all read the number before any is counted. Rank `medium`, `tool_confidence` `LOW`. Quiet where the use is
-counted or held between the look and the work (the look's own condition included), where a limiter takes one in
-the look, where the function names a lock or a transaction, and where the count shares no name with the look or
-with the line that gave the look its value. The finding stands on the look's line; `more_info` names the lines of
-the work and of the count and the name the two share. Its `scenario` is the story kind `counted-later`.
+402 or 429 where a condition says a limit is reached, then waits for its work (an awaited call, a call to a model or
+another service), and writes the use down only after that (a call named for counting, a number stepped in place,
+`increment:` / `decrement:`, SQL that sets a column to itself plus or minus). Requests sent at the same moment all
+read the number before any is counted. Rank `medium`, `tool_confidence` `LOW`. Quiet where the use is counted or
+held between the look and the work (the look's own condition included), where a limiter takes one in the look, where
+the function names a lock or a transaction, and where the count shares no name with the look or with the line that
+gave the look its value. The finding stands on the look's line; `more_info` names the lines of the work and of the
+count and the name the two share. The work's own statement is one step, to where its brackets close: a take written
+in it (an update that takes from the field under its own condition, written over several lines) holds, and a count
+is looked for only after it. Its `scenario` is the story kind `counted-later`.
 `LW-SHARED-CONNECTION` (567; `lantern/sharedconn.py`): a Python file that opens one SQLite connection with the
 library's own guard switched off (`sqlite3.connect(..., check_same_thread=False)`), keeps it on `self`, on its
 class or under a name at the top of the file, and uses it in a function with no lock held. Two requests that
@@ -685,6 +732,100 @@ bare `close()`, in a function the file only calls from such places, and where ev
 `async def` functions or in functions only they call (the event loop's one thread). One finding for each
 connection, on the first such line; `more_info` names the line that opens the connection, the other functions
 with their lines, and how many uses stand under a lock. Its `scenario` is the story kind `shared-connection`.
+`LW-CLIENT-ENV-SECRET` (200; `lantern/publicvalues.py`, roadmap stage 5): a setting whose name starts with
+`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `EXPO_PUBLIC_`, `NUXT_PUBLIC_`, `GATSBY_`, `PUBLIC_` or `VUE_APP_` is copied
+into what every visitor downloads, and `LW-PUBLIC-SECRET` reads its name. This rule reads what the setting is
+given, where the name says nothing, on one line of a settings file (`.env*`, a shell file), a compose file or a
+workflow, a `.toml` or `.json` settings file, a Dockerfile, or JavaScript (an entry `NAME: value`, a bundler's
+`define`, `process.env.NAME = value`). Three reasons, on the finding as `public.why`: `address-with-password` (an
+address `scheme://user:password@host` that is not this computer's and whose password is no placeholder; with
+`public.from` when the password is another setting) and `key` (a key of a shape only servers hold, `public.kind`),
+both rank `high`; `from-secret` (the value is exactly another setting whose name is a secret's, `public.from`),
+rank `medium`. `tool_confidence` `LOW`: whether the file feeds the build people get, and whether the value is a
+secret after all, cannot be read from a line. The value is never repeated; `snippet` is the setting's name. Quiet
+for an address with no password, a password that is the user name or a placeholder, a key made for pages, a
+type, a comparison, a comment, a build argument with no value, and a name `LW-PUBLIC-SECRET` already names in that
+file. A key the secret scan lists on the same line is one finding, the secret scan's, which then carries `public`
+and one more sentence in `more_info`. Its `scenario` is the story kind `secret`.
+`LW-SERVER-IMPORT-IN-CLIENT` (200; `lantern/clientpull.py`, roadmap stage 5): a file that begins with `"use client"`
+is handed to every visitor's browser with every file it imports and every file those import (`Graph.js_pulls`,
+written by the JS/TS reader: value imports, imports for what a file does when loaded, re-exports; an import of types
+loads nothing). One finding for each file reached that way whose code reads a secret setting by its name
+(`process.env.NAME`, `process.env["NAME"]`, `import.meta.env.NAME`, `Bun.env.NAME`, `Deno.env.get("NAME")`,
+`const { NAME } = process.env`; a name that says a secret, or a database's address; never a public-prefixed name),
+on the line of its first such read. The server's code is then in what visitors download: rank `medium`. Where `env`
+in the `next.config.*` file nearest above the page's file names that setting, its value is in the page too: rank
+`high`, and `pulled.handed` says where. `tool_confidence` `LOW`: a bundler leaves out code that nothing calls, which
+import lines do not show. The way stops at a file that begins with `"use server"` and at a file that imports
+`server-only`. A remark, a text, a pattern and the words of a page that name a setting are no read. A settings file of
+t3's env libraries (`@t3-oss/env-nextjs`, `-core`, `-nuxt`) is made to be imported by pages, and the library keeps the
+server's settings out of them: a read inside a call of its `createEnv` is no read, unless the build hands the setting
+over (`env` in `next.config.*`), where every read counts. Not read: a project with no `"use client"` file, `import()`
+and `require`, a file that only loads a server library and reads no secret setting. Its `scenario` is the story kind
+`server-code`, or `server-key` where the build hands the setting on.
+`LW-SENSITIVE-COLUMN-RETURNED` (200; `lantern/wholerecord.py`, roadmap stage 5): a record sent back whole, with a
+secret field in it. Which fields a record has, and which of them hold a secret by their names (a password's hash, a
+reset token, a key), is read from the project's own model files (`lantern/datamodel.py`: a Prisma schema,
+SQLAlchemy, SQLModel and Django classes, Drizzle tables). JS/TS, one function at a time: a Prisma query
+(`<client>.<model>.findUnique|findFirst|findMany|create|update|upsert|delete`) that names no fields, selects a secret
+one, leaves one in beside an `omit`, or brings a record that has one with `include`; a Drizzle query that names no
+columns (`.select().from(<table>)`, `.query.<table>.findMany()`, `.insert|update|delete(<table>)….returning()`). It
+is a finding where what the query found goes out as it came: the query, or the name it was given, stands in an
+answer (`res.json(x)`, `NextResponse.json({ user })`, `new Response(JSON.stringify(x))`, `json(x)`), also inside an
+object or a list written there, or is returned by a function whose result goes to the caller (a file or a function
+that begins with `"use server"`, a tRPC procedure, `getServerSideProps`, a route's `loader`). Python: a FastAPI
+route that returns the table's own object (a parameter written with the model's class, what a query for it gave, a
+function of the project written to return one) with no `response_model` and no return type that names another
+class, or whose `response_model` is the table's own class; a Django REST framework `ModelSerializer` whose `fields`
+are `"__all__"` or list the secret field, or whose `exclude` leaves it in, and that does not mark it `write_only`.
+Rank `medium`, `tool_confidence` `LOW`: a name says a secret or it does not, and code in another function that takes
+the field out first is not followed. The finding stands on the query's line (a route: where it has the object; a
+serializer: where it says which fields) and carries `columns`; `snippet` is the first field's name, never a value.
+Quiet for a query that names its fields and none of them a secret, a field taken out in the same function (`delete
+user.passwordHash`, `user.passwordHash = undefined`), a record handed to a function of the project, an answer with a
+class of its own (`response_model=UserOut`). Not read: NestJS controllers, GraphQL resolvers, Koa, Flask and Django
+views, Drizzle relations (`with:`), and whether a FastAPI object's fields are still loaded when it is returned. Its
+`scenario` is the story kind `whole-record`.
+`LW-UNSIGNED-WEBHOOK` (345; `lantern/webhooks.py`, roadmap stage 5; made by the flow step, so `tool` is
+`lantern-flow`): a route a payment or message provider calls that writes stored data with no check of who sent the
+message. A route is taken for a provider's when it takes a POST, shows no login, and its address has the word
+`webhook` or `hook` or its own lines name a header or an event a provider sends (`stripe-signature`,
+`x-hub-signature-256`, `svix-id`, `checkout.session.completed`). What it writes is read by the flow step, in the
+route and in the functions it calls: a row made, changed or removed through a database library or by SQL text, and
+an account made, changed or removed through the management side of a sign-in service (Supabase's admin API, Clerk's
+backend client, Firebase's admin library). Three answers, `webhook.check`: `none` (no check was found), `lets-on`
+(the provider's own check is called and a message that fails it, or never gets to it, still goes on: its failure is
+caught and passed over, it is made for some requests only, its secret is missing or empty) and `late` (data was
+written before the check). Quiet where every write stands behind the provider's own check of the signature (Stripe's
+`constructEvent`, svix, Standard Webhooks), and where a check is written that Lantern cannot follow as code: a
+comparison that takes the same time whatever the text (`timingSafeEqual`, `compare_digest`), a call named for
+checking a signature, a webhook or a sender, a value compared with a secret setting or with something named like a
+signature or a secret. It then cannot tell, and says nothing. Rank `medium`, `tool_confidence` `LOW`. The finding
+stands on the route's first line and carries `webhook`; such a route is not listed a second time as one with no
+login. Not seen: a check that is written and whose answer is thrown away, a check made by a gateway in front of the
+app, and what a check by a provider's name does on a client Lantern cannot place (it keeps the rule quiet). Only
+Stripe's, svix's and Standard Webhooks' own checks are followed as code; every other provider's is known by the
+written signs above. Its `scenario` is the story kind `unsigned-webhook`.
+`LW-NONATOMIC-BALANCE` (362; `lantern/balance.py`, roadmap stage 5): a Python or JS/TS function that checks a
+balance (an `if` that compares it, negates it or looks for zero; a balance is a name with one of the words balance,
+credits, coins, points, quota, funds, wallet, allowance, stock, inventory, also through the line that gave a name of
+the condition its value) and after the check writes it down taken away as a step of its own: a store's update call
+that writes the field with a decrement or a minus sign, SQL that sets the column to a value with a minus sign and
+names no condition on it, or the object's field set lower and the object then saved or committed. Requests sent at
+the same moment all read the same balance before any has written. Rank `medium`, `tool_confidence` `LOW`. The
+finding stands on the check's line and carries `balance`: `{field, check, write, how}`, the lines of the check and
+of the write, and `how`: `update`, `sql`, `saved`, or `bounded` (an update that writes back a value worked out from
+the balance that was read, under a condition that only bounds the field: both requests pass the bound and write the
+same value). Quiet where the write carries the check: a condition that holds the field to the value that was read
+(`where: { credits: user.credits }`, `.eq('coins', profile.coins)`, `filter(points=profile.points)`), or a condition
+that bounds it (`gte`, `__gte`, `>=`, `$gte`) beside a take from the value the database holds (`decrement`,
+`F("credits") - cost`, `Model.credits - cost`, `SET credits = credits - $1`); where a lock or a transaction is named
+before the check or on the lines that decorate the function; in JavaScript where the function waits for nothing; and
+where `LW-LIMIT-COUNTED-LATER` names the same check. A chain written over several lines is one statement. Not read:
+counters kept by Redis or another store's own commands, a field named `quantity`, a check and a take in two
+functions; that the check and the take are about the same record is not checked (they share the field's name).
+Inside a transaction it is quiet, which is quiet the wrong way at the usual isolation level of PostgreSQL and MySQL.
+Its `scenario` is the story kind `balance-race`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -726,11 +867,17 @@ stays test code and the reason says so), `test_file_stood_in` (true where only t
 test run leads from the app into the test file, a call to a stand-in, a callback or a double that a test handed
 the app: it stays test code, as it is with no test run, and the reason says so), `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
-`{"via": <the words of the flow's first step>, "flow": true}`), `flow` (optional, `flowscan.py`: request data followed
-to this line across functions and files, on a `lantern-flow` finding or attached to another tool's finding for the same
-kind of problem on the same line: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
+`{"via": <the words of the flow's first step>, "flow": true}`; not for a flow of text a model wrote, nor of what a
+model puts into a tool), `flow` (optional,
+`flowscan.py`: request data, or text a model wrote, followed to this line across functions and files, on a
+`lantern-flow` finding or attached to another tool's finding for the same kind of problem on the same line; a flow of
+text a model wrote is on an `LA-MODEL-OUTPUT-TO-TOOL` finding only, and one of what a model puts into a tool on an
+`LA-UNSAFE-MCP-TOOL` finding only: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
 `redirect`, `nosql`, `pollution`, `record`, `assign`), `"confidence"` (`HIGH`, or `LOW` when a step is a likely link),
-`"severity"`, `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
+`"severity"`, `"origin"` (`server`: what a request sent; `dom`: the page's own address in the browser; `model`: text a
+model wrote, from the call that gave it back; `tool`: what a model puts into a function of the project it is handed
+as a tool, from the function's parameter), `"writes"` (optional, `true` where the action writes, changes or removes
+the file it names; a file that is only read has none), `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
 request to the sensitive action, in order; `what` is a sentence with code names between backticks), `"others"` (up to
 five other starting points that reach the same line), `"count"}`; the viewer's box "How the value gets there" lists
 the steps, every value escaped), `claim` (`LT-AUTHZ-CLIENT-ROLE` only: `{"name"` (the cookie, header or field as
@@ -740,6 +887,15 @@ where the value arrives), `"routes"` (the routes that decide on it)`}`), `secret
 `late` (`LT-AUTHZ-OWNER` only, optional: `"change"`, `"shell"`, `"remove"` or `"send"` when the route does ask whose
 the record is, but only after it changed the record, ran a command, removed a file or told another service to
 change something for it; the scenario's `kind` is then `owner-late`),
+`owned` (`LT-AUTHZ-OWNER` only, optional, since 2026-11-16, `lantern/tenantscope.py`: what the project's model files
+say of whose the record reached on this line is: `{"model"` (as the file writes it), `"kind"` (`prisma`,
+`sqlalchemy`, `sqlmodel`, `django`, `drizzle` or `sql`), `"file"`, `"line"` (where the model is written), `"fields"`
+(the fields that name its owner, `["orgId"]`; may be empty)`}` and, where `fields` is empty, at most one of
+`"itself": true` (it is what other records belong to: an org, a user), `"through"` (the name of the record it
+belongs to) or `"maybe"` (fields that may say whose it is under another name: `["customerId"]`). With none of them
+the data gives the record no owner: a finding about a read of it then has `rank` `low` with the model file's place
+in `fixed_why`, a finding about a change or a removal keeps its rank. Absent where the line names no model of the
+project; the case's `evidence` then has no entry `from: "data model"`),
 `fixed_why` (optional, on a rule Lantern gives one rank whatever reaches it: the sentence shown as the reason for
 the rank, `case.severity.why`), `rank` (`critical`|`high`|`medium`|`low`),
 `rank_basis` (how the rank came about, in order: `[{"step", "rank", "why"}]` with `step` one of `severity` (the
@@ -756,6 +912,28 @@ non-security hash or SQL splicing only fixed text → `low`, a hash of unknown p
 (`server-checks-it`|`server-reads-it`|`not-seen-on-server`|`no-server-code`), `server_checks`, `server_reads`, `routes`,
 `other_controls` `[{route, login_check, why}]`, `conditions` (settings the checking code branches on), `stranger_access`
 (always `not determined`), `unknown` [plain sentences]; never changes the rank),
+`public` (`LW-CLIENT-ENV-SECRET`, and a secret-scan finding on a line that gives its key to a public setting:
+`{"name"` (the setting), `"why"`: `address-with-password`|`key`|`from-secret`, `"from"` (the other setting, where
+there is one), `"kind"` (which key, for `key`)`}`; never the value),
+`pulled` (`LW-SERVER-IMPORT-IN-CLIENT`: `{"settings"` [the secret settings the file reads by name, at most 12, the
+one the build hands on first], `"path"` [the files from the page's file to this one; a way of more than 12 files is
+listed by its two ends], `"not_shown"` (how many files of the way are not listed), `"clients"` (how many files that
+begin with `"use client"` reach it, null when that was not counted), `"handed"` (null, or `{"file", "line"}`: where a
+`next.config` file's `env` names the setting)`}`),
+`columns` (`LW-SENSITIVE-COLUMN-RETURNED`: `{"model"`, `"fields"` [the secret fields that go back, at most 12; one
+that a record brought with it is written `author.passwordHash`], `"via"`: `prisma`|`drizzle`|`sqlalchemy`|`sqlmodel`|
+`django`, `"defined"`: `{"file", "line"}` (where the model is written), `"sent"` (the line it goes back on)`}`),
+`webhook` (`LW-UNSIGNED-WEBHOOK`: `{"route"` (`POST /api/webhooks/stripe`), `"why"` (what made Lantern take the route
+for a provider's: the word of its address, or the header or event name in its lines), `"check"`: `none`|`lets-on`|
+`late`, `"changes"` [`{"file", "line"}`: where stored data is written with no check before it, at most 6], `"more"`
+(how many such places are not listed, only when there are more), `"at"` (the line of the check that lets a failed
+message on, or that comes after the write; absent for `none`), `"at_file"` (the file that line is in, only when it
+is not the route's own)`}`),
+`agent_loop` (`LA-UNBOUNDED-AGENT-LOOP`, since stage 5: `{"kind"`: `loop`|`itself`|`setting`, `"paid"` [the
+paid calls made in each round, at most 4: `{"file", "line", "what"` (the call as written), `"through"` (only
+where the call is made in a function the round calls: the place of the model call itself, `file:line`)`}`],
+`"ends"` [the conditions on the model's answer that end the rounds, at most 4: `{"line", "what"}`], `"setting"`
+(only for `setting`: the words of the limit that is switched off)`}`),
 `row_rules` (`LW-NO-RLS` only, since 2026-11-14, `websec.row_rules`: what the project's SQL files, replayed in the
 order they are applied (`lantern/rowrules.py`), leave open on one table: `{"table"` (`<schema>.<name>`), `"state"`:
 `off` (the files create the table and never switch row-level security on), `off-in-the-files` (the same, and code
@@ -778,7 +956,7 @@ open (`met` true, or null for `off-in-the-files`), "The database is as the proje
 null: a change made in the dashboard is in no file), and "A visitor has the table's name and the public key"
 (true where `client` is not empty, else null, never false). A finding without `row_rules` (Firebase's rules,
 results an older Lantern wrote) is told as before),
-`case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`, `SQL files`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
+`case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`, `SQL files`, `data model`, `data flow`, `code`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
 `status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted; with `"how": "nosec"`, and `by`
 and `date` null, when the acceptance is a `# nosec` comment with a written reason on the line),
 `nosec` (Bandit findings only, when the line carries a `# nosec` comment about this finding: `{"state", "reason"}`.
@@ -906,7 +1084,13 @@ and otherwise ends in `blocked` or `incomplete`), `architecture`,
 `security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`, `incomplete`: `[{tool, state, status,
 why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a
 notice under the tiles and the badge say `scan incomplete`, and the badge is never green), `understanding`,
-`provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs, and
+`provenance` (`workspace`, only for the map of a workspace: `{"name", "made", "members": [{"name", "from",
+"source", "commit", "dirty", "branch", "remote"}]}`, which the page shows as "Projects in this map", and which the
+digest takes in through `payload.workspace` = `{"members": ["<name>:<commit>[+changes]", …], "shared": <count>}`, so
+a project of its own has no such part and its digest is as before; the Limits then say the map is a workspace of
+those projects, which of them is in no git repository or had changes not committed, how many links of code cross
+between them and how many names two of them write, and whose accepted risks are not read there;
+`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs, and
 since 2026-11-13 `libraries`: the libraries the project's tests ran on, taken from `run.json` by shape,
 `{state: "fetched"|"installed", store, exact, checked, left_out, above, packages: [{name, version, exact, checked,
 fingerprint, built_from?}], optional_left?, built?}`, or null when no test run is in the results or the tests ran on no library; the page lists them
@@ -932,6 +1116,10 @@ the project's own plan, `lantern-behaviour.json` (its shape, the kinds of check 
 No finding changes with it. Since 2026-11-11 the release decision reads it (`readiness.json`, criterion
 `behaviour`), and counts it only when it carries this computer's seal and is of the plan and the code that are in
 the project now.
+
+A plan that `lantern behave --init` wrote (or the app's "Behaviour plan" button) carries one more table, `notes`,
+which the runner does not read: `made_by`, `read_first` (sentences to read before the first run), `review`
+(`[{check, why}]`: the cases to look at first) and `left_out` (`[{route, where, why}]`: routes with no case).
 
 ```json
 {"version": 1,
@@ -979,6 +1167,12 @@ of the two checks' `graph.json`, `security.json` and `readiness.json` (`diff.com
 line, and two versions that differ only in comments and spacing give `same: true`. `diff.read(path)` reads a receipt
 back the strict way (a plain file, `schema` 1, every part there; `diff.NotResults` otherwise).
 
+The check before each push (`lantern hook install`, `lantern/hook.py`) writes the same files for each branch or tag it
+checks into `.lantern/push/<branch>/` of the project (a name made of the ref's own letters, `hook._slug`), beside a
+`.gitignore` of that folder that leaves it all out of git. What stops a push is `diff.blockers(receipt)`: rows
+`{kind: "finding" | "link" | "criterion", part, words, finding | link | criterion}` read from the receipt only;
+`lantern diff --require not-blocked` ends with 1 when that list is not empty.
+
 `change.json`:
 
 | Field | Meaning |
@@ -995,7 +1189,7 @@ back the strict way (a plain file, `schema` 1, every part there; `diff.NotResult
 | `paid` | calls that cost money (a model, an embedding, an image, speech, a payment, an email, an SMS: the kinds of `aiapp.PAID_KINDS`; a vector store is none, and a call is one only where the code makes it, never where a remark or a text names a provider) that a route reaches now and did not before (the route is new, the call is new, or the way from one to the other is): `[{"kind", "detail", "words", "node", "file", "line" (the route), "calls": [{"kind", "provider", "file", "line", "what"}], "in": {"node", "file", "line"} (the function that makes the call), "login": the route's login record as in `doors`, or null}]`. A paid call no route reaches is not listed |
 | `touches` | the functions whose text changed (`changed`, `added`, `removed`: `[{"node", "name", "file", "line"}]`, by each function's `fingerprint`), their `files`, how many are `in_tests`, the `doors` that lead to them, what they lead to (`reaches`: `table`, `shell` (what starts a program; not what a started program gave back or raised, `diff.NOT_THE_SHELL`), `service`, `outside`), `paid`, `cut_short` (the walk over the map stopped at its limit), `by_text` (changed files Lantern maps no function of) |
 | `more` | counts of rows left out of a list that was cut |
-| `limits` | sentences: what this comparison cannot say (a scanner that did not finish on one side, a part of the release decision only one side was checked for, files of a commit that were not copied, results of an older Lantern without `route_logins`, two checks made by different versions of Lantern or a check that does not say which made it: a difference may then be the Lantern's and not the change's; two checks whose `security.json` `id_version` differ: their findings are not compared at all, every list under `findings` is empty) |
+| `limits` | sentences: what this comparison cannot say (a scanner that did not finish on one side, libraries not looked up because both checks were made offline, a part of the release decision only one side was checked for, files of a commit that were not copied, results of an older Lantern without `route_logins`, two checks made by different versions of Lantern or a check that does not say which made it: a difference may then be the Lantern's and not the change's; two checks whose `security.json` `id_version` differ: their findings are not compared at all, every list under `findings` is empty) |
 
 Everything in `change.md` that comes from a project is written so that it stays text on GitHub (`onrepo.md`,
 `onrepo.code`: no HTML, link, picture, heading or table of its own, and no `@name`, `#12` or address that GitHub
@@ -1181,6 +1375,7 @@ the website tries again to end it at the gateway: after 5, 15, 45, 120 and 300 s
 | `POST /v1/signin/poll` | `X-Lantern-Site` | `{signed_in: false}` while a sign-in of this browser is going (`lsi`); `{signed_in: true, label}` once `lt` is a sign-in; 400 with neither |
 | `POST /v1/signout` | `X-Lantern-Site` | Ends this browser's sign-in at the gateway (`POST /v1/auth/signout`) and clears `lt`; `{"everywhere": true}` ends every sign-in of the account (website, app, CLI) → `{signed_in: false, ended, confirmed: true}`. The links to results made for the account (`/view`) open nothing from then on. When the gateway cannot be reached: with `everywhere`, 503, nothing is signed out and `lt` stays; without it, `lt` is cleared, the website itself takes that sign-in no more and tries again for a few minutes to end it at the gateway, and the answer is `{signed_in: false, ended: 0, confirmed: false, message}`: the sign-in is not ended at the gateway yet, and `message` is the sentence for the person (the page shows it). `Cache-Control: no-store` |
 | `GET /v1/me` | Bearer or `lt` | `{account: "github"\|"google"\|"token", label, runs_today, runs_active, limits, connect_url}` (`connect_url`: the GitHub App's install page when Connect GitHub is on, else null) |
+| `GET /v1/github/repos[?fresh=1]` | Bearer or `lt` | `{repos: [{name: "owner/repo", private, description, language, pushed}], github, connected, connect_url}`: the GitHub repositories the signed-in person owns, most recently pushed first (at most 300). Public ones are asked of GitHub's public API; private ones only where the GitHub App is installed on the person's own account (a one-off token with `metadata: read`, never kept). A row whose owner is not the signed-in GitHub id, or whose name is not of GitHub's form, is passed over. Kept in memory 120 s per account (`fresh=1` asks again). A Google sign-in gets `github: false` and no repos. 503 when GitHub does not answer. The website's GitHub screen draws the list; a click starts a run on `https://github.com/<name>` |
 | `GET /v1/samples` | none | `{samples: [{id, title, stack, level, summary}]}`: Lantern's built-in starter apps (`lantern.learn.catalog`), each with planted problems, for people with no repository to hand |
 | `POST /v1/repos` `{link \| sample, privacy?, stored_snippets_ok?}` | Bearer or `lt` | 202 + a **run** (status `queued`). `link`: https link to a public repository on a host `lantern.remote` accepts (and `LANTERN_CLOUD_HOSTS`, when set). `sample`: a starter id from `/v1/samples` instead of a link; the run's `link` is then `lantern:sample/<id>` and its `host` is `sample`, and the worker writes the starter from the package (`learn.scaffold`) instead of cloning (400 "Choose one of the sample apps…" for any other value). `privacy`: `"structure"` (default, no code kept) or `"full"` (short snippets kept; needs `stored_snippets_ok: true`, else 400 with the sentence to show). 400 for a bad link or privacy, 429 over a limit (one active run per person, runs per day, runs for everyone per day) |
 | `POST /v1/uploads?name=&privacy=&snippets_ok=` (body: the .zip, `Content-Type: application/zip`) | Bearer or `lt` (+ `X-Lantern-Site: 1` with the cookie) | 202 + a **run**, as `/v1/repos`, with `link` `lantern:upload/<name>` (`name` cut to letters, digits, `._-`, at most 80; a label only) and `host` `upload`. The website zips a chosen or dropped folder in the browser (leaving out `node_modules`, `.git`, virtual environments, build output) or sends a chosen .zip. The body must start with `PK` (400 otherwise) and stay under `LANTERN_CLONE_MAX_MB` (413, checked on `Content-Length` and while receiving). It waits in the uploads folder (`LANTERN_CLOUD_UPLOADS`) until the run starts, is then moved into the run's temp folder and unpacked by `python -m lantern.archive` in the restricted process with no network (relative names only, no links or special files, no passwords, unpacked size capped while writing; a refusal ends the run with the unpacker's sentence), and is gone when the run ends. `snippets_ok=1` plays the part of `stored_snippets_ok`. Same limits as `/v1/repos`. `POST /v1/runs/{id}/explain` on an upload run is 409: the code is no longer there to read again |
@@ -1189,10 +1384,11 @@ the website tries again to end it at the gateway: after 5, 15, 45, 120 and 300 s
 | `GET /v1/runs/{id}/stream` | Bearer or `lt` | `text/event-stream`: `event: log` with one JSON string per line, then one `event: end` with the run, then the stream closes. A finished run sends its saved tail and `end` at once. While it is open the stream looks again, at every round, at whether its reader may still read the run and the same layers of it, and asks the gateway about the sign-in every 15 seconds: when something was taken away it closes with no `end` (ask for the run again to learn why); a gateway that cannot be reached ends nothing |
 | `POST /v1/runs/{id}/view` | Bearer or `lt` | `{expires_in, report, evidence, badge, findings, graph, readiness}`: absolute links that open the run's results in a browser for the next `LANTERN_CLOUD_VIEW_MINUTES` (60). Each carries `?k=<expiry>.<layers>.<who>.<HMAC>` for this run only: `layers` is `all` or the code of the layers the caller may see, `who` a keyed fingerprint of the caller's account (it says nobody's name), and the signature covers those, the run and the account's round of links. A link opens what the person it was made for may read at the moment it is used: nothing once they are taken out of the workspace, the run leaves it, or they may see fewer layers than the link names (more layers later change nothing: it opens what it was made for), and nothing after they sign out on the website (since 2026-11-15; before, a link kept the run and the layers of the moment it was made, for the hour). 404 when not the caller's run, 409 when it has no report (not `done`). Open the link at once; never store or share it (until one of those ends it, anyone holding it can open it; to show someone, use Share) |
 | `GET /r/{id}/report.html` · `evidence.html` · `badge.svg` · `findings.json` (= `security.json`) · `graph.json` · `readiness.json` | `?k=` from `/view`, or the `lv` cookie the first page sets for `/r/{id}/` | Rebuilt from Lantern's templates (`lantern.server.result_page`, the same code as `lantern serve`): the stored files are read for data only, pages get a per-response nonce CSP plus the report's own hash CSP, `live` is null (no actions), privacy as chosen before the run. Headers: `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. 401 with a sentence for a missing, wrong, expired or ended key (one page for all of them: it does not say which); 404 for other names |
-| `GET /v1/runs/{id}/share` | Bearer or `lt` | `{shared, url}`; `url` is null while sharing is off (the default) |
-| `POST /v1/runs/{id}/share` | Bearer, or `lt` + `X-Lantern-Site` | Turns sharing on: `{shared: true, url}`, `url` = `<public url>/s/<slug>/report.html`, the slug 24 random characters, not the run id. Asking again returns the same link. 404 when not the caller's run, 409 when the run is not `done` |
+| `GET /v1/runs/{id}/share` | Bearer or `lt` | `{shared, url}` while sharing is off (the default; `url` null); while it is on also `check`, `badge` and `markdown` (below) |
+| `POST /v1/runs/{id}/share` | Bearer, or `lt` + `X-Lantern-Site` | Turns sharing on: `{shared: true, url, check, badge, markdown}`, `url` = `<public url>/s/<slug>/report.html`, the slug 24 random characters, not the run id; `check` = `…/s/<slug>/check.html` and `badge` = `…/s/<slug>/badge.svg`; `markdown` = `[![Lantern check](<badge>)](<check>)`, the badge for a README, linking to its check page (2026-11-17). Asking again returns the same links. 404 when not the caller's run, 409 when the run is not `done` |
 | `DELETE /v1/runs/{id}/share` | Bearer, or `lt` + `X-Lantern-Site` | Turns sharing off: `{shared: false, url: null}`. The old link stops working at once and never comes back; sharing again makes a new one |
-| `GET /s/{slug}/report.html` · `evidence.html` · `badge.svg` | none (the link is the key) | The shared run's pages, read-only, built exactly as `/r/{id}/…` (same templates, nonce CSP, `live` null, privacy as chosen before the run) plus `X-Robots-Tag: noindex`. The raw data files (`findings.json`, `graph.json`, `readiness.json`) are not shared. 404 "This link is off" for a slug that is not (or no longer) shared |
+| `GET /s/{slug}/report.html` · `evidence.html` · `badge.svg` | none (the link is the key) | The shared run's pages, read-only, built exactly as `/r/{id}/…` (same templates, nonce CSP, `live` null, privacy as chosen before the run) plus `X-Robots-Tag: noindex`. The raw data files (`findings.json`, `graph.json`, `readiness.json`) are not shared. 404 "This link is off" for a slug that is not (or no longer) shared. The badge follows the release decision, as the one written beside the report does: grey for Incomplete, the colour of a high finding for Blocked, green only for Passed (`evidence.badge_record`; until 2026-11-17 the badge served here and by `lantern serve` was drawn without the decision and was green for an Incomplete release) |
+| `GET /s/{slug}/check.html` | none (the link is the key) | The page the badge links to (roadmap stage 6, 2026-11-17; `evidence.check_html`, rebuilt from `evidence.json` by `server.check_page`, no script, CSP `evidence.CHECK_POLICY`, `noindex`, `no-referrer`; its logo opens `/`, its guide button `/guide`): the commit, the code fingerprint (`release.bound_to.code.sha256`: SHA-256 of every file by its path and what it holds; the first 12 letters shown), the release decision and what it is made of, how many of the scanners that apply finished (`N of M … (P%)`, with the ones that did not), when and with which Lantern, the results fingerprint (`digest`), and the line that repeats the check: `git clone <link> lantern-check && cd lantern-check && git checkout <commit> && pip install "lantern[scan] @ git+…@<engine>" && lantern verify . --digest <digest>` (`--offline` when the run was). What the page says the check found is read from the part of the record the digest is made of (`payload`) and only when the digest is that part's own (`check_facts`: otherwise the page says the record does not hold together and gives no line), so the line, which makes the digest again, checks it: a scanner the payload names as partial or not finished counts as one that did not finish whatever the record's list says (`LEFT_AS`), and the open critical and high counts, which the payload does not hold apart from test code, are not shown (the decision's `findings` part says whether one is open). From the rest of the record come only whether a skipped scanner had work to do (`security.incomplete`) and the time and the Lantern the line installs (`header`, which the website writes itself: another Lantern of that repository ends with MATCH only where it makes the same results; a fork's commit, which GitHub also hands out through that repository's address, could say anything, so the line is as good as the website that wrote the record). The link is the one the run was asked for, read by `remote.parse` and put together again from its parts in plain letters (`evidence.CLONE_LINK`); an upload, a sample app or a link of other letters gives a line without the clone (or none where no commit holds the files: `check_line`). A run that ran tests or type checkers, or read several projects, gets no line, with the reason. 404 "This link is off" when sharing is off, like the other pages |
 | `DELETE /v1/runs/{id}` | Bearer, or `lt` + `X-Lantern-Site` | `{deleted: id, files: "removed" \| "waiting"}`: the run's row and its share link are gone at once (nobody can open the run any more). `files` says whether its result files are off the server's disk: `"waiting"` when the server could not remove them yet (it has written that down and tries again, see "Clean-up" below; the website tells the person). 404 when not the caller's run; 409 while it is `queued` or `running` |
 | `DELETE /v1/me` | Bearer, or `lt` + `X-Lantern-Site` | `{deleted: true, runs: n, files: "removed" \| "waiting"}`: every run, share link, daily counter and the account row are deleted, and the `lt` cookie is cleared; `files` is `"waiting"` when one of the result folders could not be removed from the disk yet (as for one run). Signing in again starts a fresh, empty account. 409 while one of the person's runs is still going. The gateway account (and its allowance counters) is not touched |
 | `GET /v1/ai` | Bearer or `lt` | `{consent, notice, allowance}`: whether the person has agreed to send work to a model, the sentence they agree to (`providers.DATA_NOTICES["lantern"]`), and `{remaining_requests, limit_requests, remaining_today}` from the gateway's `/v1/allowance` (null when it does not answer) |

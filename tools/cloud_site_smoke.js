@@ -75,6 +75,13 @@ async function until(p, fn, timeout) {
     if (/repositor/i.test(await p.$eval('main', m => m.innerText))) errs.push(`${tag}: the word repository shows in Simple onboarding`);
     await a11y.axe(p, `${tag} onboarding`, errs);
     await p.click('.onb .pick[data-to="github"]'); await p.waitForSelector('.onb details.why');
+    // the person's own projects on GitHub, from the demo's stand-in: a list to pick from, the icon icon-sized
+    await p.waitForSelector('.reporow[data-repo]');
+    if (await p.$$eval('.reporow[data-repo]', a => a.length) !== 2) errs.push(`${tag}: the GitHub screen should list the two projects`);
+    const ghIcon = await p.$eval('.dropzone svg', s => s.getBoundingClientRect().height);
+    if (ghIcon > 40) errs.push(`${tag}: the GitHub icon in the link box is ${ghIcon}px tall`);
+    if (/repositor/i.test(await p.$eval('main', m => m.innerText))) errs.push(`${tag}: the word repository shows on the GitHub screen`);
+    await a11y.axe(p, `${tag} github projects`, errs);
     await p.screenshot({ path: `${out}-${tag}-onboarding-github.png` });
     await p.click('[data-back="where"]'); await p.click('[data-back=""]'); await p.waitForSelector('#showus');
     if (name === 'desk') {
@@ -157,15 +164,40 @@ async function until(p, fn, timeout) {
     await p.screenshot({ path: `${out}-${tag}-share.png` });
     await p.click('#doshare'); await p.waitForSelector('#shareurl');
     const shareUrl = await p.$eval('#shareurl', i => i.value);
+    // the badge for a README links to the page that says how to check the run (roadmap stage 6)
+    const badgeMd = await p.$eval('#sharebadge', i => i.value).catch(() => '');
+    const checkUrl = (badgeMd.match(/^\[!\[Lantern check\]\([^)]+\/badge\.svg\)\]\(([^)]+\/check\.html)\)$/) || [])[1];
+    if (!checkUrl) errs.push(`${tag}: the share sheet has no badge for a README that links to its check page (${badgeMd})`);
     await p.screenshot({ path: `${out}-${tag}-shared.png` });
     const anon = await b.newContext({ viewport, colorScheme: scheme }); await outside.watch(anon, errs, outside.FONTS);
     const q = await anon.newPage(); watch(q);
     const got = await q.goto(shareUrl);
     if (!got || got.status() !== 200) errs.push(`${tag}: the share link did not open (${got && got.status()})`);
     await q.waitForSelector('#tabs'); await clean(q, 'shared report');
+    if (checkUrl) {
+      const cp = await q.goto(checkUrl);
+      if (!cp || cp.status() !== 200) errs.push(`${tag}: the badge's check page did not open (${cp && cp.status()})`);
+      else {
+        await q.waitForSelector('h1'); await clean(q, 'check page');
+        // the badge loads, and stays inside its card on a phone too
+        await q.waitForFunction(() => { const i = document.querySelector('img.badge'); return !i || i.complete; }, null, { timeout: 5000 }).catch(() => {});
+        const past = await q.evaluate(() => {
+          const i = document.querySelector('img.badge'), s = i && i.closest('section');
+          if (!i || !s) return 'it has no badge';
+          if (!i.naturalWidth) return 'its badge did not load';
+          const r = i.getBoundingClientRect(), c = s.getBoundingClientRect();
+          return r.left >= c.left && r.right <= c.right ? '' : `its badge runs past its card (${Math.round(r.right)} > ${Math.round(c.right)})`;
+        });
+        if (past) errs.push(`${tag}: the check page: ${past}`);
+        await q.screenshot({ path: `${out}-${tag}-check-page.png`, fullPage: true });
+        await a11y.axe(q, `${tag} check page`, errs);
+      }
+    }
     await p.click('#unshare'); await p.waitForSelector('#doshare');
-    allow404 = true; const off = await q.goto(shareUrl); await q.waitForTimeout(200); allow404 = false;
+    allow404 = true; const off = await q.goto(shareUrl); await q.waitForTimeout(200);
+    const checkOff = checkUrl ? await q.goto(checkUrl) : null; await q.waitForTimeout(200); allow404 = false;
     if (!off || off.status() !== 404) errs.push(`${tag}: the share link still opens after Stop sharing (${off && off.status()})`);
+    if (checkUrl && (!checkOff || checkOff.status() !== 404)) errs.push(`${tag}: the check page still opens after Stop sharing (${checkOff && checkOff.status()})`);
     await anon.close();
     await p.click('.sheet [data-close]');
     await p.click('#who'); await p.waitForSelector('#signout');
@@ -183,7 +215,10 @@ async function until(p, fn, timeout) {
       const inv = await p.$eval('#invurl', i => i.value);
       if (!/#\/join\/[A-Za-z0-9_-]{20,}$/.test(inv)) errs.push(`${tag}: the invite link looks wrong (${inv})`);
       await p.screenshot({ path: `${out}-${tag}-invite.png` });
-      await p.click('#invdone');
+      // Done draws the team page again once the server has answered. A click that began on the page before that
+      // and ended on the page after it would be lost (tests/test_smoke_redraw.py), so the next click waits for the
+      // page drawn again, the one that says an invite link is not used yet
+      await p.click('#invdone'); await p.waitForSelector('#cancelinv');
       await p.click('#addrun'); await p.click('.sheet [data-add="done1-demo-00000"]'); await p.waitForSelector('.apps [data-open="done1-demo-00000"]');
       await p.screenshot({ path: `${out}-${tag}-team.png`, fullPage: true });
       const ctxT = await b.newContext({ viewport, colorScheme: scheme });

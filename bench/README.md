@@ -12,7 +12,9 @@ mistakes), `scanner_start_results.md` (2026-11-14: this benchmark's seven projec
 gitleaks is started changed, without and with gitleaks: the same map and the same findings), `modern_stack_results.md`
 (2026-11-15: the readers of roadmap stage 1 and the opt-in type-aware pass on twelve public projects that were read
 and never run; the first numbers, the faults they showed and the numbers after the fixes are kept apart; read by hand,
-not a recorded run).
+not a recorded run), `security_packs_results.md` (2026-11-17: the rules of roadmap stage 5 on 30 folders, the held-out
+set before and after the whole stage, and the three AI rules on seven public AI projects, each read and never run, with
+what each run had to show written down first; read by hand, not a recorded run).
 
 Every benchmark starts isolated (`tools/netguard/`): a temporary home folder, no keys or saved sign-ins from the
 shell, real model providers off, and the network refused except for the hosts the script names (the repositories it

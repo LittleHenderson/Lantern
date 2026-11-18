@@ -16,6 +16,347 @@ file. New entries go under `## Unreleased`, on top.
   A name shown nowhere is still refused. `model-eval`'s `min_first_try` default is 0.7 (was 0.8), Wakil's choice,
   near the measured rate across seven repos (72.9%); the target in docs/explain-runs.md is unchanged.
 
+- The website check in a browser waits for the team page to be drawn again after Done on the invite sheet, before
+  its next click there (`tools/cloud_site_smoke.js`, `tests/test_smoke_redraw.py`). A click that began on the page
+  before and ended on the page after it was lost, and the check in Firefox once waited 30 seconds for the sheet that
+  click should have opened and failed (CI, 2026-11-18; the same commit passed in the other run of the checks).
+- The Python library audit asks pypi.org again when pypi.org fails it. pip-audit does not ask again itself, so
+  one slow answer ("Read timed out"), a cut connection, or an error answer of the service (5xx, 429) ended the
+  whole audit, and Lantern's check of itself read as not done (CI, 2026-11-18). pip-audit is started again then,
+  at most 3 times in all, after a pause of 2 and then 5 seconds, and only while a minute of the audit's 5 minutes
+  is left; what the last try found is the audit's, and the record says how often it was started and why (`tries`,
+  `asked_again`). A failure another try would not change (a certificate, a proxy that refuses, the service's
+  refusal, a file pip-audit refuses) is still the audit's one try.
+- Every check of CI has a time limit, and a check that hangs says where it stood. A test that runs past 15 minutes
+  has every thread of the run print where it waits, while it is still running (pytest's `faulthandler_timeout`,
+  `pyproject.toml`). The no-network runner takes `--deadline MINUTES` (`tools/netless.py`): a run still going then
+  has every process of it listed, thread by thread, the tests asked to end so that pytest says where it stood, and
+  what is left ended (result 7). Every job of every workflow, and every step that runs tests, has a limit of its
+  own, in the order `tests/test_time_limits.py` keeps. Until now a run of CI's tests that printed 89% and then
+  nothing went on for 2 h 39 min, until it was cancelled by hand, and nothing said where it stood. The runner also
+  says when its recorder (strace) stopped before the command did (result 6), where strace's own result read like
+  failed tests.
+- The badge `lantern serve` and the website serve beside a report (`badge.svg`) follows the release decision, as
+  the `badge.svg` a check writes into its results folder already did: it says "blocked" or "incomplete" where the
+  decision does, and "scan incomplete" in grey where a scanner that applies did not finish. Until now it was
+  drawn from the open critical and high findings only, and was green with "0 critical" for a release that was
+  Incomplete, or Blocked by something other than an open finding (its tests, a behaviour check).
+- A shared check has a badge for a README and a page the badge links to. Share on the website now also gives
+  `[![Lantern check](…/badge.svg)](…/check.html)` to copy, and `/s/<slug>/check.html` says which commit was
+  checked, a fingerprint of its code (SHA-256 of every file by its path and what it holds), the release decision
+  and what it is made of, how many of the scanners that apply finished, and one line anyone can run to repeat the
+  check: it copies the project, checks out the commit, installs the Lantern that made the check and runs `lantern
+  verify . --digest sha256:…`, which ends with MATCH when the results are the same. What the page says the check
+  found is read from the part of the record that fingerprint is made of, and only when the fingerprint is that
+  part's own, so the line checks it. Stop sharing takes the badge and the page away with the report
+  (`docs/api.md`, "Cloud service").
+- The check page gives no line where a line cannot repeat the check (files no commit holds, such as an upload or
+  a sample app; several projects read as one map; a check that ran the project's tests or this computer's type
+  checkers), and says why. The project's link in the line is the one the run was asked for, put together again
+  from its parts (`https://host/owner/name`); a link with anything else in it is left out of the line. Nothing on
+  the page is signed with a key: it is believed because the website serves it while its owner shares it, and the
+  line lets anyone make the fingerprint again.
+- A check before each push, opt-in: `lantern hook install` writes git's pre-push hook, and from then on every
+  `git push` of that repository is checked first. Each commit pushed is compared with what the other side already
+  has, by the same two checks as `lantern diff` (offline), and the push is stopped when the change itself brings
+  what blocks a release: a critical or high finding that is new, that a page or route reaches only now, that is
+  ranked critical or high only now or that is open again (a secret written into a file is one); a request the
+  page still makes that a route answered before and none answers now; a required part of the release decision
+  that failed only with this change. What blocked the project before the push and still does is the project's and
+  does not stop it. The hook is written only where no pre-push hook is (or where the one there is Lantern's own),
+  never over one of yours: Lantern prints the line to add to it instead, and says so where git runs hooks from
+  another folder (`core.hooksPath`). It runs the Lantern and the Python that wrote it, never a copy in the
+  project, runs nothing of the project, and only its owner may run or change it. `lantern hook status`,
+  `lantern hook remove`; `git push --no-verify` pushes once without the check. Receipts in
+  `.lantern/push/<branch>/`, which git leaves out (`docs/diff.md`, "Before each push").
+- `lantern diff … --require not-blocked` ends with 1 when the change itself brings what blocks a release, and
+  with 0 otherwise, for any CI system.
+- A change receipt of two checks made offline says that no library was looked up, and that a library with a known
+  problem that came with the change is therefore not listed. Until now it said the audits "did not finish or did
+  not cover everything".
+- `python bench/push_check.py`: a real `git push` through the hook on each of the 15 sample projects, and on the
+  shop sample three planted faults (a route that runs the command it is sent, a payment key in a file of the
+  page, a route renamed under the page) beside their three twins: every fault stopped, every twin and harmless
+  push let through, 1.00 to 1.42 seconds a push (`bench/push_check_results.md`). Its first run found the hook's
+  receipts taken into the next commit by `git add -A`; fixed. A push of Lantern's own repository took about 100
+  seconds: each push is two whole checks.
+- Several projects as one map: `lantern workspace FOLDER|LINK FOLDER|LINK …` copies the projects side by side
+  (`LANTERN_HOME/workspaces/<name>/<project>/`) and checks them as one, so a page of one project is linked to the
+  route of another that answers it, by the bridge's own rule and `via`, and a finding is reached across them as
+  across a page and its server (`lantern/workspace.py`, `docs/workspaces.md`). Links of code from one project
+  into another and every link that touches a name two projects write are only `possible`, and what crosses is
+  listed (`meta.workspace`). The Evidence Report names each project and the commit it was copied at, and its
+  digest takes them in. Only the person's own command makes one: the record is kept beside the copies and never
+  read from a project, and a folder there that Lantern did not make is never replaced or removed. `--name N`
+  copies the projects anew, `--list`, `--remove N`; the app takes several folders or links in one `POST
+  /api/projects` (`paths`).
+- A project's name in a workspace is its folder's name, so names that Lantern's own folder rules give a meaning
+  are never given (95 names and the beginnings `cmake-build-` and `bazel-`, found from the 87 rules by a test;
+  `tests`, `docs`, `build`, `vendor`, `src`, `lib`, …); a folder of such a name gets `-project` after it.
+- Go: a folder's files belong to the module of the nearest `go.mod` at or above it, as the go tool reads it.
+  Until now only a `go.mod` at the top of the repository was read, and a Go server in a folder of its own
+  (`backend/` beside `frontend/`) linked none of its own imports: on the Go sample in a folder of its own, 8
+  links became library calls and its SQL finding read high instead of critical.
+- Dart: only a Flutter project's own platform folders (`web`, `ios`, `android`, `macos`, `windows`, `linux`
+  beside its `pubspec.yaml`) are left out. Until now every folder of those names was, anywhere, so a repository's
+  own `web/` server lost its Dart.
+- `python bench/workspace.py`: each of the 15 sample projects read alone and as part of a workspace, compared on
+  functions, links, entry points, call sites and findings, and each of 7 split into its page and its server and
+  joined again: no difference after the Go fix, 2 of 2 requests linked again in each
+  (`bench/workspace_results.md`).
+- The measurements of roadmap stage 5 are written down in one place, `bench/security_packs_results.md`: each rule
+  on 30 folders, the three AI rules on seven public AI projects, the held-out set before and after the whole
+  stage (nine of its fourteen apps, offline: 235 findings before and after, none gone, new or changed; 29 of the
+  42 expected problems of those apps found at medium or above before and after, 13 missed before and after) and
+  the map benchmark (no count differs on any of its seven projects).
+- The three AI rules of roadmap stage 5 measured on seven public AI projects (MCP servers in Python and
+  TypeScript, a chat bot with agents, a command-line assistant, a chat over documents), read and never run, with
+  what the runs had to show written down before the first run and every finding read by hand.
+  `LA-UNBOUNDED-AGENT-LOOP` found one loop, real (a function that calls the model and calls itself again while
+  the model asks for tools, with no count, clock or budget): 1 of 1. `LA-MODEL-OUTPUT-TO-TOOL` and
+  `LA-UNSAFE-MCP-TOOL` found nothing, which says little: the model calls of two projects (a model client the
+  project writes itself, a chat model made with `initChatModel`) and the tools of three were not found in the
+  first place, so no precision is known for them and all three rules stay heuristics. On the 30 folders measured
+  before, no finding is gone, new or changed. Fixed from that run: the tool check knows the MCP library's newer
+  names (Python's `MCPServer`; the TypeScript package `@modelcontextprotocol/server`, also its low-level handler
+  of `"tools/call"`) and, in Python, a server a function makes or is handed with its class written, for the tools
+  written inside the function. Run again on the same projects, which is no longer an independent measurement: 18
+  tools found in three servers that had none, none of whose parameters reaches an action the rule names; nothing
+  else changed. Still not read: a server held as a field of a class, a project that puts a function of its own on
+  the library's `registerTool`, and a tool whose function reaches the tool's code through an object of another
+  file (`docs/ai-apps.md`). Tests: `tests/test_ai_tools.py`.
+- New heuristic `LA-UNBOUNDED-AGENT-LOOP` (roadmap stage 5, the AI-app pack's second version; labelled
+  heuristic): an agent loop with no cap on its paid calls. An agent asks a paid model, does what the model asks
+  for, and asks again until the model says it is done; where only the model's answer ends the rounds, a model
+  that keeps asking, or words put into what it reads that tell it to, keep it going, and every round is billed.
+  Read from the program the data-flow step builds, so nothing of the project is run (`lantern/agentloop.py`): a
+  model call known by the library's own name for it and paid for each call (a model run on this computer is not),
+  made in the loop or in a function of the project the loop calls; a `while` loop, `for (;;)`, `do … while`, a
+  `for` over an endless iterator, or a function that calls itself; every way out of the rounds (the loop's own
+  test, a `break`, a `return`, a `raise`) taken on the model's answer; no counter the loop changes, no clock and
+  no budget read where it decides to go on, and no person asked in each round. A loop that something else can end
+  too (a queue that runs out, a flag the code sets, a limit a helper checks) is counted apart and is no finding.
+  Also a library's own agent loop with its limit switched off: LangChain's `AgentExecutor(max_iterations=None)`
+  with no time limit, the AI SDK's `stopWhen` made only of `hasToolCall(...)`, or `maxSteps: Infinity`. Ranked
+  medium: a cost with no end, not a way in. The flow step's record counts what it read (`scope.agent_loops`).
+  Measured on 30 folders before and after, written down before the first run: 478 findings, none gone, none new,
+  none changed; none of the 30 folders has an agent loop, so no precision is known. Tests:
+  `tests/test_agent_loop.py`.
+- Fixed: a model call on a client that a model's library made at a file's top (`claude.messages.create(...)` on
+  `claude = anthropic.Anthropic()`) was handed to the project's one method of the same name where the map had
+  linked it by the method's name alone, so none of the AI rules saw the call. Such a call now stays the
+  library's, only for the names of model calls, whose whole path is the library's own. Found while writing
+  `LA-UNBOUNDED-AGENT-LOOP`; none of the 30 measured folders changed. Tests: `tests/test_ai_pack.py`.
+- New heuristic `LA-UNSAFE-MCP-TOOL` (roadmap stage 5, the AI-app pack's second version; labelled heuristic): a
+  tool handed to a model that runs what the model puts into it. A model chooses a tool's arguments, and whoever
+  can put words into what it reads (a message, a web page, a file, another tool's answer) can choose them through
+  it. The data-flow step now finds the functions a library is told are tools, by the library's own name for that
+  and never by a name of the project's: an MCP server's tools (FastMCP; the MCP SDK's server in Python and
+  TypeScript, also its low-level handler of every call), LangChain's, CrewAI's and smolagents' tools as
+  decorators, calls and classes made from their tool class, OpenAI's Agents SDK, Pydantic AI, the AI SDK (with
+  `tool()` and as plain objects) and functions handed to an agent in a list. What the model puts into such a tool
+  is followed like what a request sent, to a shell command, a query, code that is run, or a file the action
+  writes, changes or removes, also in a helper of another file; a tool that only reads a file is counted and is
+  no finding. None where a person is asked first: the library's approval flag where the tool is made, or a
+  question (an MCP elicitation, a confirmation, LangGraph's `interrupt`) in the function before the action, read
+  by the call's name. Such a flow makes no other rule's finding. The flow step's record counts it apart
+  (`scope.tool_text`). Measured on 30 folders before and after, written down before the first run: 478 findings,
+  none gone, none new, none changed; none of the 30 folders writes a tool, so no precision is known. Tests:
+  `tests/test_ai_tools.py`.
+- Fixed: what `x.write_text(text)` or `x.write_bytes(data)` writes was taken for the file's place where Lantern
+  does not know what `x` is (a helper's parameter), so request text kept in a file the server names read as a
+  path the request chose, and a path the request chose, handed to such a helper, was not followed. The place is
+  `x`. Found while writing `LA-UNSAFE-MCP-TOOL`; none of the 30 measured folders changed. Tests:
+  `tests/test_flow.py`.
+- `LA-MODEL-OUTPUT-TO-TOOL` follows text a model wrote across functions and files (roadmap stage 5, the AI-app
+  pack's second version; labelled heuristic as before). Until now the rule read one function's own lines, so a
+  helper that hands back the model's answer and a caller that runs it were not connected. The data-flow step now
+  takes what a model call gives back as text the model wrote, by the library's own name for the call (OpenAI and
+  the clients that speak its words, Anthropic, Google, Mistral, Cohere, Ollama, LiteLLM, Hugging Face, Replicate,
+  the AI SDK, LangChain's chat models, Bedrock's runtime), and follows it through helpers, into other files and
+  out of a tool call the model asked for, to a shell command, query text, code that is run, an address fetched or
+  a file's place. Such a flow is this rule's alone: it is not read as what a request sent, so it makes no other
+  rule's finding and raises no rank. One line is one finding (a flow that ends on a line the older reading
+  flagged is written on that finding), and the older reading's finding is no longer made on a line where the
+  model's text arrives checked against a list of the code's own, or made a number, on every way there. The flow
+  step's record counts it apart (`scope.model_text`); `scope.flows` counts what a request sent only. Measured on
+  30 folders before and after, written down before the first run: 478 findings, none gone, none new, one gained
+  its flow (the AI sample); none of the 12 public projects calls a model, so no precision is known. Tests:
+  `tests/test_ai_pack.py`.
+- New heuristic `LW-NONATOMIC-BALANCE` (roadmap stage 5; labelled heuristic; `lantern/balance.py`): a balance
+  checked in one step and taken from in another. A function that checks a balance (credits, points, coins, a
+  wallet's money, a quota, stock) and after the check writes it down taken away as a step of its own: a store's
+  update that writes the field with a decrement or a minus sign, the object's field set lower and then saved, or
+  SQL that sets the column to a value with a minus sign. Two requests sent at the same moment both read the same
+  balance before either has written, both pass the check and both are taken: the balance goes below zero, or one
+  spend is free. Quiet where the write carries the check: a condition that holds the field to the value that was
+  read, or a condition that bounds it beside a take from the value the database holds (`decrement`, Django's
+  `F()`, `SET credits = credits - $1`). A bound beside a value worked out in the program from what was read
+  (`credits: user.credits - cost` under `gte`) is named, as `how: "bounded"`: both requests pass the bound and
+  write the same value. Quiet too where a lock or a transaction is named before the check, and in JavaScript
+  where nothing is waited for. Medium; on the finding as `balance`; story kind `balance-race`. Not read: counters
+  kept by Redis or another store's own commands, `quantity`, a check and a take in two functions. Inside a
+  transaction it says nothing, as the roadmap asks, which is quiet the wrong way at the usual isolation level of
+  PostgreSQL and MySQL: a transaction alone does not keep two requests from reading the same balance. Measured
+  2026-11-17 on 30 folders (the 12 benchmark projects, the 15 sample apps, Lantern's gateway, website and
+  engine), written down before the first run: 9 functions check a name with a balance word, none of them is a
+  balance and none writes after it, so no finding and nothing to decide; no true case, so no precision is known
+  and it stays a heuristic. Tests: `tests/test_balance_race.py`.
+- Fixed: `LW-LIMIT-COUNTED-LATER` named a limit taken in one step with its own condition, where that step is the
+  first thing waited for after the look and is written over several lines (`await db.user.updateMany({ where: {
+  id, credits: { gt: 0 } }, data: { credits: { decrement: 1 } } })`): the step was taken for the work, and its
+  own `decrement:` line for a count after it. The work's own statement is now one step, to where its brackets
+  close: a take written in it holds, and a count is looked for only after it. Found by the balance rule's safe
+  twin. On the same 30 folders: 0 findings before, 0 after. Tests: `tests/test_countlater.py`.
+- New heuristic `LW-UNSIGNED-WEBHOOK` (roadmap stage 5; labelled heuristic; `lantern/webhooks.py`): a route a
+  payment or message provider calls that writes stored data with no check of who sent the message. A provider
+  cannot sign in; what stands in a login's place is its signature, checked with a secret only the two share. A
+  route is taken for a provider's when it takes a POST, shows no login, and its address has the word `webhook` or
+  `hook` or its lines name a header or an event a provider sends. What it writes is read by the step that follows
+  data through the code, in the route and in the functions it calls. Three answers: nothing checks the message;
+  the provider's own check is called and a message that fails it still goes on (the failure is caught, the check
+  is made for some requests only, its secret is empty); data is written before the check. The finding names the
+  lines where data is written and the line of a check that comes too late (`webhook` on the finding, story kind
+  `unsigned-webhook`), in place of the finding "no login check was found" on the same route, which points to the
+  wrong fix (counted in the record as `webhook_for_no_login`). Quiet where every write stands behind the
+  provider's own check, and where a check is written that Lantern cannot follow as code (a comparison that takes
+  the same time whatever the text, a call named for checking a signature, a value compared with a secret
+  setting): it then cannot tell. Not seen: a check whose answer is thrown away, a gateway in front of the app;
+  only Stripe's, svix's and Standard Webhooks' own checks are followed as code. Measured 2026-11-17 on 30
+  folders (the 12 benchmark projects, the 15 sample apps, Lantern's gateway, website and engine): 3 webhook
+  routes that write stored data, each only after Stripe's own check, and no finding; no true case, so no
+  precision is known and it stays a heuristic. Tests: `tests/test_webhook_unsigned.py`.
+- Fixed: a call into the management side of a sign-in service is no longer read as a login. Such a call makes,
+  changes or removes whichever account it is handed, with the server's own key (Supabase's `auth.admin.*`,
+  Clerk's backend client, Firebase's admin library), and asks nobody who is calling; the check by names took it
+  for a login because it is a call into a library named for signing in. A route that removes the account the
+  request names, with nothing asked, is now listed (`LW-AUTH-MISSING`); the same route with the caller asked
+  first (`getUser()`, `auth()`, `verifyIdToken()`) stays unlisted. An account changed that way also counts as
+  stored data written, which the webhook rule reads. Three services are known. Still not listed: such a route
+  that no page of the project calls and that picks no record by an id of the request. Tests:
+  `tests/test_manages_accounts.py`.
+- Fixed: a secret setting of the server that is read and handed on is no longer read as a login. A route that
+  calls another service reads its token from the settings (`process.env.NOTES_API_TOKEN`, `settings.API_TOKEN`);
+  the check by names took the word "token" in the setting's name for a sign of a login. Such a read now stands in
+  a login's place only where the request is held against it: the statement it is in compares something or calls
+  a function named for checking, on however many lines, or a later statement does so with the name the setting
+  was kept under. A comparison with nothing (`=== undefined`) only asks whether the setting is set. A setting
+  that lists several secrets counts where the request is looked for in it. **Changed answer** of
+  `LA-WALLET-DRAIN` on such a route that pays a service: high, "anyone can call it as often as they like", where
+  it was medium, "with no rate limit", as if somebody had to sign in for it. Measured with the fix above and
+  the webhook rule on the same 30 folders: none of the 28 findings of the rules they can move there moved.
+  Tests: `tests/test_setting_is_no_login.py`.
+- The ownership check reads the project's data model (roadmap stage 5; `LT-AUTHZ-OWNER`, still labelled
+  heuristic; `lantern/tenantscope.py`, `flow.Engine.asks_owner`, `owner_field`). Where the project's model files
+  (a Prisma schema, SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`) name the field
+  that says whose a record is (`orgId`, `owner_id`, `created_by`): a query that asks for that field with a value
+  the request did not choose, and that field of the record compared after the read, count as asking for the
+  owner, so such a route is no longer listed; a finding names the field to ask for and where the model file says
+  so (`owned` on the finding, a sentence in `more_info`, a fact of the case from "data model"). A read of a
+  record to which the data gives no owner at all (a price plan, a tag) is ranked low, with the place in the model
+  file as the reason; a change or a removal of one keeps its rank, and so does any record with a field that could
+  say whose it is under another name (`customerId`, an e-mail address, a secret). Who is signed in is known for
+  more sign-in libraries (the helper Auth.js version 5 hands out, better-auth, Lucia, Auth0 version 4, Kinde,
+  WorkOS AuthKit, Supabase's `getClaims`): until now a route that asked for the owner through one of the first
+  two was listed twice as one that asks nobody. A query's `join` on a database library's value is a query's join
+  (it was read as text glued together, and a record such a query reached by an id alone was listed nowhere). With
+  no model file in the project nothing changes. Not read: Drizzle's `eq(table.ownerId, x)` and SQLAlchemy's
+  positional comparisons by the field's name (the older reading, by who is signed in, still applies there), a
+  helper function handed the owner's value by a sign-in library Lantern does not know, Django REST framework's
+  ready-made views. The roadmap's name for this is `LAUTH-MISSING-TENANT-SCOPE`; it is the same finding, so the
+  rule keeps its id. Measured 2026-11-17 on the same 30 folders, before and after: 15 findings of the rules that
+  say who may reach what before and 15 after, none gone, none new, no rank changed. 3 of them, false alarms there
+  before this change, are on a web framework's own repository: in its tutorial app `from <framework> import g`
+  names a folder of the project, so who is signed in is not known there and the tutorial's check of the author is
+  not seen; the same app read in a folder of its own gives no finding. Tests: `tests/test_tenant_scope.py`.
+- Fixed: a pack's `requires` word is looked for in a project's manifest whatever its case. A `requirements.txt`
+  that writes `Django==5.1`, as `pip freeze` does, switched the Django pack on nowhere, and none of such a
+  project's routes were read.
+- New heuristic `LW-SENSITIVE-COLUMN-RETURNED` (roadmap stage 5; labelled heuristic; `lantern/wholerecord.py`): a
+  record sent back whole, with a secret field in it. A query that asks for every field of a record whose model
+  holds a password's hash, a reset token or a key, and an answer that hands the record on as it came: whoever
+  gets the answer gets the field, whether or not a page shows it. Read from the project's own model files and
+  from one function's code at a time; nothing is run. JS/TS: a Prisma query with no `select`, one that selects a
+  secret field, an `omit` that leaves one in, an `include` of a record that has one; a Drizzle query that names
+  no columns. A finding where the query, or the name it was given, stands in an answer (`res.json`,
+  `NextResponse.json`, `new Response(JSON.stringify(x))`, `json(x)`) or is returned by a Server Action, a tRPC
+  procedure, `getServerSideProps` or a route's loader. Python: a FastAPI route that returns the table's own
+  object with no `response_model` and no return type that names another class, or whose `response_model` is the
+  table's own class; a Django REST framework `ModelSerializer` that sends the field and does not mark it
+  `write_only`. Medium; on the finding as `columns`. Quiet for a query that names its fields, a field taken out
+  before the answer, an answer with a class of its own, and a record handed to another function of the project
+  (which is not followed). Not read: NestJS controllers, GraphQL resolvers, Koa, Flask and Django views, Drizzle
+  relations. Measured 2026-11-17 on the same 30 folders: 45 models, 12 with a secret field, 34 places in 15 files
+  that ask for such a record, 9 queries that bring a secret field, 23 Python routes; none hands the record to an
+  answer, so no finding. The first numbers counted 14 such queries, because a Prisma field that leads to another
+  record and whose name says a secret (`password Password?`) was taken for a secret field of the record itself;
+  fixed after a failing test (a record whose own name says a secret keeps it in its `hash`, `key` and `value`
+  fields). No true case, so no precision is known. Tests: `tests/test_whole_record.py` (17).
+- New: `lantern/datamodel.py` reads what a project's data looks like from the files that say so: a Prisma schema,
+  SQLAlchemy, SQLModel and Django classes, Drizzle tables, SQL `create table`. For each record its fields, the
+  records it leads to, which fields hold a secret by their names (a password's hash, a token that lets somebody
+  in, a key) and which say whose the record is (`userId`, `org_id`, `tenant`, `created_by`). It is read once in a
+  run and runs nothing of the project. Tests: `tests/test_datamodel.py` (88).
+- New heuristic `LW-SERVER-IMPORT-IN-CLIENT` (roadmap stage 5; labelled heuristic; `lantern/clientpull.py`): a
+  file written for the server that reads a secret setting by its name (`process.env.STRIPE_SECRET_KEY`) and is
+  loaded with a page's file. A file that begins with `"use client"` is handed to every visitor's browser with
+  every file it imports and every file those import, so the server's code is in what visitors download: medium,
+  and high where `env` in a `next.config` file also hands that setting to the page, because then its value is
+  there too. The JS/TS reader now writes down which files are loaded with each file (`Graph.js_pulls`; an import
+  of types loads nothing). The way stops at a `"use server"` file and at a file that imports `server-only`. One
+  finding for a file, on the line of its first such read, with the way from the page's file (`pulled`). A
+  settings file of t3's env libraries (`@t3-oss/env-*`) is made to be imported by pages, and the library keeps
+  the server's settings out of them: a read inside its `createEnv` call is passed over unless the build hands the
+  setting over. Not read: a project with no `"use client"` file, `import()` and `require`, a file that only loads
+  a server library and reads no secret setting. Measured 2026-11-17 on 30 folders (the 12 benchmark projects, the
+  15 sample apps, Lantern's gateway, website and engine): 590 JS/TS files, 75 of them begin with `"use client"`,
+  112 files are loaded with them and 4 of those read a setting by name. The first numbers had 1 finding, a
+  settings file of t3's env library, read by hand as a false alarm and fixed as said above; after the fix none.
+  No true case, so no precision is known and it stays a heuristic. Tests: `tests/test_client_pull.py` (12).
+- Fixed: where the gitleaks program is not installed, Lantern's built-in secret patterns called a key's place
+  kept by filler in an example file (`sk_live_` and nothing but `x`) a possible secret, which ranks critical.
+  Filler is now no finding and is counted in the scan's record (`scope.placeholders`). Filler is only what
+  cannot be a key: every letter and digit after the fixed start is `x`, or every one is `0`, or the text is the
+  example key a provider prints in its own guide. Anything else that fits a pattern is still a finding.
+- New heuristic `LW-CLIENT-ENV-SECRET` (roadmap stage 5; labelled heuristic; `lantern/publicvalues.py`): a setting
+  that every visitor's browser gets (`NEXT_PUBLIC_`, `VITE_`, `EXPO_PUBLIC_`, `PUBLIC_` and the like) whose value
+  is a secret, where the name says nothing: an address that carries a password or a key of a shape only servers
+  hold (high), or the value of another setting whose name is a secret's (medium). Read from one line of the
+  files that give settings their values (settings files, compose files, workflows, a host's settings file,
+  Dockerfiles, JavaScript); nothing is run and the value is never repeated. Quiet for an address with no
+  password or on this computer, a placeholder, a key made for pages, a type, a comparison, a comment. A key the
+  secret scan lists on the same line stays one finding, which then says the name is a public one (`public` on
+  the finding). Measured on 30 folders (benchmark projects, sample apps, Lantern itself): 805 files read, 24
+  places that give such a setting a value, no finding. So no false alarm and no true case there, and no
+  precision is claimed. Tests: `tests/test_public_values.py` (6).
+- Website: the GitHub screen lists the signed-in person's own GitHub repositories, newest first, with a search box past eight; a click starts the check. Private ones show once the GitHub App is installed on their account (`GET /v1/github/repos`, `ghapp.your_repos`). The GitHub logo on that screen was drawn at the full width of the page; it is icon-sized again.
+
+- A first behaviour plan written from the code (roadmap stage 4; `lantern/behave_init.py`, `docs/behaviour.md`).
+  New: `lantern behave PATH --init` reads a FastAPI app and writes `PATH/lantern-behaviour.json`; it runs nothing of
+  the project, asks no model, and the same code gives the same plan. A plan that is there is left as it is
+  (`--force` writes a new one over it). The app has one button for it, "Behaviour plan", on a project's screen
+  (`POST /api/projects/<id>/behaviourplan`); running the plan stays `lantern behave` in a terminal.
+- What the plan holds: the app and the settings it reads (a database's place in the sandbox's data folder, a
+  secret); two people, made by the app's own sign-up and sign-in; for every route that changes something or shows
+  a login, a case with no login beside one that must be let in; for a row picked by a number in the address, a
+  case by the other person, who must not read or change it; wrong passwords at the sign-in, straight after, after
+  a restart and on a second copy of the app; a limit on a route that reaches a paid service; two requests at the
+  same moment on a payment route; the same request sent again where the route reads an idempotency key.
+- What it does not know it says, in the file under `notes` and on the terminal: what to read before the first run,
+  the cases to look at first with the reason (a value Lantern made up, a route whose code shows no login, rows
+  that may be shared by design), and every route it left out with the reason.
+- Measured on the benchmark's throw-away app, with what it must show written down before the first run
+  (`bench/behaviour/first_plan.py`, `run_behaviour.py --first-plan`, `first_plan_results.md`): the plan written
+  from each of 33 versions' own code breaks no case on the safe app and catches 8 of the 32 planted problems (a
+  visitor let in, somebody else's row, wrong passwords not counted). The other 24 take a plan a person wrote.
+- **Changed answer** of `lantern behave` for the kind `once`: two requests at the same moment whose request does
+  not work even when it is sent alone (a value the app refuses) come out undecided, where they read "held".
+  Nothing was done once there, so that it was not done twice proved nothing. Found by the first run above.
+- Not in it: other frameworks, a sign-in kept in a cookie, an API key in a header of its own, the other kinds of
+  check, what two people of one team may do to each other, and running the plan from the app or the website.
+- Lantern's own tests need one more library, `python-multipart` (the `dev` extra, pinned in
+  `requirements-lock.txt`): FastAPI reads a form with it, the starter notes app takes its sign-in as a form, and
+  the new tests start that app with the plan written for it. Lantern itself does not use it.
 - The fix contract (roadmap stage 3; `docs/fix.md`, `lantern/fixcheck.py`): Lantern calls a finding fixed only when
   the change shows seven things: the finding is gone and not moved, nothing was hushed with a `# nosec` comment or
   an accepted-risk entry, every scanner still read what it read, no route or link between page and server broke, no

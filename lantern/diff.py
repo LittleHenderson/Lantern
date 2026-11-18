@@ -570,6 +570,27 @@ def _named_alike(base: dict, head: dict) -> bool:
     return base["security"].get("id_version") == head["security"].get("id_version")
 
 
+# What every receipt of two checks of code says it cannot see (`standing`); the check before a push prints the others.
+NO_TESTS = "The project's tests were run on neither side: this receipt is made from reading the code."
+MAP_ONLY = ("A door, a link or a way to a finding is what Lantern's map shows. A call Lantern could not follow is "
+            "on neither side, so a change behind such a call is not said here.")
+OUTSIDE_FUNCTIONS = ("Code that stands outside every function (a setting at the top of a file, the fields of a class) "
+                     "is not listed among what the change touches. A door, a link or a finding it changes is listed.")
+BY_TEXT_TAIL = (" a function counts as changed when any character of it changed, a comment or the spacing included: "
+                "Lantern's readers of those languages compare a function's text as it is written.")
+
+
+def standing(limit: str) -> bool:
+    """Is this limit one that every receipt of two checks of the code says, whatever the change?"""
+    return limit in (NO_TESTS, MAP_ONLY, OUTSIDE_FUNCTIONS) or (limit.startswith("In ") and limit.endswith(BY_TEXT_TAIL))
+
+
+def _offline(tool: dict) -> bool:
+    """A library audit that was not started because the check was made offline (`--offline`, and every check before a
+    push): it looked up nothing on either side, which is no scanner that stopped part-way."""
+    return tool.get("state") == "skipped" and tool.get("why") == "offline"
+
+
 def _limits(base: dict, head: dict, touches: dict) -> list[str]:
     out = []
     was, now = base.get("lantern"), head.get("lantern")
@@ -592,18 +613,25 @@ def _limits(base: dict, head: dict, touches: dict) -> list[str]:
             out.append(f"The check of the code {name} the change was made by a Lantern that does not write down what "
                        "each route shows about a login, so new and removed routes are listed without it and a login "
                        "check that changed is not said.")
-    unfinished = [sorted({str(t.get("tool"))[:60] for t in side["security"].get("incomplete") or []
-                          if isinstance(t, dict) and t.get("tool")}) for side in (base, head)]
-    sides = [("both checks", unfinished[0])] if unfinished[0] == unfinished[1] else [
-        ("the check of the code before the change", unfinished[0]), ("the check of the code after the change", unfinished[1])]
-    for name, inc in sides:
+    def tools(side: dict, offline: bool) -> list[str]:
+        return sorted({str(t.get("tool"))[:60] for t in side["security"].get("incomplete") or []
+                       if isinstance(t, dict) and t.get("tool") and _offline(t) is offline})
+
+    def sides(each: list) -> list:
+        return [("both checks", each[0])] if each[0] == each[1] else [
+            ("the check of the code before the change", each[0]), ("the check of the code after the change", each[1])]
+    for name, inc in sides([tools(s, False) for s in (base, head)]):
         if inc:
             out.append(f"In {name} {_plural(len(inc), 'scanner')} did not finish or did not cover everything "
                        f"({', '.join(inc[:6])}): a finding listed as new or fixed may be one that such a scanner would "
                        "have listed on both sides.")
+    for name, inc in sides([tools(s, True) for s in (base, head)]):
+        if inc:
+            out.append(f"In {name} no library was looked up (offline: {', '.join(inc[:6])}), so a library with a "
+                       "known problem that came with the change is not listed.")
     tests = [(_decision(s)["criteria"].get("tests")) for s in (base, head)]
     if all(t in (None, "missing") for t in tests):
-        out.append("The project's tests were run on neither side: this receipt is made from reading the code.")
+        out.append(NO_TESTS)
     one_side = []
     for key, what in ONE_SIDE.items():
         was, now = (_decision(s)["criteria"].get(key) for s in (base, head))
@@ -612,14 +640,10 @@ def _limits(base: dict, head: dict, touches: dict) -> list[str]:
     if one_side:
         out.append(f"Not everything was checked on both sides: {', '.join(one_side)}. Where the release decision "
                    "differs, it may differ for that alone and not for anything in the code.")
-    out.append("A door, a link or a way to a finding is what Lantern's map shows. A call Lantern could not follow is "
-               "on neither side, so a change behind such a call is not said here.")
+    out.append(MAP_ONLY)
     if touches.get("by_text"):
-        out.append(f"In {', '.join(touches['by_text'])} a function counts as changed when any character of it changed, a "
-                   "comment or the spacing included: Lantern's readers of those languages compare a function's text as "
-                   "it is written.")
-    out.append("Code that stands outside every function (a setting at the top of a file, the fields of a class) is not "
-               "listed among what the change touches. A door, a link or a finding it changes is listed.")
+        out.append(f"In {', '.join(touches['by_text'])}{BY_TEXT_TAIL}")
+    out.append(OUTSIDE_FUNCTIONS)
     for side in (base, head):
         out += [x for x in side.get("notes") or () if x not in out]
     return out
@@ -791,6 +815,57 @@ def summary_line(receipt: dict) -> str:
                                                "finding accepted": "findings accepted",
                                                "new way to a paid call": "new ways to a paid call"}.get(one)))
     return f"release decision {receipt['release']['words']}" + (": " + ", ".join(parts) if parts else "")
+
+
+# What in a change blocks a release by itself (`blockers`): the parts of the receipt's findings, with the words a
+# person reads before each, and which rows of a part count (`lantern diff --require not-blocked`, the check before a
+# push: `lantern/hook.py`).
+BLOCKING_PARTS = (("new", "new"), ("now_reached", "reached only now"), ("rank_changed", "ranked higher only now"),
+                  ("reopened", "open again"))
+SECRET_TOOLS = ("gitleaks", "lantern-secrets")
+
+
+def _blocking_row(part: str, f: dict) -> bool:
+    if f.get("rank") not in SERIOUS:
+        return False
+    return part != "rank_changed" or bool(f.get("raised")) and f.get("rank_before") not in SERIOUS
+
+
+def blockers(receipt: dict) -> list[dict]:
+    """What the change itself brings that blocks a release, as rows `{kind, part, words, finding | link | criterion}`:
+    a critical or high finding that is new, that a page or route reaches only now, that is ranked critical or high only
+    now, or that is open again (a secret written into a file is such a finding); a request the page still makes that
+    a route answered before and none answers now; a required part of the release decision that failed only with this
+    change and that no finding above explains. Not the change's: what blocked the project before it and still does,
+    a finding accepted in the change with a person's written reason (`lantern accept`, `# nosec` with a reason), and a
+    new request no route of this project answers (another project may answer it, `lantern workspace`). Read from the
+    receipt only, so it says no more than the two checks did (their limits are the receipt's `limits`)."""
+    out: list[dict] = []
+    findings = receipt.get("findings") or {}
+    for part, said in BLOCKING_PARTS:
+        for f in findings.get(part) or []:
+            if not _blocking_row(part, f):
+                continue
+            words = f"{said} {f.get('rank')} finding {f.get('rule')} at {f.get('file')}:{f.get('line')}"
+            if part == "now_reached" and isinstance(f.get("door"), dict) and f["door"].get("words"):
+                words = f"{f.get('rank')} finding {f.get('rule')} at {f.get('file')}:{f.get('line')}, reached by " \
+                        f"{f['door']['words']} only now"
+            if f.get("tool") in SECRET_TOOLS:
+                words = "a secret written into a file: " + words
+            title = str(f.get("title") or "").strip()
+            out.append({"kind": "finding", "part": part, "finding": f,
+                        "words": words + (f" ({title})" if title else "")})
+    for row in (receipt.get("links") or {}).get("broken") or []:
+        out.append({"kind": "link", "part": None, "link": row,
+                    "words": f"a request the page still makes that no route answers now: {row.get('words')} "
+                             f"({row.get('file')}:{row.get('line')})"})
+    explained = any(r["kind"] == "finding" for r in out)
+    for m in (receipt.get("release") or {}).get("criteria") or []:
+        if m.get("after") == "failed" and m.get("before") != "failed" and not (m.get("id") == "findings" and explained):
+            out.append({"kind": "criterion", "part": None, "criterion": m,
+                        "words": f"the release decision's part '{m.get('id')}' failed with this change "
+                                 f"({m.get('before') or 'not there'} before)"})
+    return out
 
 
 def markdown(receipt: dict, short: bool = False) -> str:
@@ -1086,3 +1161,4 @@ def write(out, receipt: dict) -> dict[str, Path]:
     results.write(paths["md"], markdown(receipt))
     results.write(paths["html"], page(receipt))
     return paths
+

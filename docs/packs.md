@@ -49,7 +49,7 @@ and why. Packs that apply are also listed in the Evidence Report's Provenance an
 | Field | Meaning |
 |---|---|
 | `pack` | Short lowercase name; one pack per name is loaded (built-in wins) |
-| `requires` | Optional. `files`: globs that must match something in the repo. `text`: words that must appear in a manifest (`requirements.txt`, `pyproject.toml`, `package.json`, ...). A pack whose requirements are not met is skipped for that project |
+| `requires` | Optional. `files`: globs that must match something in the repo. `text`: words that must appear in a manifest (`requirements.txt`, `pyproject.toml`, `package.json`, ...), whatever their case (`django` is met by `Django==5.1`). A pack whose requirements are not met is skipped for that project |
 | `rules[].id` | `LP-` followed by uppercase letters, digits and dashes. `LP` keeps pack rules apart from Bandit's `B...` and Lantern's `LW-`/`LJ-` |
 | `rules[].severity` | `HIGH`, `MEDIUM` or `LOW`. Lantern turns it into a rank (critical/high/medium/low) using reachability and whether outside input reaches the line, like every other finding |
 | `rules[].files` | Globs, matched against repo-relative paths (`**/x.py`, `*.py`, `settings*.py`). Build and dependency folders are never scanned |

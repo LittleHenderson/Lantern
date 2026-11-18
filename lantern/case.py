@@ -61,6 +61,7 @@ def _entry_text(g: Graph, r: dict | None) -> str:
 
 
 def build(f: dict, g: Graph) -> dict:
+    from .flowscan import from_request
     from .scenarios import TYPED, kind_of, row_words
     from .security import rank_reason
     kind = kind_of(f)
@@ -117,6 +118,31 @@ def build(f: dict, g: Graph) -> dict:
                                   "Text that is not fixed is spliced into the SQL") + ": " +
                          "; ".join(f"{x['expr']} ({x['why']})" for x in s.get("spliced", [])[:4]),
                          "from": "context (code)"})
+    hook = f.get("webhook")
+    if isinstance(hook, dict) and hook.get("changes"):
+        evidence.append({"fact": f"{hook.get('route')} is taken for a route a provider calls because "
+                                 f"{hook.get('why')}", "from": "code"})
+        evidence.append({"fact": "Stored data is written at " + ", ".join(
+            f"{c['file']}:{c['line']}" for c in hook["changes"][:4]) + (
+                {"late": f", before the check of who sent the message (line {hook.get('at')})",
+                 "lets-on": f", and the check that is called (line {hook.get('at')}) is not made of every message "
+                            "that gets there"}.get(hook.get("check"), ", with no check of who sent the message "
+                                                                      "before it")), "from": "data flow"})
+    loop = f.get("agent_loop")
+    if isinstance(loop, dict):
+        # an agent loop with no cap on its paid calls (`LA-UNBOUNDED-AGENT-LOOP`): each round's paid call, and the
+        # conditions on the model's answer that end the rounds, as the rule read them
+        for p in [x for x in loop.get("paid") or () if isinstance(x, dict)][:4]:
+            evidence.append({"fact": f"A paid model call is made in each round: `{p.get('what')}` at "
+                                     f"{p.get('file')}:{p.get('line')}" + (
+                                         f", which reaches the model call at {p['through']}" if p.get("through")
+                                         else ""), "from": "data flow"})
+        ends = [x for x in loop.get("ends") or () if isinstance(x, dict)][:4]
+        if ends:
+            evidence.append({"fact": "What ends the rounds reads the model's answer: " + "; ".join(
+                f"`{x.get('what')}` on line {x.get('line')}" for x in ends), "from": "code"})
+        if loop.get("setting"):
+            evidence.append({"fact": f"The agent is made with {loop['setting']}", "from": "code"})
     fl = f.get("flow")
     if ctx.get("fixed"):
         fx = ctx["fixed"]
@@ -134,6 +160,29 @@ def build(f: dict, g: Graph) -> dict:
                                  f"{src['line']}: {src['what']}" + (
                                      f" ({fl['count'] - 1} more reach a record on this route too)"
                                      if fl["count"] > 1 else ""), "from": "data flow"})
+        if _whose(f.get("owned")):
+            evidence.append({"fact": _whose(f["owned"]), "from": "data model"})
+    elif fl and fl.get("origin") == "tool":
+        # what a model puts into a function it is handed as a tool (`LA-UNSAFE-MCP-TOOL`)
+        src = fl["source"]
+        evidence.append({"fact": f"What the model puts into the tool was followed to this line in "
+                                 f"{len(fl['steps'])} steps, starting at {src['file']}:{src['line']}: {src['what']}" + (
+                                     f" ({fl['count'] - 1} more tool input(s) reach it too)" if fl["count"] > 1
+                                     else "") + (
+                                     ". One step rests on a call matched by name only." if fl["confidence"] == "LOW"
+                                     else ""), "from": "data flow"})
+    elif fl and not from_request(fl):
+        # text a model wrote (the AI pack's flows): where it came from, and, apart, what the input check saw here
+        src = fl["source"]
+        evidence.append({"fact": f"Text the model wrote was followed to this line in {len(fl['steps'])} steps, "
+                                 f"starting at {src['file']}:{src['line']}: {src['what']}" + (
+                                     f" ({fl['count'] - 1} more model call(s) reach it too)" if fl["count"] > 1
+                                     else "") + (
+                                     ". One step rests on a call matched by name only." if fl["confidence"] == "LOW"
+                                     else ""), "from": "data flow"})
+        if f.get("input"):
+            evidence.append({"fact": f"Request data reaches this line ({f['input'].get('via')})",
+                             "from": "input check"})
     elif fl:
         src = fl["source"]
         evidence.append({"fact": f"Request data was followed to this line in {len(fl['steps'])} steps, starting at "
@@ -212,9 +261,30 @@ def build(f: dict, g: Graph) -> dict:
                                     "input check: " + (f["input"].get("via") if f.get("input") else
                                                        "nothing from the request" if f.get("input") is False
                                                        else "not checked (input is followed from server routes, commands and scripts only)")))
-            if fl:
+            if from_request(fl):
                 conditions[-1] = _cond("What they send reaches this line", True,
                                        f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+            elif fl and fl.get("origin") == "tool":
+                # what a model puts into a tool: that it gets here is followed; who steers the model is not known
+                conditions[-1] = _cond("What the model puts into the tool reaches this line", True,
+                                       f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+                conditions.append(_cond(
+                    "Someone outside can put words into what the model reads", None,
+                    "Lantern does not know what the model reads: a visitor's message, a web page, a file, a mail or "
+                    "another tool's answer can carry words that steer it"))
+                conditions.append(_cond(
+                    "Nobody approves each call before it runs", True,
+                    "the tool is made with no approval setting, and no question is asked before this line on the way "
+                    "Lantern followed (a question is read by the name of the call that asks it)"))
+            elif fl:
+                # text a model wrote: that it gets here is followed; who can steer it is what the prompt holds
+                conditions[-1] = _cond("Text the model wrote reaches this line", True,
+                                       f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+                conditions.append(_cond(
+                    "Someone outside can put words into the prompt", True if f.get("input") else None,
+                    "input check: " + f["input"].get("via") if f.get("input") else
+                    "Lantern does not know what the prompt holds: a visitor's message, or a page, a file or a mail the "
+                    "model is asked to read, can carry words that steer it"))
             elif ctx.get("sql") and ctx["sql"]["fixed_only"]:
                 conditions[-1] = _cond("What they send becomes part of the SQL text", False,
                                        "only fixed text is spliced; values go to the driver separately")
@@ -261,6 +331,21 @@ def build(f: dict, g: Graph) -> dict:
         elif kind == "mass-assign":
             conditions.append(_cond("The record has a field a visitor must not set", None,
                                     "Lantern does not read which fields the record has"))
+        elif kind == "agent-loop":
+            loop = f.get("agent_loop") or {}
+            if loop.get("kind") == "setting":
+                conditions.append(_cond("The agent's own limit on its rounds is switched off", True,
+                                        f"it is made with {loop.get('setting') or 'that setting'}"))
+            else:
+                conditions.append(_cond("Each round makes a paid call to the model", True,
+                                        "the call is known by the library's own name for it"))
+                conditions.append(_cond("Only the model's answer ends the rounds", True,
+                                        "no count, clock or budget is read where the rounds decide to go on, and no "
+                                        "person is asked in each round (a question is read by the name of the call "
+                                        "that asks it)"))
+            conditions.append(_cond("Nothing outside the code stops it (a spending limit set with the provider, a "
+                                    "time limit on the request)", None,
+                                    "Lantern reads the code, not the provider's or the server's settings"))
         if ctx.get("hash"):
             h = ctx["hash"]
             conditions.append(_cond("The hash protects a password, token or signature",
@@ -300,6 +385,26 @@ def build(f: dict, g: Graph) -> dict:
             "unknown": unknown, "status": _status(f, None)}
 
 
+def _whose(o) -> str:
+    """What the project's model files say of whose a record is, as a fact of the case (`lantern/tenantscope.py`
+    writes `owned` on an ownership finding); empty when the finding has none."""
+    if not isinstance(o, dict) or not isinstance(o.get("model"), str):
+        return ""
+    name, at = o["model"], f"({o.get('file')}:{o.get('line')})"
+    fields = [x for x in o.get("fields") or [] if isinstance(x, str)][:3]
+    maybe = [x for x in o.get("maybe") or [] if isinstance(x, str)][:3]
+    if fields:
+        return f"The project's data model names the owner of `{name}` in " + ", ".join(f"`{x}`" for x in fields) + f" {at}"
+    if o.get("itself"):
+        return f"By the project's data model `{name}` is what other records belong to {at}"
+    if isinstance(o.get("through"), str):
+        return f"The project's data model gives `{name}` no owner of its own; it belongs to `{o['through']}` {at}"
+    if maybe:
+        return (f"The project's data model names no owner for `{name}` in the usual words; "
+                + ", ".join(f"`{x}`" for x in maybe) + f" may say whose it is {at}")
+    return f"The project's data model names no owner for `{name}`, and nothing it belongs to has one {at}"
+
+
 def _claim(f: dict, kind: str) -> str:
     """What the finding says, attributed to the tool and stated no more strongly than the evidence."""
     base = str(f.get("title") or "").rstrip(".")
@@ -307,6 +412,27 @@ def _claim(f: dict, kind: str) -> str:
         return f"{base}. The text looks like a key; Lantern does not test it."
     if f.get("rule") == "LW-PUBLIC-SECRET":
         return f"{base}. Visible in the browser; that alone is not proof anyone can get in."
+    if f.get("rule") == "LW-CLIENT-ENV-SECRET":
+        return (f"{base}. Read from one line of the file; whether this file gives its values to the page visitors "
+                "get is not checked.")
+    if f.get("rule") == "LW-SERVER-IMPORT-IN-CLIENT":
+        return (f"{base}. Read from import lines and settings' names; whether the bundler keeps this file's code in "
+                "the page is not checked.")
+    if f.get("rule") == "LW-SENSITIVE-COLUMN-RETURNED":
+        return (f"{base}. Read from the model file and one function's lines; whether the field's value is a secret, "
+                "and whether other code takes it out first, is not checked.")
+    if f.get("rule") == "LW-NONATOMIC-BALANCE":
+        return (f"{base}. Read from one function's own lines; whether the check and the write are about the same "
+                "record is not checked.")
+    if f.get("rule") == "LA-UNSAFE-MCP-TOOL":
+        return (f"{base}. Read from the library's name for making a tool and the way its input was followed; what the "
+                "model reads, and a check made outside the code Lantern followed, are not known.")
+    if f.get("rule") == "LA-UNBOUNDED-AGENT-LOOP":
+        return (f"{base}. Read from the loop's own lines and the library's name for the model call; a limit kept "
+                "outside the code (a spending limit set with the provider, a time limit on the request) is not seen.")
+    if f.get("rule") == "LW-UNSIGNED-WEBHOOK":
+        return (f"{base}. Read from the route's own lines and the functions it calls; a signature checked by "
+                "something in front of the app, or in a way Lantern does not follow, is not seen.")
     if f.get("category") == "dependency":
         return f"{base}. The version is affected; whether the app uses the affected part is not checked."
     return f"{f.get('tool')} says: {base}. A pattern in the code, not a confirmed attack."

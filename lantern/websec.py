@@ -15,6 +15,20 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
                      what the flow step knows of the value)
   LW-SECRET-INLINE   a signing secret, its fallback for a missing setting, an account's password or a database
                      address with its password, written in JS/TS, Python or a JSON settings file
+  LW-CLIENT-ENV-SECRET  a setting with a browser-exposed prefix whose value is a secret where the name says
+                     nothing: an address with a password, a server key, a secret setting passed on
+                     (publicvalues.py; heuristic)
+  LW-SERVER-IMPORT-IN-CLIENT  a file that reads a secret setting by name and is loaded with a file that begins
+                     with "use client" (clientpull.py; heuristic)
+  LW-SENSITIVE-COLUMN-RETURNED  a record whose model has a secret field (a password's hash, a reset token, a key),
+                     sent back as the query found it: Prisma, Drizzle, a FastAPI route, a DRF serializer
+                     (wholerecord.py, with the models read by datamodel.py; heuristic)
+  LW-UNSIGNED-WEBHOOK  a route a payment or message provider calls that writes stored data with no check of who
+                     sent the message, a check that lets a failed message on, or one that comes after the write
+                     (webhooks.py, from what the flow step notes of every write: `flow.Result.changes`; heuristic)
+  LW-NONATOMIC-BALANCE  a balance (credits, points, coins, a wallet's money) checked and then written down taken
+                     away as a step of its own, with no condition on it in the write and no lock or transaction
+                     before the check (balance.py; heuristic)
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
@@ -1009,6 +1023,127 @@ def own_name(signature: str) -> str:
     return m.group(1) if m and m.group(1) not in NOT_A_NAME else ""
 
 
+# A secret of the server's own, read from its settings (`process.env.NOTES_API_TOKEN`, `settings.API_TOKEN`). Its
+# name is built from an auth word, and reading it asks nobody who is calling: a route that puts it on a request to
+# another service has checked nothing. It stands in a login's place only where the request is held against it
+# (`_held_against`): the statement it stands in compares something or calls a function named for checking
+# (`_statement`, `_asks`), or a later statement does that with the name the setting was kept under. A comparison
+# with nothing (`=== undefined`, `== None`, `!== ""`) asks whether the setting is set and nobody who is calling.
+SETTING_READ = re.compile(r"(?:(?:[A-Za-z_$][\w$]*\.){0,3}env|(?:self\.|this\.)?(?:settings|config|cfg|conf|secrets)|"
+                          r"(?:current_)?app\.config)\.[A-Za-z_$][\w$]*$")
+HOLDS_AGAINST = re.compile(r"[!=]==?|(?<![\w$.])not\s+in(?![\w$])")
+SET_AT_ALL = re.compile(r"[!=]==?\s*(?:undefined|null|None|nil|~~(?!~))(?![\w$.(\[])(?!\s*\+)"
+                        r"|(?<![\w$.])(?:undefined|null|None|nil)\s*[!=]==?"
+                        r"|\btypeof\s+[\w$.]+\s*[!=]==?\s*~+")
+IS_AMONG = re.compile(r"(?<![\w$.])in(?![\w$])")
+LOOPS_OVER = re.compile(r"(?<![\w$.])for(?![\w$])")
+CALLED = re.compile(r"([A-Za-z_$][\w$]*)\s*\(")
+CHECK_NAMED = re.compile(r"\b(?:compar\w*|cmp|equals?|eq|same|verif\w*|validat\w*|valid|check(?:s|ed|er)?|authenticat\w*|"
+                         r"authori[sz]\w*|match(?:es|ed)?|guard\w*|require[sd]?|assert\w*|protect\w*|ensure[sd]?|"
+                         r"includes?|contains?|has)\b")
+KEPT_AS = re.compile(r"\s*(?:(?:export\s+)?(?:const|let|var|final)\s+)?([A-Za-z_$][\w$]*)\s*(?::[^=\n]{0,80})?=(?![=>])")
+GOES_ON = ("=", "!", "<", ">", "&", "|", "+", "-", "*", "/", "%", "?", " and", " or", " not", " in")
+COMES_ON = (".", "?", ":", "&&", "||", "==", "!=", "+", "-", "*", "/", "%", "<", ">", "and ", "or ", "in ", "not in ")
+MOST_STATEMENT = 800        # characters of a statement read to either side of a setting
+MOST_AFTER = 20_000         # characters of a handler read for the name a setting was kept under,
+MOST_USES = 12              # ...and the uses of that name that are looked at
+MOST_SETTINGS = 20          # setting reads of one handler that are looked at; past them the older reading stands
+
+
+def _opens_block(code: str, i: int) -> bool:
+    """Whether the `{` at `i` opens a block of statements (`) {`, `=> {`, `else {`) and not an object written out."""
+    j = i - 1
+    while j >= 0 and code[j] in " \t\n":
+        j -= 1
+    if j < 0:
+        return False
+    return code[j] == ")" or code[j - 1:j + 1] == "=>" or bool(re.search(r"(?<![\w$.])(?:else|try|finally|do)$",
+                                                                         code[max(0, j - 8):j + 1]))
+
+
+def _statement(code: str, s: int, e: int) -> tuple[int, int]:
+    """Where the statement begins and ends that the code at [s:e] stands in, read from its brackets: out to the
+    outermost call, list or object it is written inside (never out of a block of statements, past a `;` or past an
+    arrow), back over lines that end in an operator, and on to where that statement ends. At most `MOST_STATEMENT`
+    characters to either side; a statement cut short there only reads as holding less."""
+    lo, depth, start, i = max(0, s - MOST_STATEMENT), 0, s, s - 1
+    while i >= lo:
+        c = code[i]
+        if c in ")]}":
+            depth += 1
+        elif c in "([{":
+            if depth:
+                depth -= 1
+            elif c == "{" and _opens_block(code, i):
+                break
+            else:
+                start = i
+        elif not depth and (c == ";" or (c == ">" and i and code[i - 1] == "=")):
+            break
+        i -= 1
+    floor = i + 1
+    a = code.rfind("\n", 0, start) + 1
+    while a > floor:                # the line before ends in an operator, or this one begins with one
+        p = code.rfind("\n", 0, a - 1) + 1
+        if not (code[p:a - 1].rstrip(" \t~\\").endswith(GOES_ON) or code[a:a + 200].lstrip(" \t").startswith(COMES_ON)):
+            break
+        a = p
+    hi, depth, j = min(len(code), e + MOST_STATEMENT), 0, (start if start < s else e)
+    while j < hi:
+        c = code[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if not depth:
+                break
+            depth -= 1
+        elif not depth and c == ";":
+            break
+        elif not depth and c == "\n":
+            if not (code[code.rfind("\n", 0, j) + 1:j].rstrip(" \t~\\").endswith(GOES_ON)
+                    or code[j + 1:j + 200].lstrip(" \t").startswith(COMES_ON)):
+                break
+        j += 1
+    return max(a, floor), j
+
+
+def _asks(statement: str) -> bool:
+    """Whether a statement holds one thing against another: a comparison that is not one with nothing, a
+    membership test, or a call of a function named for checking (`CHECK_NAMED`, whole words of its last name)."""
+    text = SET_AT_ALL.sub(" ", statement)
+    if HOLDS_AGAINST.search(text) or (IS_AMONG.search(text) and not LOOPS_OVER.search(text)):
+        return True
+    return any(m.group(1) != "require" and CHECK_NAMED.search(segments(m.group(1))) for m in CALLED.finditer(text))
+
+
+def _several_secrets(name: str, js: bool) -> bool:
+    """Whether `name` reads a setting that holds several secrets (`config.PAD_TOKENS`, also with a call on it:
+    `process.env.PAD_TOKENS.split`). A plural is a list and no check by its name (`auth_word`); it stands in a
+    login's place where the request is held against it, like one secret (`_held_against`)."""
+    for read in (name, name.rpartition(".")[0]):
+        if read[-1:] in ("s", "S") and SETTING_READ.match(read) and auth_word(read[:-1], js):
+            return True
+    return False
+
+
+def _held_against(code: str, s: int, e: int) -> bool:
+    """Whether the setting read at code[s:e] is held against something of the request (`SETTING_READ`)."""
+    a, b = _statement(code, s, e)
+    if _asks(code[a:b]):
+        return True
+    m = KEPT_AS.match(code[a:s])
+    if not m:
+        return False
+    word = re.compile(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
+    for n, use in enumerate(word.finditer(code, b, min(len(code), b + MOST_AFTER))):
+        if n >= MOST_USES:
+            return True         # more uses than are read: the older reading stands
+        x, y = _statement(code, use.start(), use.end())
+        if _asks(code[x:y]):
+            return True
+    return False
+
+
 def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signature: str = "") -> tuple[str, str] | None:
     """What a handler's own lines say about checking the caller, read with strings, comments and request data
     blanked out. ("strong", evidence) for the framework's view of the caller (`request.user`), an auth word used
@@ -1025,17 +1160,32 @@ def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signatur
     name = own_name(signature)
     if name:      # the line that defines the handler: what it is called is not something it asks or calls
         raw = re.sub(rf"(?<![\w$.]){re.escape(name)}(?=\s*\()", lambda m: "_" * len(m.group(0)), raw, count=1)
-    chains = DATA_CHAIN.sub(_blank_data, code_only(raw, js))   # strings, comments (~), request data and what hangs off it (^)
+    # strings, comments (~), request data and what hangs off it (^); a call into the management side of a sign-in
+    # service asks nobody who is calling (`MANAGES_ACCOUNTS`) and is no name here
+    chains = DATA_CHAIN.sub(_blank_data, blank_managed(code_only(raw, js)))
     code = _blank_names(chains, signature)                 # ...and the names that hold it (all the same length)
     m = BODY_AUTH_SHAPED.search(code)
     if m:
         return "strong", f"handler mentions `{m.group(0).rstrip(':) ')}`"
+    settings = 0
     for m in IDENT.finditer(code):   # a name built from an auth word, used as a call, attribute or decorator
-        if not auth_word(m.group(0), js):
+        several = not auth_word(m.group(0), js)
+        if several and not _several_secrets(m.group(0), js):
             continue
         shape = _use_shape(code, m.start(), m.end())
         if shape:
             kind, ident = shape
+            read = ident
+            if kind == "call" and not auth_word(ident.rsplit(".", 1)[-1], js):
+                read = ident.rpartition(".")[0]         # `settings.API_TOKEN.get_secret_value()`, `.encode()`
+            if several or ((kind == "attribute" or read != ident) and SETTING_READ.match(read)):
+                if settings >= MOST_SETTINGS:
+                    if several:
+                        continue
+                else:
+                    settings += 1
+                    if not _held_against(code, m.start(), m.end()):
+                        continue    # the server's own secret, read and handed on: nobody was asked for it
             return "strong", f"handler calls `{ident}(...)`" if kind == "call" else f"handler mentions `{ident}`"
     weak = None
     for m in USER_LOOKUP.finditer(chains):   # the lookup's result variable is tested, so read it with names intact
@@ -1067,11 +1217,105 @@ ROUTE_DOC_KWARGS = re.compile(r"\b(?:response_model|response_class|responses|tag
                               r"response_model_exclude\w*)\s*=\s*(?:\[[^\]]*\]|\{[^}]*\}|[^,)]+)")
 
 
+class Calls(dict):
+    """`{caller: [callee, …]}`, and for the login check the lines each call into a library stands on (`lines`:
+    `(caller, callee)` -> lines of the caller's file) and the files it has read for them (`code`)."""
+    __slots__ = ("lines", "code")
+
+    def __init__(self):
+        super().__init__()
+        self.lines: dict = {}
+        self.code: dict = {}
+
+
 def call_adjacency(g: Graph) -> dict[str, list[str]]:
-    adj: dict[str, list[str]] = {}
+    adj = Calls()
     for e in g.call_edges():
         adj.setdefault(e.src, []).append(e.dst)
+        if e.lines and e.dst.startswith("ext:"):
+            adj.lines.setdefault((e.src, e.dst), []).extend(e.lines)
     return adj
+
+
+# The management side of a sign-in service: accounts made, changed and removed with the server's own key, for
+# whichever account the call is handed. Nobody is asked who is calling, so such a call is no sign of a login,
+# though it is a call into a library named for signing in. Three services, each by the way its own guide writes
+# the call: Supabase's admin API (`supabase.auth.admin.deleteUser(id)`, the same in Python), Clerk's backend client
+# (`clerkClient.users.updateUserMetadata(id, …)`; the client only made, `await clerkClient()`), Firebase's admin
+# library (`getAuth().setCustomUserClaims(uid, …)`, `admin.auth().deleteUser(uid)`, Python's
+# `auth.set_custom_user_claims(uid, …)`). Their other side, which does ask, is not here (`supabase.auth.getUser()`,
+# Clerk's `auth()`, `verifyIdToken`), and neither is a call that works only with the caller's own session
+# (`supabase.auth.updateUser`).
+_CLERK_PARTS = (r"(?:users|organizations|invitations|allowlistIdentifiers|emailAddresses|phoneNumbers|signInTokens|"
+                r"sessions)")
+_FIREBASE_CHANGES = (r"createUser|updateUser|deleteUser|deleteUsers|setCustomUserClaims|importUsers|"
+                     r"revokeRefreshTokens|createCustomToken|create_user|update_user|delete_user|delete_users|"
+                     r"set_custom_user_claims|import_users|revoke_refresh_tokens|create_custom_token")
+_FIREBASE_READS = (r"getUser|getUserByEmail|getUserByPhoneNumber|getUsers|listUsers|generatePasswordResetLink|"
+                   r"generateEmailVerificationLink|generateSignInWithEmailLink")
+MANAGES_ACCOUNTS = re.compile(
+    r"\.auth\.admin\.[A-Za-z_$][\w$]*"
+    r"|(?<![\w$])[\w$]{0,40}[cC]lerk[\w$]{0,40}(?:\s*\(\s*\))?\s*\)?\s*\." + _CLERK_PARTS +
+    r"\.(?!verify|authenticate)[A-Za-z_$][\w$]*"
+    r"|(?<![\w$.])[cC]lerkClient\s*\(\s*\)(?!\s*\)?\s*\.)"
+    r"|(?<![\w$])(?:getAuth|auth)\s*\([^()]{0,200}\)\s*\.(?:" + _FIREBASE_CHANGES + "|" + _FIREBASE_READS + r")(?![\w$])"
+    r"|(?<![\w$.])auth\.(?:" + _FIREBASE_CHANGES + r")(?![\w$])")
+# what hangs on Clerk's client once it is kept under a name of the code's own (`const client = await clerkClient()`)
+CLERK_PART = re.compile(r"(?i)clerk[\w$]*(?:\(\))?\." + _CLERK_PARTS + r"$")
+CLERK_CALL = re.compile(r"\." + _CLERK_PARTS + r"\.(?!verify|authenticate)[A-Za-z_$][\w$]*")
+MOST_NAME_BACK = 200        # characters of a name read back from such a call's first dot
+
+
+def _managed_spans(code: str, loose: bool = False) -> list[tuple[int, int]]:
+    """Where `code` calls the management side of a sign-in service: each call from the start of its name."""
+    out = []
+    for m in (*MANAGES_ACCOUNTS.finditer(code), *(CLERK_CALL.finditer(code) if loose else ())):
+        a = m.start()
+        low = max(0, a - MOST_NAME_BACK)
+        while a > low and (code[a - 1].isalnum() or code[a - 1] in "_$.)]"):
+            a -= 1
+        out.append((a, m.end()))
+    return out
+
+
+def blank_managed(code: str) -> str:
+    """`code` with every call into the management side of a sign-in service made no name at all."""
+    for a, b in _managed_spans(code):
+        code = code[:a] + "_" * (b - a) + code[b:]
+    return code
+
+
+def _only_manages(g: Graph, adj, u: str, v: str) -> bool:
+    """Whether every place the project's function `u` calls the library's `v` is a call into the management side
+    of a sign-in service (`MANAGES_ACCOUNTS`). Read from the lines the map holds for that call; where it holds none,
+    or the file cannot be read, the answer is no and the older reading stands."""
+    lines = getattr(adj, "lines", {}).get((u, v))
+    n = g.nodes.get(u)
+    if not lines or n is None or not n.file:
+        return False
+    if n.file not in adj.code:
+        try:
+            text = project_text(Path(g.repo_root) / n.file, g.repo_root)
+        except (OSError, UnicodeDecodeError, ValueError):
+            text = None
+        adj.code[n.file] = None if text is None else code_only(text, js=not n.file.endswith((".py", ".rb"))).split("\n")
+    rows = adj.code[n.file]
+    if rows is None:
+        return False
+    name = _func_name(g, v)
+    last = re.split(r"[./]", name.replace("()", ""))[-1]
+    if not last:
+        return False
+    word = re.compile(r"(?<![\w$])" + re.escape(last) + r"(?![\w$])")
+    for ln in lines:
+        if not 0 < ln <= len(rows):
+            return False
+        row = rows[ln - 1][:4000]
+        spans = _managed_spans(row, loose=bool(CLERK_PART.search(name)))
+        at = [m.start() for m in word.finditer(row)]
+        if not at or not all(any(a <= i < b for a, b in spans) for i in at):
+            return False
+    return True
 
 
 # npm packages that are a login check and nothing else: whatever they hand a route turns away a request that does
@@ -1223,6 +1467,9 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doub
                 if not _in_doubt(v, doubt) and _func_name(g, v).split("(")[0].rsplit(".", 1)[-1] not in skip and \
                         auth_word(_func_name(g, v),
                                   v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
+                    if v.startswith("ext:") and _only_manages(g, adj, u, v):
+                        seen.discard(v)     # accounts are changed here and nobody is asked: another caller may ask
+                        continue
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -1243,6 +1490,9 @@ def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, stop=No
                 seen.add(v)
                 name = _func_name(g, v)
                 if auth_word(name, v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
+                    if v.startswith("ext:") and _only_manages(g, adj, u, v):
+                        seen.discard(v)
+                        continue
                     out.append(name)
                 if stop is None or not stop(name):
                     nxt.append(v)
@@ -2287,8 +2537,17 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += localweb.loopback_cookies(repo) + localweb.keeps_pages(repo)
     from . import countlater        # a limit that is looked at before the work and counted after it
     findings += countlater.counted_later(g)
+    from . import balance           # a balance checked in one step and taken from in another
+    findings += balance.taken_apart(g, {(f["file"], f["line"]) for f in findings if f["rule"] == countlater.RULE})
     from . import sharedconn        # one database connection for every thread, used with no lock held
     findings += sharedconn.shared_connections(g)
+    from . import publicvalues      # a setting for the browser whose value is a secret, where its name says nothing
+    findings += publicvalues.public_values(
+        repo, said={(f["file"], f["snippet"]) for f in findings if f["rule"] == "LW-PUBLIC-SECRET"})
+    from . import clientpull        # a file that reads a secret setting, loaded with a file made for the browser
+    findings += clientpull.pulled(g)
+    from . import wholerecord       # a record sent back whole, with a secret field of its model in it
+    findings += wholerecord.sent_whole(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

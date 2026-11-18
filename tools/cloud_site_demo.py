@@ -68,6 +68,18 @@ def main() -> None:
         ids = re.findall(r"\[([0-9a-f]{12})\]", user)
         return (f"Start with [{ids[0]}]: a visitor can reach it. " if ids else "Lantern maps your app. ") + bad
 
+    # The GitHub screen lists the person's repositories: a stand-in answers here, so the demo asks nothing of GitHub
+    # (with --poison a description and a language carry the payload, which must stay text).
+    from lantern_cloud import ghapp
+
+    def your_repos(app, account, label, transport=None, api=None):
+        return {"connected": False, "repos": [
+            {"name": "octo/shop", "private": False, "description": "The shop sample " + bad, "language": "Python",
+             "pushed": "2026-11-16T10:00:00Z"},
+            {"name": "octo/notes", "private": True, "description": "", "language": bad or "TypeScript",
+             "pushed": "2026-11-15T10:00:00Z"}]}
+    ghapp.your_repos = your_repos
+
     app = create_app(s, transport=httpx.ASGITransport(app=gw), start_worker=False,
                      provider_for=lambda token: FixtureProvider(ask_answer))
     store = app.state.store

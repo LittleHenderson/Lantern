@@ -1,8 +1,10 @@
 """Cloud service, milestone 5: share links (off until the owner turns them on, revocable), deleting a run, deleting
 everything about a person, and the retention sweep (off by default: results are kept until the person deletes them)."""
 
+import json
 import re
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 
@@ -166,3 +168,61 @@ def test_retention_sweep_is_off_by_default_and_deletes_old_runs_when_set(done_ru
         store.db.commit()
     assert sweep(store, s.results_dir, 30) == [rid]
     assert store.run(rid) is None and not (Path(s.results_dir) / rid).exists()
+
+
+# ------------------------------------------------- the badge for a README and the page it links to (roadmap stage 6)
+def _line(page: str) -> str:
+    import html
+    return html.unescape(re.search(r"<pre class='line'><code>(.*?)</code></pre>", page, re.S).group(1))
+
+
+def test_a_shared_run_has_a_badge_for_a_readme_and_a_page_that_says_how_to_check_it(done_run):
+    cloud, gw, s, tok, rid = done_run
+    v = cloud.post(f"/v1/runs/{rid}/share", headers=bearer(tok)).json()
+    at = v["url"].rsplit("/", 1)[0]
+    assert v["check"] == at + "/check.html" and v["badge"] == at + "/badge.svg"
+    assert v["markdown"] == f"[![Lantern check]({at}/badge.svg)]({at}/check.html)"
+    assert cloud.get(f"/v1/runs/{rid}/share", headers=bearer(tok)).json() == v
+    page = stranger(cloud).get(path(v["check"]))
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
+    assert page.headers["x-robots-tag"] == "noindex" and page.headers["referrer-policy"] == "no-referrer"
+    assert "script" not in page.headers["content-security-policy"] and "<script" not in page.text
+    run = cloud.get(f"/v1/runs/{rid}", headers=bearer(tok)).json()
+    ev = json.loads((Path(s.results_dir) / rid / "evidence.json").read_text(encoding="utf-8"))
+    assert f"<code>{run['commit']}</code>" in page.text and ev["release"]["bound_to"]["code"]["sha256"][:12] in page.text
+    assert ev["release"]["decision"] in page.text and "that apply finished and covered everything" in page.text
+    line = _line(page.text)
+    assert line.startswith(f"git clone {LINK} lantern-check && cd lantern-check && git checkout {run['commit']} && ")
+    assert line.endswith(f" && lantern verify . --digest {ev['digest']} --offline")      # the run was made offline
+    assert stranger(cloud).get(path(v["badge"])).headers["content-type"].startswith("image/svg+xml")
+
+
+def test_the_line_on_a_shared_runs_page_gives_a_match_on_another_computer(done_run, origin, tmp_path, capsys):  # noqa: F811
+    """The check the website made, repeated as its page says: MATCH. The project is copied from the folder the
+    website's copy came from, and this Lantern stands in for the one the line installs."""
+    cloud, gw, s, tok, rid = done_run
+    v = cloud.post(f"/v1/runs/{rid}/share", headers=bearer(tok)).json()
+    line = _line(stranger(cloud).get(path(v["check"])).text)
+    commit = re.search(r"git checkout ([0-9a-f]{40}) ", line).group(1)
+    digest = re.search(r"--digest (sha256:[0-9a-f]{64})", line).group(1)
+    copy = tmp_path / "lantern-check"
+    subprocess.run(["git", "clone", "-q", str(origin), str(copy)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(copy), "checkout", "-q", commit], check=True, capture_output=True)
+    from lantern.cli import main
+    capsys.readouterr()
+    assert main(["verify", str(copy), "--digest", digest, "--offline"]) == 0, capsys.readouterr().out
+    assert "MATCH" in capsys.readouterr().out
+
+
+def test_taking_the_share_back_takes_the_badge_and_its_page_with_it(done_run):
+    cloud, gw, s, tok, rid = done_run
+    v = cloud.post(f"/v1/runs/{rid}/share", headers=bearer(tok)).json()
+    assert all(stranger(cloud).get(path(v[k])).status_code == 200 for k in ("check", "badge"))
+    assert cloud.delete(f"/v1/runs/{rid}/share", headers=bearer(tok)).json() == {"shared": False, "url": None}
+    for k in ("check", "badge"):
+        r = stranger(cloud).get(path(v[k]))
+        assert r.status_code == 404 and "This link is off" in r.text and r.headers["x-robots-tag"] == "noindex"
+    again = cloud.post(f"/v1/runs/{rid}/share", headers=bearer(tok)).json()
+    assert again["check"] != v["check"] and stranger(cloud).get(path(v["check"])).status_code == 404
+    assert stranger(cloud).get(path(again["check"])).status_code == 200
+    assert stranger(cloud).get(f"/s/{rid}/check.html").status_code == 404         # the run id is no share link

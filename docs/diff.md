@@ -28,7 +28,64 @@ result is a **change receipt**.
 
 Any other CI system uses the same command: `lantern diff origin/main...HEAD --format md` prints the text to post,
 and `change.json` holds what a pipeline can decide on (`counts`, `release.after.decision`). `lantern diff` itself
-posts nothing anywhere.
+posts nothing anywhere. `--require not-blocked` makes the command end with 1 when the change itself brings what
+blocks a release (the list is under "Before each push" below), and with 0 otherwise.
+
+## Before each push (`lantern hook install`)
+
+```bash
+lantern hook install        # in the repository: from now on every `git push` is checked first
+lantern hook status         # is the check on?
+lantern hook remove         # take it away again
+git push --no-verify        # push once without the check
+```
+
+`lantern hook install` writes git's `pre-push` hook. Before git sends anything, Lantern compares each commit being
+pushed with what the other side already has, by the same two checks as `lantern diff` (offline: no library is
+looked up), and **stops the push when the change itself brings what blocks a release**:
+
+* a critical or high finding that is new, that a page or route reaches only now, that is ranked critical or high
+  only now, or that is open again; a secret written into a file is such a finding;
+* a request the page still makes that a route answered before and none answers now (a broken link between page
+  and server);
+* a required part of the release decision that failed only with this change.
+
+What blocked the project before the push and still does is the project's, not the push's, and does not stop it: a
+project that was Blocked before can still push a change that adds nothing that blocks, and the hook says so. A
+finding accepted in the change with a written reason (`lantern accept`, a `# nosec` comment with a reason) does not
+stop it either, and neither does a new request that no route of this project answers (the server that answers it
+may be another project: `lantern workspace`).
+
+```
+lantern  checking the push of fault: 3f689e9a37ea after 20fd64a36696 (where it parted from origin/main)
+lantern  stopped: this push brings what blocks a release (0.8 s)
+lantern    - new critical finding B602 at shop/app.py:30 (subprocess call with shell=True identified, security issue.)
+lantern    - a request the page still makes that no route answers now: POST /backup (web/src/api.ts:11)
+lantern  read from the code (the tests are not run); the receipt, with what such a check cannot see: .lantern/push/fault/change.html
+lantern  To push once without this check: git push --no-verify
+```
+
+What a push is compared with: the commit the other side has, where this repository holds it. A new branch, or a
+commit this repository does not hold, is compared with the commit where it parted from the remote's main branch
+(`origin/HEAD`, else `origin/main`, else `origin/master`, as this repository last fetched them). The first push to an
+empty remote is compared with nothing, so a critical or high finding anywhere in it stops the push. Taking a branch
+away sends no code and is not checked. When Lantern cannot check a push (a commit it cannot copy, a results folder
+it will not write to), the push is stopped too, with the reason and the way round it.
+
+The receipt of each check is written to `.lantern/push/<branch>/` (`change.html`, `change.md`, `change.json`, and
+the two checks in `before/` and `after/`); that folder carries a `.gitignore` of its own, so git never offers it for
+a commit. On the sample projects a push is answered in under 1.5 seconds, a planted fault included
+(`bench/push_check_results.md`). A larger project takes two longer checks: on Lantern's own repository (793 files)
+a push took about 100 seconds. What each file reads as is kept between runs (`lantern cache`), so a file that did not
+change is not read again, but the scanners and the data-flow step look at the whole project on each side, and on a
+large project they are most of the time.
+
+The hook is yours. Lantern writes one only where no pre-push hook is (or where the one there is Lantern's own), and
+never replaces, changes or removes a hook it did not write, a link included: it prints the one line to add to yours
+instead. The hook it writes can be run and changed by you only, not by other users of the computer. Where git runs hooks from another folder (the setting `core.hooksPath`, which tools such as husky set),
+Lantern writes nothing and says so, with that line. The hook runs the Lantern that wrote it, with the Python that
+wrote it, and never a copy of Lantern in the project being pushed (the project's folder is not on its path). Nothing
+of the project is run, its tests included; the two checks read the code, as `lantern diff` does.
 
 ## What a receipt lists
 
@@ -58,9 +115,10 @@ Two versions that differ only in comments and spacing give a receipt that says n
 
 No model writes or ranks any line of a receipt, and a receipt never creates, closes or re-ranks a finding. It says
 what Lantern's map and scanners show on two checks, so the limits of those checks are its limits, and they are
-listed at its end: a scanner that did not finish on one side, a part of the release decision that only one side
-was checked for (the tests are not run on an earlier version), files of a commit that could not be copied, a
-submodule's code (which is not part of a commit). Two checks made by different versions of Lantern (a check
+listed at its end: a scanner that did not finish on one side, libraries not looked up (a check made offline, as
+each check before a push is: a library with a known problem that came with the change is not listed), a part of the
+release decision that only one side was checked for (the tests are not run on an earlier version), files of a commit
+that could not be copied, a submodule's code (which is not part of a commit). Two checks made by different versions of Lantern (a check
 handed over with `--base-results` may be an older one) can differ for that alone: the receipt names both versions,
 or says that a check does not name its own, and where the two name their findings in different ways it compares no
 finding at all. What a route shows about a login is read from names and shapes

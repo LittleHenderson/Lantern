@@ -69,6 +69,10 @@ def _part(g: Graph, repo, reader: str, prefix: str, add) -> dict:
 
 def _build_graph(repo: str | Path, typecheck: bool | None = None) -> Graph:
     g = Graph(str(Path(repo).resolve()))
+    from . import workspace
+    ws = workspace.record_for(repo)
+    if ws is not None:             # several projects as one map (`lantern workspace`): each reader knows where each
+        g.meta["workspace"] = workspace.describe(ws)     # project begins (`workspace.below`)
     py = _part(g, repo, "python", "py:", _python)
     py = {"files": py.get("files", 0), "lines": py.get("lines", 0)}
     js = _part(g, repo, "javascript", "js:", js_frontend.add_js)
@@ -134,6 +138,8 @@ def _build_graph(repo: str | Path, typecheck: bool | None = None) -> Graph:
     from . import typecheck as types
     if types.asked(typecheck):     # opt-in: where a call is still unresolved, what a type checker says of it
         types.run(g, Path(repo))
+    if ws is not None:             # several projects as one map (`lantern workspace`): what crosses between them
+        workspace.guard(g, ws)
     lanes.assign(g)
     calls.finish(g)   # one record per call site (Python and JS/TS), summarised in g.meta["calls"]
     return g

@@ -491,6 +491,29 @@ class App:
         job = self.jobs.start(p["id"], "clone", work)
         return {"job": job, "project": self.summary(p)}
 
+    def workspace_project(self, members, name=None) -> dict:
+        """Several folders or repository links read as one map (`lantern workspace`): the workspace is listed at once
+        under the name it will have, made in a job (links cloned, each project copied), then checked. What cannot be
+        one is refused before anything is listed (`workspace.plan`, a ValueError: 400); a workspace that was not made
+        is forgotten again."""
+        from . import workspace
+        name = workspace.plan(members, name if name not in (None, "") else None)
+        dest = workspace.folder_of(name)
+        p = self.store.add_project(dest)
+        privacy = self.store.settings().get("privacy", "full")
+
+        def work(log):
+            try:
+                workspace.make(members, name=name, log=log)
+            except Exception:
+                if workspace.record_for(dest) is None:     # no workspace of that name was made: forget the project
+                    self.store.remove_project(p["id"])
+                raise
+            return pipeline.analyze(dest, self.out(p), privacy, log=log)
+
+        job = self.jobs.start(p["id"], "workspace", work)
+        return {"job": job, "project": self.summary(p)}
+
     def provider_info(self) -> list[dict]:
         from .providers import DATA_NOTICES, gateway_url, load_token
         allowance = bool(load_token() and gateway_url())
@@ -664,6 +687,44 @@ def change_job(app, p: dict, repo: Path, out: Path, spec: str | None = None, off
         return {"compared": True, "line": got["line"], "same": r["same"] is True, "counts": r["counts"],
                 "release": r["release"]["words"]}
     return app.jobs.start(p["id"], "change", work)
+
+
+MOST_PLAN_SAID = 12     # lines of a kind the app is handed about a written behaviour plan; the file holds all of them
+
+
+def plan_job(app, p: dict, repo: Path, force: bool = False) -> dict:
+    """Start "Behaviour plan" for a project (the button, `POST /api/projects/<id>/behaviourplan`): a first
+    `lantern-behaviour.json` is written from the code (`behave_init.write`, as `lantern behave --init` does).
+    Nothing of the project is run, and a plan that is there is left alone unless `force`. The job's result:
+    `{"written": True, "file", "line", "next", "checks", "requests", "read_first", "look_at", "left_out"}` (the
+    three lists cut at `MOST_PLAN_SAID`, with the whole counts in `counts`), or `{"written": False, "exists",
+    "why"}` with Lantern's sentence. Every sentence is made here, so the page prints none of its own."""
+    from . import behave, behave_init
+
+    def work(log):
+        log("plan    reading the code; nothing of the project is run")
+        try:
+            made = behave_init.write(repo, force=force)
+        except results.Refused as e:
+            log(f"plan    not written: {e}")
+            return {"written": False, "exists": False, "why": str(e)}
+        if not made["written"]:
+            log(f"plan    not written: {made['why_not']}")
+            return {"written": False, "exists": bool(made["exists"]), "why": made["why_not"]}
+        plan = made["plan"]
+        counts = {"read_first": len(made["notes"]), "look_at": len(made["review"]), "left_out": len(made["left_out"])}
+        line = (f"{behave.PLAN_NAME} holds {len(plan['checks'])} checks ({made['cases']} requests) for "
+                f"{plan['app']['asgi']}. {counts['look_at']} of them are marked to look at first, and "
+                f"{counts['left_out']} routes were left out, each with the reason.")
+        log(f"plan    wrote {line}")
+        return {"written": True, "exists": bool(made["exists"]), "file": behave.PLAN_NAME, "line": line,
+                "next": "Read the file and change what does not fit your app. The command lantern behave, run on this "
+                        "folder in a terminal, then starts your app in the sandbox and tries each case.",
+                "checks": len(plan["checks"]), "requests": made["cases"], "counts": counts,
+                "read_first": made["notes"][:MOST_PLAN_SAID],
+                "look_at": [f"{r['check']}: {r['why']}" for r in made["review"][:MOST_PLAN_SAID]],
+                "left_out": [f"{r['route']}: {r['why']}" for r in made["left_out"][:MOST_PLAN_SAID]]}
+    return app.jobs.start(p["id"], "plan", work)
 
 
 def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
@@ -996,7 +1057,7 @@ def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> t
     is built from the scoped bundle, so a hidden layer never reaches the browser, and the files that describe the
     whole app (the evidence report, the raw JSON and, since 2026-11-15, the badge, which shows the whole app's
     score and its critical and high counts) are refused."""
-    from .evidence import badge_svg, render_html
+    from .evidence import badge_record, badge_svg, render_html
     from .report import read_bundle, render
     if name == "change.html":
         return _change_page(out, lanes)
@@ -1021,15 +1082,28 @@ def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> t
         if name == "badge.svg":
             rd = _load(f) or {}
             ev = _load(f.with_name("evidence.json")) or {}
+            rd = rd if isinstance(rd, dict) else {}
             grade = rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else "?"
-            # only the fields the badge shows are read back from the (plantable) file, and each is coerced
-            now = (ev.get("scorecard") or {}).get("now") if isinstance(ev.get("scorecard"), dict) else {}
-            safe = {"header": {"commit": re.sub(r"[^0-9a-f]", "", str((ev.get("header") or {}).get("commit") or ""))[:40] or None,
-                               "generated_at": _str((ev.get("header") or {}).get("generated_at"))},
-                    "scorecard": {"now": {k: _int((now or {}).get(k)) or 0 for k in ("critical", "high")} if now else {}}}
-            return 200, badge_svg(_int(rd.get("score")) or 0, grade, safe), "image/svg+xml", {
+            # only what the badge shows is read back from the (plantable) file, each part in its own shape
+            # (`evidence.badge_record`): the decision and the scanners that did not finish too, since 2026-11-17
+            return 200, badge_svg(_int(rd.get("score")) or 0, grade, badge_record(ev)), "image/svg+xml", {
                 "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
         return 200, json.dumps(_load(f)), "application/json", {}
+    except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
+        return (409, f"<p>This result file can't be read ({html.escape(type(exc).__name__)}). Analyze the project again.</p>",
+                "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+
+
+def check_page(out: Path, link: str | None = None) -> tuple[int, str, str, dict]:
+    """(status, body, content type, headers) for the page a shared badge links to (`evidence.check_html`, the
+    website's `/s/<slug>/check.html`): rebuilt from `evidence.json` like every result page, with no script, and with
+    the link the project was cloned from as the service knows it, never as the results folder says it."""
+    from .evidence import CHECK_POLICY, check_html
+    ev = _load(out / "evidence.json")
+    if not isinstance(ev, dict):
+        return 404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)}
+    try:
+        return 200, check_html(ev, link), "text/html; charset=utf-8", {"Content-Security-Policy": CHECK_POLICY}
     except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
         return (409, f"<p>This result file can't be read ({html.escape(type(exc).__name__)}). Analyze the project again.</p>",
                 "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
@@ -1294,6 +1368,8 @@ class Handler(BaseHTTPRequestHandler):
             job = app.jobs.stop(m.group(1))   # ValueError (400) for a job that cannot be stopped part-way
             return self._json(job) if job else self._err(404, "no such job")
         if path == "/api/projects" and method == "POST":
+            if "paths" in b:            # several folders or links: one map of them (`lantern workspace`)
+                return self._json(app.workspace_project(b["paths"], b.get("name")), 202)
             raw = str(b.get("path") or "").strip()
             if not raw:
                 raise ValueError("give a folder path or a repository link")
@@ -1402,6 +1478,12 @@ class Handler(BaseHTTPRequestHandler):
             # "What changed": the last commit compared with the files as they are now, or the two versions named
             spec = change_range(b.get("range"))         # ValueError: answered with 400 and the sentence
             return self._json(change_job(app, p, repo, out, spec), 202)
+        if action == "behaviourplan":
+            # "Behaviour plan": a first lantern-behaviour.json written from the code; nothing of the project is run
+            force = b.get("force")
+            if not (force is None or force is True or force is False):
+                raise ValueError("force is true or false")
+            return self._json(plan_job(app, p, repo, force is True), 202)
         if action == "cmd":
             # The terminal drawer: Lantern commands only, run through the same code paths as the buttons.
             try:

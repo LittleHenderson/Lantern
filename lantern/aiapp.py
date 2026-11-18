@@ -10,8 +10,25 @@ Everything here is deterministic pattern work on the graph and the source, like 
                         app: one script in a loop spends the owner's money. HIGH when neither protection is visible,
                         MEDIUM when only rate limiting is missing. Heuristic (`tool_confidence: LOW`): it reuses the
                         login check's name-based reading and the rate-limit library search.
-  * `LA-MODEL-OUTPUT-TO-TOOL` — inside one function, text the model wrote is later run as a shell command, SQL,
-                        `eval`, or fetched as a URL. HIGH: a prompt injection becomes code execution.
+  * `LA-MODEL-OUTPUT-TO-TOOL` — text the model wrote is run as a shell command, SQL, `eval`, fetched as a URL or
+                        opened as a file. HIGH: a prompt injection becomes code execution. Two readings: the older
+                        one inside one function, by the names of the lines (`model_output_sinks`), and the data-flow
+                        step's (`from_flows`, roadmap of 2026-11-14, stage 5), which follows what a model call gives
+                        back across functions and files, and into the input of a tool call the model asked for. One
+                        line is one finding: a flow that ends on a line the older reading flagged is written on it.
+  * `LA-UNSAFE-MCP-TOOL` — a function a library is told is a tool a model may call (an MCP server's tool, LangChain's,
+                        CrewAI's, smolagents', OpenAI's Agents SDK's, Pydantic AI's, the AI SDK's) runs what the model
+                        puts into it as a shell command, a query or code, or writes, changes or removes the file it
+                        names, with no person asked first. HIGH, heuristic: whoever can put words into what the model
+                        reads chooses the arguments. Made from the data-flow step's flows with the origin "tool"
+                        (`from_tool_flows`; the tools are found by `flow.Engine.find_tools`).
+  * `LA-UNBOUNDED-AGENT-LOOP` — an agent loop makes a paid model call in each round, and only the model's answer ends
+                        it: a `while` loop, `for (;;)`, `do … while`, a `for` over an endless iterator, or a function
+                        that calls itself, with no count, clock or budget read where it decides to go on and no person
+                        asked in each round; also a library's own agent loop whose limit is switched off (LangChain's
+                        `max_iterations=None`, the AI SDK's `stopWhen` made only of `hasToolCall`). MEDIUM,
+                        heuristic: a model that keeps asking, or words put into what it reads, run up the bill. Read by
+                        `lantern/agentloop.py` from the data-flow step's program (`from_agent_loops`).
   * `LA-PROMPT-FROM-INPUT` — visitor text goes straight into a model call in a function that also has tool-like
                         sinks. LOW, informational: normal for a chat app, but the system prompt and tools must
                         assume the text is hostile.
@@ -371,6 +388,217 @@ def model_output_sinks(g: Graph, calls: list[dict], cache: dict[str, list[str]])
                       "restrict what tools can do, and never let the model's text choose a target by itself."),
                 snippet=lines[call_line - 1].strip()[:200] if 0 < call_line <= len(lines) else ""))
     return out
+
+
+def from_flows(shaped: dict, by_file: dict, lines_for=None, safe=frozenset()) -> tuple[list[dict], int]:
+    """`LA-MODEL-OUTPUT-TO-TOOL` from the data-flow step (`flowscan.run`): `shaped` holds, for each (kind of action,
+    file, line), the flows of text a model wrote that end there (`flow_rules.MODEL_CALL`, `flowscan._shape`). One line
+    is one finding. A flow that ends on the very line the older reading flagged for the same action is written on that
+    finding, whose words stay; so is one that ends near such a finding that no flow ends on exactly and that the
+    data-flow step did not see checked (`safe`: one statement over several lines, where the older reading names the
+    line the model's text meets the action and the engine the line the call starts on). A finding that already shows
+    what a request sent reaching its line keeps that flow, which says more. Any other line gets a finding of its own.
+    Returns (the new findings, how many lines were written on older ones). Heuristic like the older reading: the call
+    is known as a model's by the library's name for it, and what the prompt holds is not known."""
+    from .flowscan import NEAR
+    from .flow_rules import MODEL_RULE, MODEL_WHAT
+    from .websec import _finding
+    titles = {cls: f"Text the model wrote is used as {what}" for cls, what in MODEL_WHAT.items()}
+
+    def older(file: str, cls: str) -> list[dict]:
+        return [f for f in by_file.get(file, ()) if f.get("rule") == MODEL_RULE and f.get("title") == titles[cls]
+                and f.get("line")]
+
+    made: list[dict] = []
+    on_older = 0
+    left = []
+    exact: set[int] = set()
+    for (cls, file, line), fl in sorted(shaped.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
+        at = [f for f in older(file, cls) if f["line"] == line]
+        if not at:
+            left.append(((cls, file, line), fl))
+            continue
+        exact.add(id(at[0]))
+        if at[0].get("flow") is None:       # a request's own flow written there by the step before stays
+            at[0]["flow"] = fl
+        on_older += 1
+    for (cls, file, line), fl in left:
+        near = [f for f in older(file, cls) if abs(f["line"] - line) <= NEAR and id(f) not in exact
+                and f.get("flow") is None and (file, f["line"], cls) not in safe]
+        if near:
+            min(near, key=lambda f: (abs(f["line"] - line), f["line"]))["flow"] = fl
+            on_older += 1
+            continue
+        what = MODEL_WHAT[cls]
+        src = fl["source"]
+        text = ""
+        if lines_for is not None:
+            lines = lines_for(file)
+            text = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+        files = len({s["file"] for s in fl["steps"]})
+        more = (f"Text a model wrote is followed to this line from {src['file']}:{src['line']} ({src['what']}) in "
+                f"{len(fl['steps'])} steps" + (f" through {files} files" if files > 1 else "") +
+                (f", and {fl['count'] - 1} more model call(s) reach it too" if fl["count"] > 1 else "") +
+                f", and used as {what} here. Anything that can put words into the prompt (a visitor's message, a page "
+                "or a file the model is asked to read) can steer that text: a prompt injection. Check it against a "
+                "list the code holds, or never let the model's text choose a command, a query, an address or a file "
+                "by itself: pass fields the code chooses. Heuristic: the call is known as a model's by the library's "
+                "name for it, and Lantern does not know what the prompt holds.")
+        f = _finding(MODEL_RULE, titles[cls], "HIGH", file, line, category="code", conf="LOW", cwe=94, more=more,
+                     snippet=text[:200], fixed_rank="medium" if fl["confidence"] == "LOW" else None)
+        f["tool"] = "lantern-flow"
+        f["flow"] = fl
+        made.append(f)
+        by_file.setdefault(file, []).append(f)
+    return made, on_older
+
+
+def made_safe(findings: list[dict], safe: set) -> int:
+    """The older reading's `LA-MODEL-OUTPUT-TO-TOOL` findings (inside one function, by the names of the lines) on a
+    line where the data-flow step saw the model's text arrive made safe for that action on every way (`safe`:
+    (file, line, kind of action), `flow.Engine.model_safe`) and none arrive unchecked (no flow is written on the
+    finding): they are taken out of `findings`. Only on that very line: a finding near it may be another action, and a
+    finding is never taken out on a guess. How many: the return value, for the record."""
+    from .flow_rules import MODEL_RULE, MODEL_WHAT
+    if not safe:
+        return 0
+    kinds = {f"Text the model wrote is used as {what}": cls for cls, what in MODEL_WHAT.items()}
+    drop = []
+    for f in findings:
+        cls = kinds.get(f.get("title")) if f.get("rule") == MODEL_RULE and not f.get("flow") else None
+        if cls and f.get("line") and (f["file"], f["line"], cls) in safe:
+            drop.append(f)
+    if drop:
+        findings[:] = [f for f in findings if not any(f is x for x in drop)]
+    return len(drop)
+
+
+def tool_asked(fl: dict, asks: dict) -> bool:
+    """Whether a person is asked before the action of a flow from a tool's input: a question (`flow_rules.ASKS`, read
+    by the name of the call) in the same function as a step of the way, on a line before that step."""
+    for s in fl.get("steps") or ():
+        for first, end, at in asks.get(s.get("file"), ()):
+            if first <= at < s.get("line", 0) <= end:
+                return True
+    return False
+
+
+def from_tool_flows(groups: dict, by_file: dict, lines_for=None, engine=None) -> tuple[list[dict], dict]:
+    """`LA-UNSAFE-MCP-TOOL` from the data-flow step (`flowscan.run`): `groups` holds, for each (kind of action, file,
+    line), the flows that start at what a model puts into a function it is handed as a tool (`flow.Engine.find_tools`,
+    origin "tool"). One line is one finding. Not made: a flow to a file that is only read (`flow.WRITES`), a flow where
+    a person is asked first (the library's approval setting where the tool is made, `Tool.approval`, or a question in
+    the code before the action, `tool_asked`), and a line already found as text the model wrote reaching it
+    (`LA-MODEL-OUTPUT-TO-TOOL`: one problem, one finding). Returns (the findings, the record's counts)."""
+    from .flow_rules import CWE, MODEL_RULE, MODEL_WHAT, TOOL_RULE, TOOL_WHAT
+    from .flowscan import _shape
+    from .websec import _finding
+    tools = getattr(engine, "tools", None) or {}
+    sources = getattr(engine, "tool_sources", None) or {}
+    asks = getattr(engine, "asks", None) or {}
+    said = {f"Text the model wrote is used as {what}": cls for cls, what in MODEL_WHAT.items()}
+    rec = {"tools": len(tools), "flows": 0, "findings": 0, "approval_asked": 0, "reads_only": 0,
+           "on_model_findings": 0}
+    made: list[dict] = []
+    for (cls, file, line), group in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][2], kv[0][0])):
+        rec["flows"] += len(group)
+        if cls == "path":
+            reads = [fl for fl in group if not fl.get("writes")]
+            rec["reads_only"] += len(reads)
+            group = [fl for fl in group if fl.get("writes")]
+        left = []
+        for fl in group:
+            src = fl["source"]
+            tool = sources.get((src["file"], src["line"], src["what"]))
+            if (tool is not None and tool.approval) or tool_asked(fl, asks):
+                rec["approval_asked"] += 1
+            else:
+                left.append(fl)
+        if not left:
+            continue
+        if any(f.get("rule") == MODEL_RULE and f.get("line") == line and said.get(f.get("title")) == cls
+               for f in by_file.get(file, ())):
+            rec["on_model_findings"] += len(left)
+            continue
+        fl = _shape(left)
+        what = TOOL_WHAT[cls]
+        src = fl["source"]
+        text = ""
+        if lines_for is not None:
+            lines = lines_for(file)
+            text = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+        files = len({s["file"] for s in fl["steps"]})
+        more = (f"What the model puts into a tool is followed to this line from {src['file']}:{src['line']} "
+                f"({src['what']}) in {len(fl['steps'])} steps" + (f" through {files} files" if files > 1 else "") +
+                (f", and {fl['count'] - 1} more tool input(s) reach it too" if fl["count"] > 1 else "") +
+                f", and used as {what} here. The model chooses a tool's arguments, and anything that can put words "
+                "into what it reads (a visitor's message, a web page, a file, another tool's answer) can choose them "
+                "through it. Keep the tool to what it is for: check the value against a list the code holds, keep a "
+                "path inside a folder the code names, hand values to the database as parameters, or have a person "
+                "approve each call (the library's approval setting, or a question before the action). Heuristic: a "
+                "tool is known by the library's own name for making one, a person's approval by the name of the call "
+                "that asks, and Lantern does not know what the model reads.")
+        f = _finding(TOOL_RULE, f"A tool handed to the model uses what it is given as {what}", "HIGH", file, line,
+                     category="code", conf="LOW", cwe=CWE[cls], more=more, snippet=text[:200],
+                     fixed_rank="medium" if fl["confidence"] == "LOW" else None)
+        f["tool"] = "lantern-flow"
+        f["flow"] = fl
+        made.append(f)
+        by_file.setdefault(file, []).append(f)
+        rec["findings"] += 1
+    return made, rec
+
+
+def from_agent_loops(loops: list[dict], lines_for=None) -> list[dict]:
+    """`LA-UNBOUNDED-AGENT-LOOP` from the data-flow step (`flowscan.run`): one finding for each agent loop
+    `agentloop.find` read (a loop or a function that calls itself, with a paid call in each round, that only the
+    model's answer ends; a library's own agent loop with its limit switched off). A heuristic, ranked medium: a cost
+    with no end, not a way in."""
+    from .flow_rules import LOOP_RULE
+    from .websec import _finding
+    made: list[dict] = []
+    for lp in loops:
+        file, line = lp["file"], lp["line"]
+        text = ""
+        if lines_for is not None:
+            lines = lines_for(file)
+            text = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+        calls = "; ".join(f"`{p['what']}` at {p['file']}:{p['line']}" +
+                          (f", which reaches a paid call at {p['through']}" if p.get("through") else "")
+                          for p in lp["paid"])
+        ends = "; ".join(f"`{c['what']}` on line {c['line']}" for c in lp["ends"])
+        heuristic = (" Heuristic: a paid call is known by the library's own name for it, the model's answer by "
+                     "Lantern following it, and a limit by a counter the loop changes, a clock or a budget's words "
+                     "read where it decides to go on; a limit kept outside the code is not seen.")
+        if lp["kind"] == "loop":
+            title = "A loop calls the AI model again and again, and only the model's answer stops it"
+            more = (f"Each round of this loop makes a paid model call ({calls}), and only the model's answer ends it "
+                    f"({ends}): no count of rounds, no clock and no budget is read where it decides to go on. A model "
+                    "that keeps asking for tools, or words put into what it reads that tell it to, keep it going, and "
+                    "every round is billed. Fix: give the loop a fixed number of rounds (`for step in "
+                    "range(MAX_STEPS)`, `for (let i = 0; i < MAX_STEPS; i++)`), stop it after a time or a spend in "
+                    "tokens, and set a spend limit on the provider's dashboard." + heuristic)
+        elif lp["kind"] == "itself":
+            title = "A function that calls the AI model calls itself again, and only the model's answer stops it"
+            more = (f"This function makes a paid model call ({calls}) and calls itself again here unless the model's "
+                    f"answer ends it ({ends}): no depth it counts, no clock and no budget stops it. A model that keeps "
+                    "asking for tools, or words put into what it reads that tell it to, keep it going, and every round "
+                    "is billed. Fix: hand it the depth (`depth + 1`) and stop at a fixed number, stop it after a time "
+                    "or a spend in tokens, and set a spend limit on the provider's dashboard." + heuristic)
+        else:
+            title = "An AI agent's own limit on its rounds is switched off"
+            more = (f"`{lp['what']}` runs the library's own agent loop with its limit on rounds switched off "
+                    f"({lp['setting']}): it goes on for as long as the model asks for tools, and every round is "
+                    "billed. Fix: keep a limit (LangChain stops after 15 rounds unless `max_iterations` is changed, "
+                    "and `max_execution_time` stops it after a time; the AI SDK stops at `stepCountIs(n)`, which can "
+                    "stand beside `hasToolCall`), and set a spend limit on the provider's dashboard. Heuristic: read "
+                    "from the call's own settings; a limit set somewhere else is not seen.")
+        f = _finding(LOOP_RULE, title, "MEDIUM", file, line, category="code", conf="LOW", cwe=834, more=more,
+                     snippet=text[:200], fixed_rank="medium")
+        f["tool"] = "lantern-flow"
+        f["agent_loop"] = {k: lp[k] for k in ("kind", "paid", "ends", "setting") if k in lp}
+        made.append(f)
+    return made
 
 
 def _said(value) -> str:

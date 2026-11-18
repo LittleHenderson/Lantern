@@ -266,6 +266,50 @@ def test_built_in_secret_scan_counts_files_it_could_not_read(tmp_path, monkeypat
     assert s["state"] == "partial" and s["errors"] == ["b.py: Permission denied"] and s["scope"]["files"] == 2
 
 
+def test_a_keys_place_kept_by_filler_is_no_secret_and_a_key_beside_it_still_is(tmp_path):
+    """An example file keeps a key's place with filler (`sk_live_` and 24 times `x`): the right start for the
+    pattern, and nothing but one filler character after it. Until 2026-11-16 the built-in patterns called that a
+    possible secret, which ranks critical. Filler is only what cannot be a key: every letter and digit after the
+    fixed start is `x`, or every one is `0`, or the text is the one example key a provider prints in its own
+    guide. Anything else that fits a pattern is still a finding, the safe side: one other character among the
+    filler, a body of another repeated letter, a key that looks made up but is no filler. The record counts what
+    was passed over."""
+    x24, real = "x" * 24, "a1B2c3D4" * 3
+    _write(tmp_path, {
+        ".env.example": "\n".join([
+            "STRIPE_SECRET_KEY=" + "sk_live_" + x24,
+            "GITHUB_TOKEN=" + "ghp_" + "X" * 36,
+            "AWS_ACCESS_KEY_ID=" + "AKIA" + "X" * 16,
+            "AWS_OTHER_KEY_ID=" + "AKIA" + "0" * 16,
+            "SLACK_BOT_TOKEN=" + "xoxb-" + "xxxxxxxxxxxx-xxxxxxxxxxxx",
+            "ANTHROPIC_API_KEY=" + "sk-ant-" + "xxxx-xxxx_" * 3,
+            "OPENAI_API_KEY=" + "sk-" + "x" * 40,
+            "AWS_GUIDE_KEY_ID=" + "AKIA" + "IOSFODNN7" + "EXAMPLE",
+            ""]),
+        ".env": "\n".join([
+            "STRIPE_SECRET_KEY=" + "sk_live_" + real,                       # line 1: a key
+            "OLD_KEY=" + "sk_live_" + "x" * 23 + "7",                       # line 2: one other character among the filler
+            "TEST_KEY=" + "sk_live_" + "a" * 24,                            # line 3: another repeated letter stays a finding
+            "COUNT_KEY=" + "sk_live_" + "1234567890" * 3,                   # line 4: looks made up, is no filler
+            "BOTH=" + "sk_live_" + x24 + " " + "sk_live_" + real,           # line 5: filler and a key on one line
+            "AWS_ACCESS_KEY_ID=" + "AKIA" + "IOSFODNN7" + "EXAMPLF",        # line 6: not the guide's key
+            ""]),
+        "config.py": "KEY = '" + "sk_live_" + x24 + "'\n"})                 # filler is filler in a code file too
+    found, record = security._builtin_secrets(tmp_path)
+    assert sorted((f["file"], f["line"], f["rule"]) for f in found) == [
+        (".env", 1, "stripe-live-key"), (".env", 2, "stripe-live-key"), (".env", 3, "stripe-live-key"),
+        (".env", 4, "stripe-live-key"), (".env", 5, "stripe-live-key"), (".env", 6, "aws-access-key")]
+    assert record["state"] == "ok" and record["scope"] == {"files": 3, "placeholders": 10}, record
+    assert record["version"] == security.SECRETS_VERSION == "3"
+    assert not any("xxx" in json.dumps(f) for f in found)
+
+
+def test_with_no_filler_the_built_in_scans_record_is_as_it_was(tmp_path):
+    _write(tmp_path, {"config.py": "KEY = '" + "sk_live_" + "a1B2c3D4" * 3 + "'\n"})
+    found, record = security._builtin_secrets(tmp_path)
+    assert len(found) == 1 and record["scope"] == {"files": 1}
+
+
 # ---------------------------------------------------------------- gitleaks: settings of Lantern's own, a folder of its own
 #
 # gitleaks takes what it is to look for, and what it is to leave out, from more places than its command line. So
@@ -674,6 +718,111 @@ def test_pip_audit_skipped_packages_make_the_run_partial_and_keep_findings(tmp_p
     _fake_tool(monkeypatch, _run(1, json.dumps(data)))
     f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
     assert len(f) == 1 and info["state"] == "partial" and info["errors"] == ["leftpad: Dependency not found on PyPI and could not be audited: leftpad (1.0)"]
+
+
+# What pip-audit writes when the service it asks fails it. pip-audit 2.10.1 catches neither a read timeout nor a cut
+# connection, so its traceback ends with the name `requests` gives the error; a connection it could not make it says
+# in a sentence of its own, after its logger's prefix (pip_audit/_service/pypi.py, pip_audit/_cli.py).
+PYPI_SLOW = ("Traceback (most recent call last):\n"
+             "  File \"/usr/lib/python3/site-packages/requests/adapters.py\", line 713, in send\n"
+             "    raise ReadTimeout(e, request=request)\n"
+             "requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='pypi.org', port=443): Read timed out. "
+             "(read timeout=15)\n")
+PYPI_CUT = ("Traceback (most recent call last):\n"
+            "requests.exceptions.ConnectionError: ('Connection aborted.', ConnectionResetError(104, "
+            "'Connection reset by peer'))\n")
+PYPI_BUSY = ("Traceback (most recent call last):\n"
+             "requests.exceptions.HTTPError: 503 Server Error: Service Unavailable for url: "
+             "https://pypi.org/pypi/flask/2.0.1/json\n\n"
+             "The above exception was the direct cause of the following exception:\n\n"
+             "Traceback (most recent call last):\n"
+             "pip_audit._service.interface.ServiceError\n")
+PYPI_UNREACHED = ("ERROR:pip_audit._cli:Could not connect to PyPI's vulnerability feed\n"
+                  "ERROR:pip_audit._cli:Tip: your network may be blocking this service. Try another service with "
+                  "`-s SERVICE`\n")
+
+
+def _tries(monkeypatch, *runs, step=1.0):
+    """pip-audit answers with each of `runs` in turn (the last one again after that); the clock moves `step`
+    seconds a try, and a pause before another try is written down and not waited for. Returns the time limit each
+    try was given, and the pauses."""
+    limits, pauses, now = [], [], [0.0]
+
+    def run_tool(cmd, *, timeout, cwd=None, env=None):
+        limits.append(timeout)
+        now[0] += step
+        return runs[min(len(limits), len(runs)) - 1]
+
+    def pause(seconds):
+        pauses.append(seconds)
+        now[0] += seconds
+    monkeypatch.setattr(scanresult, "run_tool", run_tool)
+    monkeypatch.setattr(depaudit, "_clock", lambda: now[0], raising=False)
+    monkeypatch.setattr(depaudit, "_pause", pause, raising=False)
+    return limits, pauses
+
+
+@pytest.mark.parametrize("stderr,words", [
+    (PYPI_SLOW, "pypi.org did not answer in time"), (PYPI_CUT, "the connection to pypi.org failed"),
+    (PYPI_BUSY, "pypi.org answered with an error"), (PYPI_UNREACHED, "the connection to pypi.org failed"),
+])
+def test_pip_audit_asks_again_when_the_service_it_asks_failed_it(tmp_path, monkeypatch, stderr, words):
+    """One slow answer of pypi.org ended pip-audit, which does not ask again itself, and Lantern's check of itself
+    read as not done (CI, 2026-11-18: "Read timed out. (read timeout=15)"). When the service pip-audit asks failed
+    it, pip-audit is started again, at most PIP_AUDIT_TRIES times in all and within the audit's time limit, and the
+    record says how often and why; what the last try found is the audit's."""
+    _pip_repo(tmp_path, monkeypatch)
+    limits, pauses = _tries(monkeypatch, _run(1, "", stderr), _run(1, json.dumps(PIP_OK)))
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert len(limits) == 2 and len(f) == 1 and info["state"] == "ok", (limits, info)
+    assert pauses == [depaudit.PIP_AUDIT_PAUSES[0]] and info["tries"] == 2 and info["asked_again"] == [words], info
+    assert words in info["status"] and info["exit_code"] == 1 and info["duration_ms"] == 24, info
+    # it failed every time: the audit is not done, as before, and says how often it asked
+    limits, pauses = _tries(monkeypatch, _run(1, "", stderr))
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert f == [] and info["state"] == "failed" and len(limits) == depaudit.PIP_AUDIT_TRIES == info["tries"], info
+    assert info["asked_again"] == [words] * (depaudit.PIP_AUDIT_TRIES - 1), info
+    assert pauses == list(depaudit.PIP_AUDIT_PAUSES) and scanresult.tail(stderr) in info["why"], info
+    assert words in info["status"], info
+
+
+@pytest.mark.parametrize("run", [
+    _run(1, "", "ERROR:pip_audit._cli:invalid requirements input: flask==2.0.1\n"),       # a file it refuses
+    _run(1, "", "ERROR:pip_audit._cli:invalid requirements input: requests.exceptions.ReadTimeout==1\n"),   # a name
+    _run(1, "", "requests.exceptions.SSLError: HTTPSConnectionPool(host='pypi.org', port=443): certificate verify "
+                "failed\n"),
+    _run(1, "", "requests.exceptions.ProxyError: HTTPSConnectionPool(host='pypi.org', port=443): Unable to connect "
+                "to proxy\n"),
+    _run(1, "", "requests.exceptions.HTTPError: 403 Client Error: Forbidden for url: "
+                "https://pypi.org/pypi/flask/2.0.1/json\n"),
+    _run(2, "", PYPI_SLOW),                                     # not the way pip-audit ends
+    _run(1, json.dumps(PIP_OK), PYPI_SLOW),                     # it answered: what it found is the audit's
+    _run(None, "", "", timed_out=True),                         # the audit's own time limit
+    _run(None, error="OSError: the run was stopped; no helper program is started for it any more"),
+])
+def test_pip_audit_is_not_asked_again_for_anything_else(tmp_path, monkeypatch, run):
+    """The twins: a failure another try would not change (a file pip-audit refuses, also one whose package is
+    named like such an error, a certificate, a proxy that refuses, a refusal of the service), an end that is not
+    pip-audit's, an answer, the audit's own time limit and a run that was stopped are each the audit's one try,
+    with the record as before."""
+    _pip_repo(tmp_path, monkeypatch)
+    limits, pauses = _tries(monkeypatch, run)
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert len(limits) == 1 and pauses == [] and "tries" not in info and "asked_again" not in info, info
+
+
+def test_pip_audit_asks_again_only_while_the_audit_has_time_left(tmp_path, monkeypatch):
+    """Each try gets what is left of PIP_AUDIT_TIMEOUT, and none starts with less than PIP_AUDIT_AT_LEAST seconds of
+    it: a service that is slow every time does not make the audit take longer than its limit."""
+    _pip_repo(tmp_path, monkeypatch)
+    limits, pauses = _tries(monkeypatch, _run(1, "", PYPI_SLOW),
+                            step=depaudit.PIP_AUDIT_TIMEOUT - depaudit.PIP_AUDIT_AT_LEAST)
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert len(limits) == 1 and pauses == [] and info["state"] == "failed" and "tries" not in info, (limits, info)
+    limits, pauses = _tries(monkeypatch, _run(1, "", PYPI_SLOW), _run(1, json.dumps(PIP_OK)), step=100.0)
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert info["state"] == "ok" and limits == [depaudit.PIP_AUDIT_TIMEOUT, depaudit.PIP_AUDIT_TIMEOUT - 100.0
+                                                  - depaudit.PIP_AUDIT_PAUSES[0]], (limits, info)
 
 
 # ---------------------------------------------------------------- npm audit

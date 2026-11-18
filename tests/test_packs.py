@@ -63,6 +63,23 @@ def test_pack_not_applied_without_django(tmp_path):
     assert not [f for f in scan(g, offline=True)["findings"] if f["rule"].startswith("LP-")]
 
 
+def test_the_pack_applies_however_the_librarys_name_is_written(tmp_path):
+    """`pip freeze` writes `Django==5.1`, with a capital, and a store reads a library's name the same whatever its
+    case. Until 2026-11-16 the pack's word was looked for letter for letter: a project whose list of libraries had
+    that one line and no other that says "django" had none of its routes read, and no check that starts at a route
+    said anything about it."""
+    for i, line in enumerate(("Django==5.1\n", "DJANGO>=5\n", "django==5.1\n")):
+        root = tmp_path / str(i)
+        _write(root, {**DJANGO_APP, "requirements.txt": line})
+        g = build_graph(root)
+        assert g.meta["packs"]["packs"] == ["django"], line
+        assert "shop.views.list_items" in {n.qualname for n in g.entry_points()}, line
+    # ... and a list that names another library is still none
+    other = tmp_path / "other"
+    _write(other, {**DJANGO_APP, "requirements.txt": "Flask==3.0\n"})
+    assert "packs" not in build_graph(other).meta
+
+
 def test_project_pack_is_heuristic_and_validated(tmp_path, monkeypatch):
     monkeypatch.setenv("LANTERN_HOME", str(tmp_path / "home"))
     _write(tmp_path, {

@@ -161,14 +161,41 @@ def discover(repo: Path) -> list[Path]:
     return out
 
 
-def module_path(repo: Path) -> str | None:
+def module_path(repo: Path, folder: str = "") -> str | None:
+    """The module the `go.mod` in `folder` (a path from the top of `repo`, "" for the top) declares, or None."""
     try:
-        for line in project_text(repo / "go.mod", repo).splitlines():
+        for line in project_text(repo.joinpath(*([folder] if folder else []), "go.mod"), repo).splitlines():
             if line.startswith("module "):
-                return line.split(None, 1)[1].strip()
+                return line.split(None, 1)[1].strip() or None
     except OSError:
         pass
     return None
+
+
+class _Modules:
+    """Which module a folder's Go files belong to: the one the nearest `go.mod` at or above the folder declares, as
+    the go tool reads it (2026-11-17; until then only a `go.mod` at the top of the repository was read, and a module
+    in a folder of its own, `backend/` beside `frontend/`, linked none of its own imports)."""
+
+    def __init__(self, repo: Path):
+        self.repo, self.seen = repo, {}
+
+    def of(self, folder: str) -> tuple[str, str] | None:
+        """(the module's folder, its path) for Go files in `folder`, or None when no go.mod above declares one."""
+        chain, at = [], folder
+        while at not in self.seen:             # up from the folder, one level at a time, until a go.mod or the top
+            mod = module_path(self.repo, at)
+            if mod is not None:
+                self.seen[at] = (at, mod)
+                break
+            chain.append(at)
+            if not at:
+                break
+            at = at.rpartition("/")[0]
+        found = self.seen.get(at)              # None: the top was reached with no go.mod on the way
+        for c in chain:
+            self.seen[c] = found
+        return self.seen[folder]
 
 
 def pkg_id(pkg: str, local: str | None = None) -> str:
@@ -741,6 +768,7 @@ def add_go(g: Graph, repo: str | Path) -> dict:
     if not paths:
         return {"files": 0, "lines": 0}
     module = module_path(repo)
+    modules = _Modules(repo)
     parser = Parser(GO)
     pkgs: dict[str, GoPackage] = {}
     files: list[tuple[GoFile, TSNode]] = []
@@ -762,7 +790,13 @@ def add_go(g: Graph, repo: str | Path) -> dict:
                          else next((c for c in pc.children if c.type == "package_identifier"), None) if pc is not None else None) or "main"
         d = Path(rel).parent.as_posix()
         d = "" if d == "." else d
-        pkg_path = (f"{module}/{d}" if d else module) if module else (d or pkg_name)
+        found = modules.of(d)
+        if found is not None:          # the import path: the module's path, then the folder below the module's own
+            top, mod = found
+            below = d[len(top):].lstrip("/") if top else d
+            pkg_path = f"{mod}/{below}" if below else mod
+        else:
+            pkg_path = d or pkg_name
         if rel.endswith("_test.go") and pkg_name.endswith("_test"):
             pkg_path += "_test"
         f = GoFile(rel=rel, pkg_dir=d, pkg_name=pkg_name, lines=lines, is_test=rel.endswith("_test.go"))

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 
-from . import flow, scanresult
+from . import datamodel, flow, scanresult, tenantscope, webhooks
 from . import flow_rules as R
 from .graph import route_words
 
@@ -23,6 +23,16 @@ CONF_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 SEV_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 LANGS = ("python", "typescript/javascript")      # as `engine.build_graph` names them in `g.meta["languages"]`
 RAW_PLACE = "LW-XSS-RAW"                         # websec.template_rules: a template prints a value without escaping
+# where a flow starts that is not what a request sent: text a model wrote, and what a model puts into a function it
+# is handed as a tool. Such flows are the AI pack's (`aiapp.from_flows`, `LA-MODEL-OUTPUT-TO-TOOL`;
+# `aiapp.from_tool_flows`, `LA-UNSAFE-MCP-TOOL`), never another tool's finding or an `LT-` one
+MODEL_ORIGINS = frozenset({"model", "tool"})
+
+
+def from_request(fl: dict | None) -> bool:
+    """Whether a flow starts at what a request sent (and not at text a model wrote): only such a flow says that a
+    caller's own text reaches the line (`security.rank`, `case.py`)."""
+    return bool(fl) and fl.get("origin", "server") not in MODEL_ORIGINS
 
 
 def _same(f: dict, cls: str) -> bool:
@@ -56,7 +66,7 @@ def _shape(group: list[dict]) -> dict:
     main = group[0]
     others = [dict(fl["source"]) for fl in group[1:6]]
     return {"class": main["class"], "confidence": main["confidence"], "severity": R.SEVERITY[main["class"]],
-            "source": dict(main["source"]),
+            "origin": main.get("origin", "server"), "source": dict(main["source"]),
             "sink": {"file": main["file"], "line": main["line"], "what": main["sink"]},
             "steps": [dict(s) for s in main["steps"]], "others": others, "count": len(group)}
 
@@ -148,9 +158,23 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
     if named_open:
         findings[:] = [f for f in findings if not any(f is x for x in named_open)]
     sender_checked = _senders(g, findings, res, paid_calls)
+    # a route a provider calls that writes stored data with no check of who sent the message (`lantern/webhooks.py`).
+    # One problem is one finding: a provider cannot sign in, so on such a route the finding that says "no login"
+    # points to the wrong fix, and the webhook finding, which names the writes, stands in its place: the routes it
+    # stands for are counted in the record (`webhook_for_no_login`)
+    hooks, hook_routes = webhooks.unsigned(g, res, lines_for)
+    hook_places = {(f["file"], f["line"]) for f in hooks}
+    stood_for = {(f.get("file"), f.get("line")) for f in findings
+                 if f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in hook_places}
+    if stood_for:
+        findings[:] = [f for f in findings
+                       if not (f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in stood_for)]
     groups: dict[tuple, list[dict]] = {}
+    model: dict[tuple, list[dict]] = {}     # text a model wrote, followed to an action: the AI pack's own findings
+    tools: dict[tuple, list[dict]] = {}     # what a model puts into a tool, followed to an action: the AI pack's too
     for fl in res.flows:
-        groups.setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
+        where = groups if from_request(fl) else tools if fl.get("origin") == "tool" else model
+        where.setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
     by_file: dict[str, list[dict]] = {}
     for f in findings:
         if f.get("file"):
@@ -194,6 +218,21 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         f["flow"] = shaped
         out.append(f)
         by_file.setdefault(file, []).append(f)
+    from .aiapp import from_flows, from_tool_flows, made_safe
+    made, on_older = from_flows({k: _shape(v) for k, v in model.items()}, by_file, lines_for,
+                                res.engine.model_safe)
+    out.extend(made)
+    # a tool handed to a model that runs, asks the database, or writes or removes a file with what it is given
+    tool_made, tool_text = from_tool_flows(tools, by_file, lines_for, res.engine)
+    out.extend(tool_made)
+    # an agent loop that makes a paid model call in each round and that only the model's answer ends
+    from .agentloop import find as agent_loops
+    from .aiapp import from_agent_loops
+    loops, loop_rec = agent_loops(res.engine)
+    out.extend(from_agent_loops(loops, lines_for))
+    # the older reading of that rule, inside one function by the names of its lines, on a line where this step saw the
+    # model's text arrive made safe on every way (checked against a list of the code's own, made a number): not kept
+    checked = made_safe(findings, res.engine.model_safe)
     _raw_places(findings, res)
     # who may reach what, route by route: only where the route shows that someone has to be signed in (a route with
     # no login at all is LW-AUTH-MISSING's business, and "another person's record" means nothing there)
@@ -221,7 +260,9 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         if not a.get("login"):
             if not sign or sign[0] != "strong":
                 f = _open_route(a, n, sign, findings, src, let_on)
-                if f is not None:
+                if f is not None and (f["file"], f["line"]) in hook_places:
+                    stood_for.add((f["file"], f["line"]))
+                elif f is not None:
                     out.append(f)
                     lets_on += let_on
                 continue
@@ -247,14 +288,32 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
         from .websec import missing_auth
         have = {(f.get("file"), f.get("line")) for f in [*findings, *out] if f.get("rule") == "LW-AUTH-MISSING"}
         for f in missing_auth(g, only=res.caught, doubt=res.soft):
-            if (f["file"], f["line"]) not in have:
+            if (f["file"], f["line"]) in hook_places:
+                stood_for.add((f["file"], f["line"]))
+            elif (f["file"], f["line"]) not in have:
                 f["tool"] = "lantern-flow"
                 out.append(f)
                 lets_on += 1
+    models = None       # what the project's model files say of whose a record is (`lantern/tenantscope.py`)
     for (file, line), place in sorted(owned.items()):
-        out.append(_owner(file, line, place, lines_for(file) if lines_for is not None else []))
+        src = lines_for(file) if lines_for is not None else []
+        if models is None:
+            models = datamodel.of(g.repo_root)
+        got = tenantscope.on(src, line, models)
+        if got is None:         # no model of the project is named on the line: the finding as it always was
+            out.append(_owner(file, line, place, src))
+            continue
+        m, whose, all_nobodys = got
+        changes = any(r.get("change") or r.get("act") or r.get("late") for r in place["records"])
+        f = _owner(file, line, place, src, model_says=tenantscope.words(m, whose, changes),
+                   no_owner=tenantscope.nobodys(whose))
+        f["owned"] = whose
+        if all_nobodys and not changes:     # nobody's record, only read: low, with the place in the model file
+            f["fixed_rank"], f["fixed_why"] = "low", tenantscope.low_why(m)
+        out.append(f)
     for _place, c in sorted(claims.items()):
         out.append(_client_role(c, lines_for(c["file"]) if lines_for is not None else []))
+    out.extend(hooks)       # the webhook findings, read before the routes above (`hook_places`)
     st = res.stats
     notes = []
     if st.get("skipped_files"):
@@ -264,10 +323,24 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
     if st.get("stopped_early"):
         notes.append("the time limit was reached before every function was read")
     fields = {"version": VERSION, "findings": len(out), "duration_ms": int((time.perf_counter() - t0) * 1000),
-              "scope": {"files": st.get("files", 0), "functions": st.get("functions", 0), "flows": len(res.flows),
+              "scope": {"files": st.get("files", 0), "functions": st.get("functions", 0),
+                        # what a request sent
+                        "flows": len(res.flows) - sum(len(v) for v in model.values()) -
+                        sum(len(v) for v in tools.values()),
                         "on_other_findings": attached, "not_followed_further": st.get("stopped", 0),
                         "login_read_from_code": len(named_open),
                         "token_check_lets_on": lets_on, "sender_checked": sender_checked}}
+    if hook_routes:     # routes taken for a provider's webhook that write stored data: what LW-UNSIGNED-WEBHOOK read
+        fields["scope"]["webhook_routes"] = hook_routes
+    if model or checked:    # text a model wrote, followed to a command, a query, `eval`, an address or a file
+        fields["scope"]["model_text"] = {"flows": sum(len(v) for v in model.values()), "findings": len(made),
+                                         "on_older_findings": on_older, "checked_by_code": checked}
+    if tool_text["tools"]:      # functions a model is handed as tools, and what their inputs were followed to
+        fields["scope"]["tool_text"] = tool_text
+    if loop_rec["paid_calls"] or loop_rec["findings"]:      # paid model calls, and the loops that make one each round
+        fields["scope"]["agent_loops"] = loop_rec
+    if stood_for:       # ... and the routes whose "no login" finding a webhook finding stands for
+        fields["scope"]["webhook_for_no_login"] = len(stood_for)
     if notes:
         rec = scanresult.record("lantern-flow", "partial", "; ".join(notes), errors=res.errors[:20], **fields)
     else:
@@ -301,12 +374,13 @@ def _client_role(c: dict, src: list[str]) -> dict:
     return f
 
 
-def _owner(file: str, line: int, place: dict, src: list[str]) -> dict:
+def _owner(file: str, line: int, place: dict, src: list[str], model_says: str = "", no_owner: bool = False) -> dict:
     """Another person's record (LT-AUTHZ-OWNER, a heuristic ranked medium): one finding for the line a record is
     reached on by an id from the request, with the routes that reach it and compare no owner. That line is where the
     owner has to be asked for, and one service function five routes use is one place to fix. `late`: every route
     does ask whose the record is, but only after this line, where a record is changed or something is done that
-    cannot be taken back (`flow.Engine.acted`)."""
+    cannot be taken back (`flow.Engine.acted`). `model_says`: what the project's data model says of whose the record
+    is (`lantern/tenantscope.py`); `no_owner`: it names none, so the finding does not ask for one."""
     from .websec import _finding
     recs, routes = place["records"], sorted(place["routes"])
     many = len(routes) > 1
@@ -318,11 +392,16 @@ def _owner(file: str, line: int, place: dict, src: list[str]) -> dict:
     more = "Heuristic. " + (
         "The route asks whose the record is (or for a role) only after this line: whoever is turned away has "
         "already had it done. " if late else
+        "" if no_owner else
         "This is the line the record is reached on: the place to ask for the owner as well as the id, or to compare "
         "the owner of what comes back. ")
+    if model_says:
+        more += model_says + " "
     if many:
         more += f"Reached this way by {listed}. "
-    more += "A route that makes that comparison before this line is not listed."
+    if late or not no_owner:
+        more += "A route that makes that comparison before this line is not listed."
+    more = more.strip()
     f = _finding(R.RULE["record"], title, R.SEVERITY["record"], file, line, conf="LOW", cwe=R.CWE["record"],
                  snippet=src[line - 1].strip() if 0 < line <= len(src) else "", fixed_rank=R.FIXED_RANK["record"],
                  more=more)
@@ -428,6 +507,7 @@ def raised_severity(f: dict) -> str:
     line and that kind is graver (a query built from request data is high whatever the pattern alone was rated)."""
     sev = f["tool_severity"]
     fl = f.get("flow")
-    if fl and fl.get("confidence") != "LOW" and SEV_ORDER.get(fl.get("severity"), 0) > SEV_ORDER.get(sev, 0):
+    if from_request(fl) and fl.get("confidence") != "LOW" and \
+            SEV_ORDER.get(fl.get("severity"), 0) > SEV_ORDER.get(sev, 0):
         return fl["severity"]
     return sev

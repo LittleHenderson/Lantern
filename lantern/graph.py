@@ -129,6 +129,10 @@ class Graph:
         # followed led (file -> {specifier: file})
         self.unresolved_at: dict[str, tuple[str, bool]] = {}
         self.js_imports: dict[str, dict[str, str]] = {}
+        # JS/TS: the files of the project loaded with each file (file -> {file: line}), and the files that say
+        # `import "server-only"` (js_frontend._loaded_with; read by clientpull.py; not saved with the map)
+        self.js_pulls: dict[str, dict[str, int]] = {}
+        self.js_server_only: set[str] = set()
         self.meta: dict = {}
 
     # ---- nodes ----
