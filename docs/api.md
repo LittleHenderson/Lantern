@@ -567,7 +567,7 @@ have no exact released version to look up: a range, a branch, a link or a folder
 a `package.json`, `composer.json` or `Gemfile` names for the shipped app where no lock file beside it says which
 version is installed, so none of them could be looked up) with `unlocked_examples` (the first five, as
 `<file>: <name>`), `other_locks` (npm-audit: up to ten folders whose versions are in a pnpm, yarn or bun lock file,
-which Lantern does not read yet; written also on a record that ends `ok` for the folders it did check), and `not_read` (how many parts of the dependency files are no package
+which Lantern does not read yet; written also on a record that ends `ok` for the folders it did check), for pip-audit `tries` and `asked_again` where it was started more than once (`tries`: how many times; `asked_again`: for each try after the first, what failed before it, in the words of the status: `pypi.org did not answer in time`, `the connection to pypi.org failed`, `pypi.org answered with an error`; `exit_code` is the last try's, `duration_ms` the time of all of them), and `not_read` (how many parts of the dependency files are no package
 name and version, or no dependency file at all: a list where a table belongs, a number where a name belongs, a file
 that is not valid TOML or JSON, a pipe, a file over 32 MB). With `not_read` the state is `partial` and `errors` names
 the first 20, each as `<file>: <what>` on one line of printable ASCII of at most 200 characters (of a path over

@@ -9,8 +9,13 @@ env:
   # every skipped test with its reason.
   LANTERN_TESTS_COMPLETE: required
 jobs:
+  # Every job and every step that runs tests has a time limit, in this order: a test that runs past 15 minutes has
+  # every thread say where it waits (pyproject.toml), the no-network runner lists what a run past its deadline still
+  # runs and ends it, the step's limit, the job's (tests/test_time_limits.py). On 2026-11-17 a run of the tests printed
+  # 89% and then nothing for 2 h 39 min, until it was cancelled by hand: GitHub's six hours were the only limit.
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 280
     strategy:
       matrix:
         python: ["3.11", "3.12", "3.13"]
@@ -58,6 +63,7 @@ jobs:
           echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
           echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
       - name: Tests, measuring how much of the code they run (coverage; the build fails under 85%)
+        timeout-minutes: 110
         # The tests run without a network: tools/netless.py gives the run one that holds nothing but this computer's
         # own address, and has the operating system write down every address any program of the run tries. Anything
         # tried outside this computer fails the step (result 4) even when every test passed. LANTERN_TESTS_NETLESS
@@ -70,13 +76,15 @@ jobs:
         # must say that its tests started it, with its version and the way it was handed a project. The same for
         # the two type checkers installed above: their rule and the two places Lantern is told to find them are on
         # that line, the rule is looked for among the run's rules, and the run's own words must name both versions.
+        # The runner gives the tests 100 minutes (runs of 2026-11-17 took 48 to 62): past them it lists every process of the run,
+        # thread by thread, asks the tests to end (pytest then says where it stood) and ends what is left (result 7).
         env:
           LANTERN_TESTS_NETLESS: required
         run: |
           set -o pipefail   # the run is piped into tee: without this the step would pass whatever the tests did
           sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" "LANTERN_TESTS_NETLESS=$LANTERN_TESTS_NETLESS" "LANTERN_TESTS_GITLEAKS=$LANTERN_TESTS_GITLEAKS" \
             "LANTERN_TESTS_TYPECHECK=$LANTERN_TESTS_TYPECHECK" "LANTERN_TYPESCRIPT=$LANTERN_TYPESCRIPT" "LANTERN_PYRIGHT=$LANTERN_PYRIGHT" \
-            python tools/netless.py --watch "$RUNNER_TEMP/network.json" -- \
+            python tools/netless.py --watch "$RUNNER_TEMP/network.json" --deadline 100 -- \
             python -m pytest -q -rs --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required.*LANTERN_TESTS_TYPECHECK=required' pytest.log || { echo "::error::The rules this step sets did not reach the tests: the last lines of the run do not name all three"; exit 1; }
           grep '^programs these tests started' pytest.log || true   # which npm the tests met: what npm asks differs by version, and this line is far up in the log
@@ -87,9 +95,10 @@ jobs:
         run: |
           { echo "### Coverage (Python ${{ matrix.python }})"; echo '```'; grep -E '^(TOTAL|Required|FAIL|rules of this run|programs these tests started)' pytest.log || true; echo '```'
             echo "### Network during the tests (Python ${{ matrix.python }})"; echo '```'
-            python -c "import json, sys; d = json.load(open(sys.argv[1])); print(sum(e['count'] for e in d['outside']), 'attempts to reach outside this computer;', d['connections_on_this_computer'], 'connections stayed on it'); [print(' ', e['count'], 'x', e['kind'], e['address'], e['port'], 'by:', e['program']) for e in d['outside']]" "$RUNNER_TEMP/network.json" || echo "no record was written"
+            python -c "import json, sys; d = json.load(open(sys.argv[1])); print(sum(e['count'] for e in d['outside']), 'attempts to reach outside this computer;', d['connections_on_this_computer'], 'connections stayed on it'); [print(' ', e['count'], 'x', e['kind'], e['address'], e['port'], 'by:', e['program']) for e in d['outside']]; print('the recorder saw the tests to their end:', {True: 'yes', False: 'no', None: 'nothing was recorded'}.get(d.get('command_end_recorded'), '?'), '| past the deadline:', 'yes, ' + str(d.get('ended_at_deadline')) if d.get('past_deadline') else 'no')" "$RUNNER_TEMP/network.json" || echo "no record was written"
             echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: The tests of the isolation itself, a second time as root (the pass above skips four of them, and names them)
+        timeout-minutes: 20
         # Four tests of tests/test_netguard.py cannot run in the pass above: two need root (there the tests run as the
         # ordinary user again), one starts the no-network runner, which cannot be started inside itself without root,
         # and one needs a way out for the refusal to show, which that pass does not have. Until 2026-11-10 three of
@@ -107,6 +116,7 @@ jobs:
             python -m pytest -q -rs -p no:cacheprovider tests/test_netguard.py | tee "$RUNNER_TEMP/second-pass.log"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/second-pass.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
       - name: The tests of a run's own network, a second time where an ordinary user may make one (in the pass above only Docker's container had one)
+        timeout-minutes: 20
         # A project's tests get a network of their own in the sandbox (lantern/_jail.py, 2026-11-13). Root makes it
         # directly, an ordinary user through a user namespace, and GitHub's Linux machines refuse an ordinary user
         # that (the first pass of commit 9e6696f said so: "this system does not let the tests have a network of
@@ -138,12 +148,14 @@ jobs:
         run: python tools/self_readiness.py /tmp/self/readiness.json
       - name: Audit package checks (tools/audit.sh)
         if: matrix.python == '3.13'
+        timeout-minutes: 100
         run: bash tools/audit.sh
 
   lint:
     # Mistakes that are not bugs yet (undefined names, unused variables, likely-bug patterns), and every library
     # Lantern ships with has a licence that allows it.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -162,6 +174,7 @@ jobs:
     # The free allowance testers get by default: the live gateway must answer. Prints its health (version and
     # model, no counters) to the job summary.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: curl the live gateway's health check
         run: |
@@ -181,6 +194,7 @@ jobs:
     # Cloud mode's server image (cloud/Dockerfile, built from the repository root) builds, starts as a non-root
     # user, and answers its health check with the engine inside.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -212,6 +226,7 @@ jobs:
   windows:
     # Stock Windows settings: the system code page, not UTF-8, and backslash paths.
     runs-on: windows-latest
+    timeout-minutes: 130
     env:
       PYTHONUTF8: "0"
     steps:
@@ -249,6 +264,7 @@ jobs:
           echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
           echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
       - run: python -m pytest -q -rs
+        timeout-minutes: 100
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
         shell: bash
@@ -269,6 +285,7 @@ jobs:
     # Lantern's own tests, each beside its twins; how gitleaks is started, with the real program; and the type-aware
     # pass, with the two real type checkers (tests/test_typecheck.py, the whole file: `-k` takes it by its name).
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -314,6 +331,7 @@ jobs:
           echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
           echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
       - name: The guards' tests of a name in an address, the tests of how gitleaks is started, and the tests of the type-aware pass
+        timeout-minutes: 20
         run: |
           python -m pytest -q -rs tests/test_sandbox_guards.py tests/test_sandbox.py tests/test_netguard.py tests/test_scanners.py tests/test_typecheck.py -k "name_in_an_address or twins_a_number_this_computer or who_an_address_is or who_this_computer_is or asked_the_older_ways or handed_straight_to_a_socket or socket_class_of_the_tests_own or twins_this_computer_by_name or number_outside_is_still or gitleaks or test_typecheck"
 
@@ -322,6 +340,7 @@ jobs:
     # Pinned to Ubuntu 24.04: `ubuntu-latest` moved to 26.04 on 2026-11-05 and Playwright 1.48's browser packages
     # (libicu74, libvpx9, libx264-164) are not in it yet; the same image also runs Tesseract several times slower.
     runs-on: ubuntu-24.04
+    timeout-minutes: 130
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -338,6 +357,7 @@ jobs:
       - name: Tesseract, so the live-app smoke can check a screenshot's text is read
         run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
       - run: LANTERN_BROWSERS="firefox webkit" bash tools/audit.sh --browser
+        timeout-minutes: 100
 
   install:
     # What a tester does: one pip command into a clean venv (no extras), then the first three commands.
@@ -346,6 +366,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash

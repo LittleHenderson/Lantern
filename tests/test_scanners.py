@@ -720,6 +720,111 @@ def test_pip_audit_skipped_packages_make_the_run_partial_and_keep_findings(tmp_p
     assert len(f) == 1 and info["state"] == "partial" and info["errors"] == ["leftpad: Dependency not found on PyPI and could not be audited: leftpad (1.0)"]
 
 
+# What pip-audit writes when the service it asks fails it. pip-audit 2.10.1 catches neither a read timeout nor a cut
+# connection, so its traceback ends with the name `requests` gives the error; a connection it could not make it says
+# in a sentence of its own, after its logger's prefix (pip_audit/_service/pypi.py, pip_audit/_cli.py).
+PYPI_SLOW = ("Traceback (most recent call last):\n"
+             "  File \"/usr/lib/python3/site-packages/requests/adapters.py\", line 713, in send\n"
+             "    raise ReadTimeout(e, request=request)\n"
+             "requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='pypi.org', port=443): Read timed out. "
+             "(read timeout=15)\n")
+PYPI_CUT = ("Traceback (most recent call last):\n"
+            "requests.exceptions.ConnectionError: ('Connection aborted.', ConnectionResetError(104, "
+            "'Connection reset by peer'))\n")
+PYPI_BUSY = ("Traceback (most recent call last):\n"
+             "requests.exceptions.HTTPError: 503 Server Error: Service Unavailable for url: "
+             "https://pypi.org/pypi/flask/2.0.1/json\n\n"
+             "The above exception was the direct cause of the following exception:\n\n"
+             "Traceback (most recent call last):\n"
+             "pip_audit._service.interface.ServiceError\n")
+PYPI_UNREACHED = ("ERROR:pip_audit._cli:Could not connect to PyPI's vulnerability feed\n"
+                  "ERROR:pip_audit._cli:Tip: your network may be blocking this service. Try another service with "
+                  "`-s SERVICE`\n")
+
+
+def _tries(monkeypatch, *runs, step=1.0):
+    """pip-audit answers with each of `runs` in turn (the last one again after that); the clock moves `step`
+    seconds a try, and a pause before another try is written down and not waited for. Returns the time limit each
+    try was given, and the pauses."""
+    limits, pauses, now = [], [], [0.0]
+
+    def run_tool(cmd, *, timeout, cwd=None, env=None):
+        limits.append(timeout)
+        now[0] += step
+        return runs[min(len(limits), len(runs)) - 1]
+
+    def pause(seconds):
+        pauses.append(seconds)
+        now[0] += seconds
+    monkeypatch.setattr(scanresult, "run_tool", run_tool)
+    monkeypatch.setattr(depaudit, "_clock", lambda: now[0], raising=False)
+    monkeypatch.setattr(depaudit, "_pause", pause, raising=False)
+    return limits, pauses
+
+
+@pytest.mark.parametrize("stderr,words", [
+    (PYPI_SLOW, "pypi.org did not answer in time"), (PYPI_CUT, "the connection to pypi.org failed"),
+    (PYPI_BUSY, "pypi.org answered with an error"), (PYPI_UNREACHED, "the connection to pypi.org failed"),
+])
+def test_pip_audit_asks_again_when_the_service_it_asks_failed_it(tmp_path, monkeypatch, stderr, words):
+    """One slow answer of pypi.org ended pip-audit, which does not ask again itself, and Lantern's check of itself
+    read as not done (CI, 2026-11-18: "Read timed out. (read timeout=15)"). When the service pip-audit asks failed
+    it, pip-audit is started again, at most PIP_AUDIT_TRIES times in all and within the audit's time limit, and the
+    record says how often and why; what the last try found is the audit's."""
+    _pip_repo(tmp_path, monkeypatch)
+    limits, pauses = _tries(monkeypatch, _run(1, "", stderr), _run(1, json.dumps(PIP_OK)))
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert len(limits) == 2 and len(f) == 1 and info["state"] == "ok", (limits, info)
+    assert pauses == [depaudit.PIP_AUDIT_PAUSES[0]] and info["tries"] == 2 and info["asked_again"] == [words], info
+    assert words in info["status"] and info["exit_code"] == 1 and info["duration_ms"] == 24, info
+    # it failed every time: the audit is not done, as before, and says how often it asked
+    limits, pauses = _tries(monkeypatch, _run(1, "", stderr))
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert f == [] and info["state"] == "failed" and len(limits) == depaudit.PIP_AUDIT_TRIES == info["tries"], info
+    assert info["asked_again"] == [words] * (depaudit.PIP_AUDIT_TRIES - 1), info
+    assert pauses == list(depaudit.PIP_AUDIT_PAUSES) and scanresult.tail(stderr) in info["why"], info
+    assert words in info["status"], info
+
+
+@pytest.mark.parametrize("run", [
+    _run(1, "", "ERROR:pip_audit._cli:invalid requirements input: flask==2.0.1\n"),       # a file it refuses
+    _run(1, "", "ERROR:pip_audit._cli:invalid requirements input: requests.exceptions.ReadTimeout==1\n"),   # a name
+    _run(1, "", "requests.exceptions.SSLError: HTTPSConnectionPool(host='pypi.org', port=443): certificate verify "
+                "failed\n"),
+    _run(1, "", "requests.exceptions.ProxyError: HTTPSConnectionPool(host='pypi.org', port=443): Unable to connect "
+                "to proxy\n"),
+    _run(1, "", "requests.exceptions.HTTPError: 403 Client Error: Forbidden for url: "
+                "https://pypi.org/pypi/flask/2.0.1/json\n"),
+    _run(2, "", PYPI_SLOW),                                     # not the way pip-audit ends
+    _run(1, json.dumps(PIP_OK), PYPI_SLOW),                     # it answered: what it found is the audit's
+    _run(None, "", "", timed_out=True),                         # the audit's own time limit
+    _run(None, error="OSError: the run was stopped; no helper program is started for it any more"),
+])
+def test_pip_audit_is_not_asked_again_for_anything_else(tmp_path, monkeypatch, run):
+    """The twins: a failure another try would not change (a file pip-audit refuses, also one whose package is
+    named like such an error, a certificate, a proxy that refuses, a refusal of the service), an end that is not
+    pip-audit's, an answer, the audit's own time limit and a run that was stopped are each the audit's one try,
+    with the record as before."""
+    _pip_repo(tmp_path, monkeypatch)
+    limits, pauses = _tries(monkeypatch, run)
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert len(limits) == 1 and pauses == [] and "tries" not in info and "asked_again" not in info, info
+
+
+def test_pip_audit_asks_again_only_while_the_audit_has_time_left(tmp_path, monkeypatch):
+    """Each try gets what is left of PIP_AUDIT_TIMEOUT, and none starts with less than PIP_AUDIT_AT_LEAST seconds of
+    it: a service that is slow every time does not make the audit take longer than its limit."""
+    _pip_repo(tmp_path, monkeypatch)
+    limits, pauses = _tries(monkeypatch, _run(1, "", PYPI_SLOW),
+                            step=depaudit.PIP_AUDIT_TIMEOUT - depaudit.PIP_AUDIT_AT_LEAST)
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert len(limits) == 1 and pauses == [] and info["state"] == "failed" and "tries" not in info, (limits, info)
+    limits, pauses = _tries(monkeypatch, _run(1, "", PYPI_SLOW), _run(1, json.dumps(PIP_OK)), step=100.0)
+    f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert info["state"] == "ok" and limits == [depaudit.PIP_AUDIT_TIMEOUT, depaudit.PIP_AUDIT_TIMEOUT - 100.0
+                                                  - depaudit.PIP_AUDIT_PAUSES[0]], (limits, info)
+
+
 # ---------------------------------------------------------------- npm audit
 
 

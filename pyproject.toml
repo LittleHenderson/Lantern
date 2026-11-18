@@ -59,6 +59,9 @@ lantern = ["viewer/*.html", "viewer/*.js", "viewer/*.svg", "viewer/*.webmanifest
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["tests/fixtures"]
+# A test that runs past 15 minutes has every thread of the run print where it waits, while it is still running (on
+# 2026-11-17 a CI run printed 89% and then nothing for 2 h 39 min). The order of every limit: tests/test_time_limits.py
+faulthandler_timeout = 900
 
 [tool.ruff]
 line-length = 130
