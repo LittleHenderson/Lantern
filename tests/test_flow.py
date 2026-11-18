@@ -448,6 +448,27 @@ def test_a_name_from_the_request_reaches_a_file(tmp_path, case):
     assert _kinds(_one(tmp_path, BASE + body)) == want
 
 
+WRITTEN_INTO = ("from pathlib import Path\n\nBASE = '/srv/files'\n\n\ndef keep(where, text):\n    where.write_text(text)\n\n\n"
+                "def keep_bytes(where, text):\n    where.write_bytes(text.encode())\n\n\n"
+                "@app.post('/note')\ndef keep_note(name: str, text: str):\n")
+
+
+@pytest.mark.parametrize("body,want", [
+    ("    keep(app.state.notes, text)\n", []),
+    ("    keep_bytes(app.state.notes, text)\n", []),
+    ("    keep(Path(BASE) / 'kept.txt', text)\n", []),
+    ("    keep(Path(BASE) / name, text)\n", ["name"]),
+    ("    keep_bytes(Path(BASE) / name, 'fixed')\n", ["name"]),
+])
+def test_what_is_written_into_a_file_is_not_the_files_name(tmp_path, body, want):
+    """`p.write_text(text)` writes `text` into the file `p` names: the place is the object the call is made on, also
+    where Lantern does not know that object's type (a helper's parameter). Until stage 5 of the roadmap of 2026-11-14
+    the text written was taken for the file's place there: request text kept in a file the server names read as a
+    path the request chose, and a path the request chose, handed to the helper, was not followed."""
+    flows = _one(tmp_path, WRITTEN_INTO + body)
+    assert sorted(f["source"]["what"].split("`")[1] for f in flows if f["class"] == "path") == want, flows
+
+
 UPLOAD = ("import io\nimport tarfile\nimport zipfile\n\nfrom fastapi import UploadFile\n\nDEST = '/srv/import'\n\n\n"
           "@app.post('/import')\nasync def import_archive(file: UploadFile):\n    data = await file.read()\n{body}")
 ARCHIVES = {

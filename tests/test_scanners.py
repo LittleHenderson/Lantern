@@ -266,6 +266,50 @@ def test_built_in_secret_scan_counts_files_it_could_not_read(tmp_path, monkeypat
     assert s["state"] == "partial" and s["errors"] == ["b.py: Permission denied"] and s["scope"]["files"] == 2
 
 
+def test_a_keys_place_kept_by_filler_is_no_secret_and_a_key_beside_it_still_is(tmp_path):
+    """An example file keeps a key's place with filler (`sk_live_` and 24 times `x`): the right start for the
+    pattern, and nothing but one filler character after it. Until 2026-11-16 the built-in patterns called that a
+    possible secret, which ranks critical. Filler is only what cannot be a key: every letter and digit after the
+    fixed start is `x`, or every one is `0`, or the text is the one example key a provider prints in its own
+    guide. Anything else that fits a pattern is still a finding, the safe side: one other character among the
+    filler, a body of another repeated letter, a key that looks made up but is no filler. The record counts what
+    was passed over."""
+    x24, real = "x" * 24, "a1B2c3D4" * 3
+    _write(tmp_path, {
+        ".env.example": "\n".join([
+            "STRIPE_SECRET_KEY=" + "sk_live_" + x24,
+            "GITHUB_TOKEN=" + "ghp_" + "X" * 36,
+            "AWS_ACCESS_KEY_ID=" + "AKIA" + "X" * 16,
+            "AWS_OTHER_KEY_ID=" + "AKIA" + "0" * 16,
+            "SLACK_BOT_TOKEN=" + "xoxb-" + "xxxxxxxxxxxx-xxxxxxxxxxxx",
+            "ANTHROPIC_API_KEY=" + "sk-ant-" + "xxxx-xxxx_" * 3,
+            "OPENAI_API_KEY=" + "sk-" + "x" * 40,
+            "AWS_GUIDE_KEY_ID=" + "AKIA" + "IOSFODNN7" + "EXAMPLE",
+            ""]),
+        ".env": "\n".join([
+            "STRIPE_SECRET_KEY=" + "sk_live_" + real,                       # line 1: a key
+            "OLD_KEY=" + "sk_live_" + "x" * 23 + "7",                       # line 2: one other character among the filler
+            "TEST_KEY=" + "sk_live_" + "a" * 24,                            # line 3: another repeated letter stays a finding
+            "COUNT_KEY=" + "sk_live_" + "1234567890" * 3,                   # line 4: looks made up, is no filler
+            "BOTH=" + "sk_live_" + x24 + " " + "sk_live_" + real,           # line 5: filler and a key on one line
+            "AWS_ACCESS_KEY_ID=" + "AKIA" + "IOSFODNN7" + "EXAMPLF",        # line 6: not the guide's key
+            ""]),
+        "config.py": "KEY = '" + "sk_live_" + x24 + "'\n"})                 # filler is filler in a code file too
+    found, record = security._builtin_secrets(tmp_path)
+    assert sorted((f["file"], f["line"], f["rule"]) for f in found) == [
+        (".env", 1, "stripe-live-key"), (".env", 2, "stripe-live-key"), (".env", 3, "stripe-live-key"),
+        (".env", 4, "stripe-live-key"), (".env", 5, "stripe-live-key"), (".env", 6, "aws-access-key")]
+    assert record["state"] == "ok" and record["scope"] == {"files": 3, "placeholders": 10}, record
+    assert record["version"] == security.SECRETS_VERSION == "3"
+    assert not any("xxx" in json.dumps(f) for f in found)
+
+
+def test_with_no_filler_the_built_in_scans_record_is_as_it_was(tmp_path):
+    _write(tmp_path, {"config.py": "KEY = '" + "sk_live_" + "a1B2c3D4" * 3 + "'\n"})
+    found, record = security._builtin_secrets(tmp_path)
+    assert len(found) == 1 and record["scope"] == {"files": 1}
+
+
 # ---------------------------------------------------------------- gitleaks: settings of Lantern's own, a folder of its own
 #
 # gitleaks takes what it is to look for, and what it is to leave out, from more places than its command line. So

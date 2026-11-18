@@ -167,10 +167,51 @@ async function askMeasured(req, res) {
   res.json(answer);
 }
 
+async function askChecked(req, res) {
+  const user = await db.user.findUnique({ where: { id: req.userId } });
+  if (user.credits <= 0) {
+    return res.status(402).json({ error: 'No credits left' });
+  }
+  const took = await db.user.updateMany({
+    where: { id: user.id, credits: { gt: 0 } },
+    data: { credits: { decrement: 1 } },
+  });
+  if (took.count === 1) {
+    res.json(await openai.chat.completions.create({ model: 'm', messages: req.body.messages }));
+  }
+}
+
+async function askThen(req, res) {
+  const user = await db.user.findUnique({ where: { id: req.userId } });
+  if (user.credits <= 0) {
+    return res.status(402).json({ error: 'No credits left' });
+  }
+  await openai.chat.completions.create({ model: 'm', messages: req.body.messages }).then(async (answer) => {
+    await db.user.update({ where: { id: user.id }, data: { credits: { decrement: 1 } } });
+    res.json(answer);
+  });
+}
+
+async function askLong(req, res) {
+  const user = await db.user.findUnique({ where: { id: req.userId } });
+  if (user.credits <= 0) {
+    return res.status(402).json({ error: 'No credits left' });
+  }
+  const answer = await openai.chat.completions.create({
+    model: 'm',
+    messages: req.body.messages,
+  });
+  await db.user.update({ where: { id: user.id }, data: { credits: { decrement: 1 } } });
+  res.json(answer);
+}
+
 app.post('/api/ask', ask);
 app.post('/api/ask-taken-first', askTakenFirst);
 app.post('/api/ask-often', askOften);
 app.post('/api/ask-measured', askMeasured);
+app.post('/api/ask-checked', askChecked);
+app.post('/api/ask-then', askThen);
+app.post('/api/ask-long', askLong);
 '''
 
 
@@ -182,12 +223,15 @@ def _write(root, files):
 
 
 def test_a_limit_counted_after_the_work_is_named_and_its_safe_twins_are_not(tmp_path):
-    """Dangerous: the look, the awaited work (or a paid call), then the count. Safe twins: the count is the look
-    itself (a hold), the count stands before the work, the three are under a lock, the count shares no name with
-    the look, the refusal is no limit (401), nothing is waited for between the two, a count taken in one step
-    with its own condition before the work, a visit written down by adding a row (no count the check knows: it
-    says nothing there), and a limiter that takes one in the look itself (the false alarm of the first measurement,
-    on Lantern's own gateway)."""
+    """Dangerous: the look, the awaited work (or a paid call), then the count; also a count in the function
+    handed to the work's `.then` (it runs after the work) and a count after a work written over several lines.
+    Safe twins: the count is the look itself (a hold), the count stands before the work, the three are under a
+    lock, the count shares no name with the look, the refusal is no limit (401), nothing is waited for between the
+    two, a count taken in one step with its own condition before the work (also when that step is written over
+    several lines, and is itself the first thing waited for: the false alarm the balance rule's own safe twin
+    showed, where the step's `decrement:` line was read as a count after it), a visit written down by adding a row
+    (no count the check knows: it says nothing there), and a limiter that takes one in the look itself (the false
+    alarm of the first measurement, on Lantern's own gateway)."""
     _write(tmp_path, {"server/__init__.py": "", "server/api.py": API_PY, "server/web.py": WEB_PY,
                       "api/package.json": '{"dependencies": {"express": "^4.19.0"}}', "api/server.js": SERVER_JS})
     g = build_graph(tmp_path)
@@ -195,6 +239,8 @@ def test_a_limit_counted_after_the_work_is_named_and_its_safe_twins_are_not(tmp_
     found = sorted((f["file"], f["line"], f["snippet"]) for f in all_of if f["rule"] == RULE)
     assert found == [
         ("api/server.js", 8, "if (user.credits <= 0) {"),
+        ("api/server.js", 61, "if (user.credits <= 0) {"),
+        ("api/server.js", 72, "if (user.credits <= 0) {"),
         ("server/api.py", 10, "if store.used(user_id) >= store.limit(user_id):"),
         ("server/web.py", 11, "if user.credits <= 0:"),
     ], found

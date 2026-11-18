@@ -207,6 +207,16 @@ SESSION_READS = {"get", "has"}
 # stand when the code does not show that the server alone can have written the session.
 SESSION_MADE = re.compile(rf"^{SESSION_LIB}\.create(\w*SessionStorage|Cookie)\([^()]*\)(\.\w+)?$")
 UNSIGNED = "(not signed)"
+# A query that asks for the record's owner (`flow.Engine.asks_owner`): the keys under which a condition widens the
+# rows or turns them round, so that an owner named beneath them scopes nothing; and the names of the language that
+# stand for no value, with which a comparison of the owner's field asks nothing.
+NOT_ASKED = frozenset({"OR", "NOT", "not", "none", "isNot", "notIn", "select", "include", "data", "orderBy",
+                       "create", "update", "connect"})
+NO_VALUE = frozenset({"undefined", "null", "None", "NaN"})
+# The helper a sign-in library hands out as a part of what it made, which a project takes apart in one file and
+# calls in every other (`export const { auth, handlers } = NextAuth(…)`, Auth.js version 5): followed into that file
+# the same way, so that the call is known by the library's name for it (`IDENT_CALLS`).
+SIGN_IN_MADE = re.compile(r"^next-auth\(\)\.auth$")
 REQUEST_TYPES = re.compile(r"\b(Request|HttpRequest|WSGIRequest|NextRequest|NextApiRequest|FastifyRequest|"
                            r"WebSocket|HTTPConnection|IncomingMessage)\b")
 REQUEST_GLOBALS = {"flask.request", "quart.request", "bottle.request", "flask.globals.request", "sanic.request"}
@@ -418,6 +428,9 @@ PATH_MEMBERS = {"read_text", "read_bytes", "write_text", "write_bytes", "unlink"
                 "download", "sendfile", "createReadStream", "createWriteStream", "readFileSync", "writeFileSync",
                 "readFile", "writeFile", "unlinkSync"}
 PATHLIB_MEMBERS = {"open", "touch", "mkdir", "rename", "replace", "glob", "rglob", "exists", "is_file", "stat"}
+# ... of which pathlib's own name the file by the object the call is made on: what `write_text` is handed is what is
+# written, not where (`p.write_text(text)`), also where Lantern does not know the object's type
+PATH_ON_OBJECT = frozenset({"read_text", "read_bytes", "write_text", "write_bytes", "unlink", "rmdir", "iterdir"})
 # ---- a page rendered from a template file (`lantern/templates.py` reads what the file prints without escaping)
 RENDER_CALL = re.compile(r"^(flask\.render_template|flask\.templating\.render_template|quart\.render_template|"
                          r"django\.shortcuts\.render|django\.template\.loader\.render_to_string|"
@@ -560,6 +573,201 @@ POLLUTION_CALL = re.compile(r"^(lodash|underscore|lodash\.merge|lodash\.mergewit
                             r"jquery|hoek|object-path|dot-prop|set-value)(\.(merge|mergeWith|defaultsDeep|set|setWith|"
                             r"zipObjectDeep|extend|applyToDefaults|ensureExists))?$")
 POLLUTION_PLAIN = re.compile(r"^(lodash|underscore|jquery|hoek|object-path|dot-prop)$")
+
+# ---- what a model wrote (roadmap of 2026-11-14, stage 5: the AI-app pack, second version)
+# A call that hands back text a model wrote, by the library's own name for it (`Engine.canon_at`). What comes back is
+# followed like what a request sent, with the origin "model" (`flow.ORIGIN_KINDS`): whoever can put words into the
+# prompt, or into what the model reads, can steer it. Embeddings, images, speech and moderation hand back no text to
+# run and are not named; neither is another service's `messages.create` (Twilio's sends a text message).
+MODEL_CALL = re.compile(
+    r"^(?:"
+    # OpenAI, and the clients that speak its words (Azure's, Groq's)
+    r"(?:openai(?:\.(?:OpenAI|AsyncOpenAI|AzureOpenAI|AsyncAzureOpenAI))?\(\)|openai|"
+    r"groq\.(?:Groq|AsyncGroq)\(\)|groq-sdk(?:\.Groq)?\(\))"
+    r"\.(?:beta\.)?(?:chat\.completions\.(?:create|parse|stream)|completions\.create|responses\.(?:create|parse|stream))|"
+    r"openai\.(?:ChatCompletion|Completion)\.a?create|"
+    # Anthropic
+    r"(?:anthropic\.(?:Anthropic|AsyncAnthropic|AnthropicBedrock|AsyncAnthropicBedrock|AnthropicVertex|"
+    r"AsyncAnthropicVertex)|@anthropic-ai/sdk(?:\.Anthropic)?)\(\)\.(?:beta\.)?(?:messages\.(?:create|stream)|"
+    r"completions\.create)|"
+    # Google
+    r"google\.generativeai\.GenerativeModel\(\)\.generate_content(?:_async)?|"
+    r"google\.genai\.Client\(\)\.(?:aio\.)?models\.generate_content|"
+    r"@google/generative-ai\.GoogleGenerativeAI\(\)\.getGenerativeModel\(\)\.generateContent|"
+    r"@google/genai\.GoogleGenAI\(\)\.models\.generateContent|"
+    # Mistral, Cohere, Ollama, LiteLLM, Hugging Face, Replicate
+    r"(?:mistralai|@mistralai/mistralai)\.Mistral\(\)\.chat\.complete(?:_async)?|"
+    r"(?:cohere\.(?:Client|ClientV2|AsyncClient|AsyncClientV2)|cohere-ai\.(?:CohereClient|CohereClientV2))\(\)"
+    r"\.(?:chat|generate)|"
+    r"ollama(?:\.(?:Client|AsyncClient|Ollama)\(\))?\.(?:chat|generate)|"
+    r"litellm\.a?(?:completion|text_completion)|"
+    r"huggingface_hub\.(?:InferenceClient|AsyncInferenceClient)\(\)\.(?:text_generation|chat_completion|"
+    r"chat\.completions\.create)|"
+    r"replicate(?:\(\))?\.run|"
+    # the AI SDK's own calls, and LangChain's chat models
+    r"ai\.(?:generateText|generateObject|streamText|streamObject)|"
+    r"(?:langchain[\w.]*|@langchain/[\w-]+)\.Chat\w+\(\)\.a?invoke|"
+    # Amazon Bedrock's runtime
+    r"boto3\.(?:client|Session\(\)\.client)\(\)\.(?:invoke_model|converse)"
+    r")$")
+# A client a model call is made on, as a value another file of the project made at its top (`claude =
+# anthropic.Anthropic()` in `app/llm.py`): handed to the file that imports it by name (`Engine.lookup`), so that a call
+# on it there is known by the library's name too. Only these: other values of other files are not followed that way.
+MODEL_CLIENT = re.compile(
+    r"^(?:openai(?:\.(?:OpenAI|AsyncOpenAI|AzureOpenAI|AsyncAzureOpenAI))?|groq\.(?:Groq|AsyncGroq)|groq-sdk(?:\.Groq)?|"
+    r"anthropic\.(?:Anthropic|AsyncAnthropic|AnthropicBedrock|AsyncAnthropicBedrock|AnthropicVertex|"
+    r"AsyncAnthropicVertex)|@anthropic-ai/sdk(?:\.Anthropic)?|google\.generativeai\.GenerativeModel|"
+    r"google\.genai\.Client|@google/generative-ai\.GoogleGenerativeAI|@google/genai\.GoogleGenAI|"
+    r"(?:mistralai|@mistralai/mistralai)\.Mistral|cohere\.(?:Client|ClientV2|AsyncClient|AsyncClientV2)|"
+    r"cohere-ai\.(?:CohereClient|CohereClientV2)|ollama\.(?:Client|AsyncClient|Ollama)|"
+    r"huggingface_hub\.(?:InferenceClient|AsyncInferenceClient)|replicate|"
+    r"(?:langchain[\w.]*|@langchain/[\w-]+)\.Chat\w+|boto3\.(?:client|Session\(\)\.client))\(\)"
+    r"(?:\.getGenerativeModel\(\))?$")
+# ... and the libraries such a client comes from, as a Python file imports them: only a value made by a call into one
+# of these is worked out for another file (worked out earlier than its own file would, nothing else may be)
+MODEL_LIB = re.compile(r"^(?:openai|anthropic|google\.generativeai|google\.genai|google|mistralai|cohere|ollama|"
+                       r"huggingface_hub|replicate|langchain[\w.]*|boto3|groq)(?:\.|$)")
+# The kinds of action in which text a model wrote is this rule's business (`LA-MODEL-OUTPUT-TO-TOOL`): it is run as a
+# command or as code, asked of the database as query text, fetched as an address, or names a file. Not a page it is
+# written into, a record it picks, or a field it sets: those are other rules' words, and they say "the request".
+MODEL_OK = frozenset({"shell", "sql", "eval", "ssrf", "path"})
+MODEL_RULE = "LA-MODEL-OUTPUT-TO-TOOL"
+MODEL_WHAT = {"shell": "a shell command", "sql": "a database query", "eval": "code (eval / exec)",
+              "ssrf": "a web request", "path": "a file path"}
+
+# ---- what a model hands a tool (roadmap of 2026-11-14, stage 5: `LA-UNSAFE-MCP-TOOL`)
+# A function a library is told is a tool a model may call: the model chooses its arguments, and whoever can put words
+# into what the model reads (a message, a page, a file, another tool's answer) can choose them through it. Its
+# parameters are followed like what a request sent, with the origin "tool" (`flow.ORIGIN_KINDS`, `Engine.find_tools`),
+# into the kinds of action this rule names: a command or code that is run, query text, and the place of a file that
+# is written, moved or removed. A file that is only read is counted and is no finding (`FILE_CHANGES`).
+TOOL_OK = frozenset({"shell", "sql", "eval", "path"})
+TOOL_RULE = "LA-UNSAFE-MCP-TOOL"
+TOOL_WHAT = {"shell": "a shell command", "sql": "a database query", "eval": "code (eval / exec)",
+             "path": "the path of a file it writes or removes"}
+# Python: a library's function that makes a tool of the function it decorates or is handed (by what its name stands
+# for in the file: `@tool` from `langchain_core.tools`, `@function_tool` from the Agents SDK, `Tool(f)`)
+TOOL_MAKER_PY = re.compile(
+    r"^(?:langchain(?:_core)?\.tools(?:\.convert|\.base)?\.tool|langchain\.agents(?:\.tools)?\.tool|"
+    r"crewai\.tools\.tool|crewai_tools\.tool|smolagents(?:\.tools)?\.tool|agents(?:\.tool)?\.function_tool|"
+    r"semantic_kernel\.functions(?:\.kernel_function_decorator)?\.kernel_function|pydantic_ai(?:\.tools)?\.Tool|"
+    r"langchain(?:_core)?\.tools(?:\.base|\.simple|\.structured)?\.(?:Tool|StructuredTool)(?:\.from_function)?|"
+    r"llama_index\.core\.tools\.FunctionTool(?:\.from_defaults)?|google\.adk\.tools\.FunctionTool|"
+    r"autogen_core\.tools\.FunctionTool|strands\.tool)$")
+# ... and the classes of a library whose objects do it with one of their members: an MCP server (FastMCP, in the MCP
+# SDK and on its own, and the SDK's newer name for it, `MCPServer`), Pydantic AI's agent, and the MCP SDK's low-level
+# server, whose one handler gets every call's tool name and arguments. (class, members, which parameters the model
+# fills: "all" or "after-first", and whether the function is handed the calls of every tool of the server, so that no
+# one tool's name is said for it)
+TOOL_SERVER_PY = (
+    (re.compile(r"^(?:mcp\.server\.fastmcp(?:\.server)?|fastmcp(?:\.server(?:\.server)?)?)\.FastMCP$"),
+     frozenset({"tool", "add_tool"}), "all", False),
+    (re.compile(r"^mcp\.server(?:\.mcpserver(?:\.server)?)?\.MCPServer$"), frozenset({"tool", "add_tool"}), "all", False),
+    (re.compile(r"^pydantic_ai(?:\.agent)?\.Agent$"), frozenset({"tool_plain"}), "all", False),
+    (re.compile(r"^pydantic_ai(?:\.agent)?\.Agent$"), frozenset({"tool"}), "after-first", False),
+    (re.compile(r"^mcp\.server(?:\.lowlevel(?:\.server)?)?\.Server$"), frozenset({"call_tool"}), "all", True),
+)
+# A library call handed `tools=[f, g]` hands those functions to a model (LangGraph's `create_react_agent`, Pydantic
+# AI's and the Agents SDK's `Agent`, Google's ADK, smolagents, CrewAI, LlamaIndex): only a library of these
+TOOL_LIST_PY = re.compile(r"^(?:langchain[\w.]*|langgraph[\w.]*|pydantic_ai[\w.]*|agents|agents\.[\w.]+|"
+                          r"smolagents[\w.]*|crewai[\w.]*|llama_index[\w.]*|google\.adk[\w.]*|autogen[\w.]*|"
+                          r"strands[\w.]*|mcp[\w.]*|fastmcp[\w.]*)(?:\.|$)")
+# ... and where such a call takes the list without the word `tools`, by the call's last name: LangGraph's
+# `create_react_agent(model, tools)` and `ToolNode(tools)`, LangChain's agent makers, a chat model's
+# `bind_tools(tools)` (counted on a model Lantern cannot place where the file uses one of these libraries)
+TOOL_LIST_ARG_PY = {"create_react_agent": 1, "create_agent": 1, "create_tool_calling_agent": 1,
+                    "create_openai_tools_agent": 1, "create_openai_functions_agent": 1,
+                    "create_structured_chat_agent": 1, "ToolNode": 0, "initialize_agent": 0, "bind_tools": 0}
+# A class of the project made from a library's tool class, and the methods a call of the tool runs: LangChain's and
+# CrewAI's `BaseTool` (`_run`, `_arun`), smolagents' `Tool` (`forward`)
+TOOL_CLASS_PY = (
+    (re.compile(r"^(?:langchain(?:_core)?\.tools(?:\.base)?|langchain_community\.tools|crewai\.tools(?:\.base_tool)?|"
+                r"crewai_tools)\.BaseTool$"), frozenset({"_run", "_arun"})),
+    (re.compile(r"^smolagents(?:\.tools)?\.Tool$"), frozenset({"forward"})),
+)
+# JavaScript and TypeScript, by the map's name for the call (`ext:` taken off): where the function is and which of
+# its parameters the model fills (the second is the library's own: the request's extra, the call's options).
+# "last": the last function in the call (the MCP SDK's `server.tool(name, ..., handler)` and `registerTool`, also from
+# its newer package `@modelcontextprotocol/server`);
+# "first": the first (LangChain's `tool(fn, {...})`); "execute" / "func": that key of the object handed over (the AI
+# SDK's and the Agents SDK's `tool({ execute })`, Mastra's `createTool`, LangChain's `DynamicStructuredTool`).
+TOOL_REG_JS = (
+    (re.compile(r"^@modelcontextprotocol/(?:sdk/server/mcp(?:\.js)?|server)\.McpServer\.(?:tool|registerTool)$"),
+     "last"),
+    (re.compile(r"^fastmcp\.FastMCP\.addTool$"), "execute"),
+    (re.compile(r"^(?:ai|@openai/agents(?:-core)?|@mastra/core(?:/tools)?)\.(?:tool|createTool)$"), "execute"),
+    (re.compile(r"^@langchain/core/tools\.tool$"), "first"),
+    (re.compile(r"^(?:new )?@langchain/(?:core/tools|community/tools/dynamic)\.(?:DynamicStructuredTool|DynamicTool)"
+                r"(?:\(\))?$"), "func"),
+)
+# ... the AI SDK's calls that take tools written as plain objects, each under its name: `generateText({ tools: { run:
+# { inputSchema, execute } } })` (an object made with `tool(...)` is the call above)
+TOOL_OBJECTS_JS = re.compile(r"^(?:new )?ai\.(?:generateText|streamText|generateObject|streamObject|ToolLoopAgent|"
+                             r"Experimental_Agent)(?:\(\))?$")
+# ... and the MCP SDK's low-level server: `server.setRequestHandler(CallToolRequestSchema, async (request) => ...)`,
+# whose handler is handed the whole call (`request.params.name`, `request.params.arguments`); the newer package's
+# names the request by its method: `server.setRequestHandler("tools/call", async (request, ctx) => ...)`
+TOOL_LOW_JS = re.compile(r"^@modelcontextprotocol/(?:sdk/server(?:/index(?:\.js)?)?|server)\.Server\.setRequestHandler$")
+TOOL_LOW_SCHEMA = re.compile(r"(?:^|\.)CallToolRequestSchema$")
+TOOL_LOW_METHOD = "tools/call"
+# A parameter the library fills itself and the model does not: the call's context, the agent's state, settings
+TOOL_CONTEXT = re.compile(r"\b(?:Context|RunContext|RunContextWrapper|ToolContext|InjectedToolArg|InjectedState|"
+                          r"InjectedStore|InjectedToolCallId|RunnableConfig|CallbackManagerForToolRun|"
+                          r"AsyncCallbackManagerForToolRun|Kernel|KernelArguments|ToolRuntime)\b")
+# The library's own word that a person approves each call before it runs, written where the tool is made, and the
+# values that switch it off
+TOOL_APPROVAL = re.compile(r"\b(?:needs_approval|requires_approval|require_approval|needsApproval|requiresApproval|"
+                           r"requireApproval)\s*[=:]\s*([^,)}\s]+)")
+TOOL_NO_APPROVAL = {"False", "false", "None", "null", "undefined", "0", "'never'", '"never"'}
+TOOL_APPROVAL_KEYS = ("needsApproval", "requiresApproval", "requireApproval", "needs_approval")    # JavaScript
+# a Python decorator as the reader writes it (`ast.unparse`): the dotted name, and what it is handed; the tool's name
+# where the call says it (`@mcp.tool(name='save')`, `@tool('lookup')`)
+DECORATOR = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*(?:\((.*)\))?\s*$", re.S)
+TOOL_NAME_KW = re.compile(r"\bname\s*=\s*(['\"])(.*?)\1")
+TOOL_NAME_FIRST = re.compile(r"\s*(['\"])(.*?)\1\s*(?:,|$)")
+# A person asked inside a function before it goes on (`Engine.asks`): an MCP elicitation, a console confirmation,
+# LangGraph's `interrupt`. Read by the name of the call, not by what is done with the answer.
+ASKS = re.compile(r"(?:^|\.)(?:elicit|elicitInput|elicit_input)$|^(?:click|typer)\.(?:confirm|prompt)$|"
+                  r"^(?:rich\.prompt\.)?(?:Confirm|Prompt)\.ask$|^questionary\.confirm\(\)\.(?:ask|ask_async|unsafe_ask)$|"
+                  r"^(?:input|confirm|window\.confirm|interrupt|langgraph\.types\.interrupt)$|"
+                  r"^(?:rl|readline|readlineInterface)\.question$|^inquirer\.prompt$")
+
+# ---- an agent loop with no cap on its paid calls (roadmap of 2026-11-14, stage 5: `LA-UNBOUNDED-AGENT-LOOP`,
+# `lantern/agentloop.py`). A model call of `MODEL_CALL` is paid for each time, except a model run on this computer
+LOOP_RULE = "LA-UNBOUNDED-AGENT-LOOP"
+UNPAID_MODEL = re.compile(r"^ollama(?:\.|$)")
+# A library's own agent loop whose limit on rounds is a setting (`agentloop._setting_off`): LangChain's executor
+# (`max_iterations`, 15 unless it is set; `None` with no `max_execution_time` goes on until the model stops), and the
+# AI SDK's calls and agents (`stopWhen`, one step or the agent's own count unless it is set: conditions that are all
+# `hasToolCall(...)` end only when the model calls that tool; the older `maxSteps: Infinity`)
+AGENT_RUNNER = re.compile(r"^(?:langchain(?:_classic)?\.agents(?:\.agent)?\.AgentExecutor(?:\.from_agent_and_tools)?|"
+                          r"(?:new )?ai\.(?:generateText|streamText|ToolLoopAgent|Experimental_Agent)(?:\(\))?)$")
+# Where a loop decides to go on: a clock read there bounds it by time (`time.monotonic()`, `Date.now()`) ...
+CLOCK = re.compile(r"(?:^|\.)(?:time|monotonic|perf_counter|time_ns|monotonic_ns|perf_counter_ns|now|utcnow|hrtime|"
+                   r"getTime)$")
+# ... and a name made of one of these words by a budget (`spent`, `total_tokens`, `maxCost`)
+BUDGET_WORDS = frozenset({"budget", "budgets", "cost", "costs", "spend", "spent", "spending", "price", "usage", "token",
+                          "tokens", "credit", "credits", "quota", "allowance", "ceiling", "dollars", "cents", "usd"})
+# A `for` over one of these never runs out of items
+ENDLESS = re.compile(r"^itertools\.(?:count|cycle)$")
+# The file actions that change what is on the disk (`flow.file_changed`, `flow.WRITES`): a write, a move, a copy's
+# target, a removal, a folder made, an archive unpacked. Any other file action of `PATH_CALL` only reads (opens to
+# read, lists, serves a file).
+FILE_CHANGES = re.compile(r"^(?:os\.(?:remove|unlink|rmdir|mkdir|makedirs|rename|replace|chmod|chown|truncate|"
+                          r"removedirs)|shutil\.(?:copy|copy2|copyfile|copytree|move|rmtree|unpack_archive)|"
+                          r"(?:fs|fs/promises|fs-extra|node:fs|node:fs/promises|graceful-fs|fs\.promises)\."
+                          r"(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rm|"
+                          r"rmSync|rmdir|rmdirSync|mkdir|mkdirSync|copyFile|copyFileSync|rename|renameSync|outputFile|"
+                          r"outputFileSync|remove|removeSync|copy|copySync|move|moveSync|ensureFile|ensureDir|emptyDir|"
+                          r"truncate))$")
+FILE_MOVES = re.compile(r"\.(?:move|rename|replace|renameSync|moveSync)$")      # the first place is removed too
+FILE_CHANGE_MEMBERS = {"write_text", "write_bytes", "unlink", "rmdir", "createWriteStream", "writeFileSync",
+                       "writeFile", "unlinkSync", "touch", "mkdir", "rename", "replace"}
+OPENS = re.compile(r"^(?:open|io\.open|codecs\.open|aiofiles\.open|os\.open|"
+                   r"(?:fs|fs/promises|node:fs|node:fs/promises|graceful-fs|fs\.promises|fs-extra)\.(?:open|openSync))$")
+# ... where the mode decides (`flow.opens_to_write`): the flags of `os.open` and Node's `fs.constants` by their names
+OPEN_WRITE_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_EXCL"})
+OPEN_READ_FLAGS = frozenset({"O_RDONLY"})
 
 # a finding another tool made on the same line is the same problem: the flow is attached to it, not listed twice
 SAME_PROBLEM = {
@@ -777,8 +985,18 @@ IDENT_CALLS = re.compile(r"^(flask_jwt_extended\.(get_jwt_identity|get_current_u
                          r"next-auth(/next)?\.(getServerSession|unstable_getServerSession|getToken)|"
                          r"next-auth/jwt\.getToken|@clerk/nextjs(/server)?\.(auth|currentUser|getAuth)|"
                          r"@auth0/nextjs-auth0\.getSession|iron-session\.getIronSession|"
-                         r"@supabase/[\w-]+\b.*\.(getUser|getSession)|"
-                         r"django\.contrib\.auth\.get_user|flask_login\.utils\._get_user)$")
+                         r"@supabase/[\w-]+\b.*\.(getUser|getSession|getClaims)|"
+                         r"django\.contrib\.auth\.get_user|flask_login\.utils\._get_user|"
+                         # 2026-11-16: the helper Auth.js version 5 hands out (`export const { auth } = NextAuth(…)`),
+                         # better-auth, Lucia, Auth0 version 4, Kinde, WorkOS AuthKit. Until then a route that asked
+                         # for the owner through one of them was listed as one that asks nobody
+                         r"next-auth\(\)\.auth|better-auth\.betterAuth\(\)\.api\.getSession|"
+                         r"lucia\.Lucia(\(\))?\.validateSession|"
+                         r"@auth0/nextjs-auth0(/server)?\.Auth0Client(\(\))?\.getSession|"
+                         r"@kinde-oss/kinde-auth-nextjs(/server)?\.getKindeServerSession\(\)\."
+                         r"(getUser|getOrganization|getClaim|getPermission|getPermissions|getRoles|getIdToken|"
+                         r"getAccessToken)|"
+                         r"@workos-inc/authkit-nextjs\.(withAuth|getUser))$")
 # The part of a signed-in person that says what they may do. Read in a condition, it is a role check.
 ROLE_WORD = re.compile(r"^(is_?)?(admin|administrator|superuser|super_?admin|staff|moderator|root|owner|manager)$|"
                        r"^(role|roles|permission|permissions|perms|scope|scopes|groups|privilege|privileges|"
@@ -975,6 +1193,33 @@ WRITE_MEMBERS = {"update", "create", "insert", "insertOne", "insert_one", "inser
                  "find_one_and_update", "upsert", "set", "setAttributes", "assign", "merge", "bulkCreate",
                  "replaceOne", "replace_one", "findOneAndReplace", "update_or_create", "get_or_create", "patch",
                  "updateAttributes", "update_attributes", "fill", "populate_obj", "from_dict", "updateById"}
+# Calls on stored data that write it by themselves: a row made, changed or removed, a session saved. Not the calls
+# that only fill an object in memory, which is saved by one of these afterwards. Every such place on a route's way is
+# noted whatever picked the record (`flow.wrote`): it is what a webhook route "changes" (`lantern/webhooks.py`).
+STORE_MEMBERS = {"create", "createMany", "insert", "insertOne", "insert_one", "insertMany", "insert_many", "bulkCreate",
+                 "bulk_create", "update", "updateOne", "update_one", "updateMany", "update_many", "upsert", "replaceOne",
+                 "replace_one", "update_or_create", "get_or_create", "updateById", "findByIdAndUpdate",
+                 "findOneAndUpdate", "find_one_and_update", "findOneAndReplace", "find_one_and_replace",
+                 "findByIdAndDelete", "findOneAndDelete", "find_one_and_delete", "findByIdAndRemove",
+                 "findOneAndRemove", "delete", "deleteOne", "delete_one", "deleteMany", "delete_many", "deleteById",
+                 "delete_by_id", "removeById", "remove", "destroy", "del", "add", "add_all", "set", "save", "persist",
+                 "commit", "increment", "decrement"}
+# Database text that adds, changes or removes rows, by its first word.
+WRITES_SQL = re.compile(r"^\W*(insert|update|delete|replace|merge)\b", re.I)
+# An account made, changed or removed through the management side of a sign-in service is stored data written too
+# (it is kept at the service): Supabase's admin API, Clerk's backend client, Firebase's admin library. The same
+# three as `websec.MANAGES_ACCOUNTS`, here by the call's own name and what it is called on.
+ACCOUNT_MEMBERS = {"createUser", "updateUser", "updateUserById", "updateUserMetadata", "updateUserProfileImage",
+                   "deleteUser", "deleteUsers", "inviteUserByEmail", "banUser", "unbanUser", "lockUser", "unlockUser",
+                   "setCustomUserClaims", "revokeRefreshTokens", "importUsers", "createOrganization",
+                   "updateOrganization", "updateOrganizationMetadata", "deleteOrganization",
+                   "createOrganizationMembership", "updateOrganizationMembership", "deleteOrganizationMembership",
+                   "createInvitation", "revokeInvitation", "revokeSession", "create_user", "update_user",
+                   "update_user_by_id", "delete_user", "delete_users", "invite_user_by_email",
+                   "set_custom_user_claims", "revoke_refresh_tokens", "import_users"}
+ACCOUNT_SIDE = re.compile(r"(?:(?<![\w$])auth\.admin|[cC]lerk[\w$]{0,40}(?:\(\))?\)?\.(?:users|organizations|invitations|"
+                          r"sessions)|(?<![\w$])(?:getAuth|auth)\([^()]{0,200}\))$")
+ACCOUNT_LIB = re.compile(r"^(?:@supabase/[\w-]+|supabase|@clerk/[\w-]+|firebase-admin|firebase_admin)(?![\w-])")
 WHOLE_KEYS = {"...", "$set", "$setOnInsert", "data", "values", "update", "defaults", "create", "attributes", "set"}
 BODY_BAGS = {"json", "body", "form", "data", "get_json", "POST", "payload", "values", "post", "forms"}
 OVERLAY_CALL = re.compile(r"^(Object\.assign|lodash\.(assign|assignIn|extend|merge|defaults)|underscore\.(extend|"

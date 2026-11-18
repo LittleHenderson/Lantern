@@ -294,6 +294,19 @@ record in both files is the same as in the point 6 files, entry for entry: the s
 links, the same release decision for each of the 14 apps. Only the label, the engine's commit and the time of the
 run differ. No file of the set was read to make the engine faster.
 
+## After roadmap stage 5 (measured 2026-11-17)
+
+Stage 5 of the roadmap of 2026-11-14 added rules for the ways full-stack and AI apps are broken into
+(`../security_packs_results.md`). Nine of the fourteen apps were measured: the six local twins and the three public apps
+whose copies of 2026-11-10 were at hand; the other five public apps were not fetched for this run, so this is not a
+measurement of the whole set, and no result file of it is kept here. What it had to show was written down before it
+ran: every expected problem found before is found after, no new finding at medium or above on a safe twin, every
+finding that moves read by hand. Offline, main (b1b3833) against Stage 5's code (bc8cc0a): 235 findings before and 235
+after, none gone, none new, none with another rank, title, id, confidence or status; 29 of the 42 expected problems of
+these nine apps found at medium or above before and after, 13 missed before and after; the same release decision and
+the same call sites for each app. The six rules that came first were measured the same way earlier that day, with the
+same numbers. No file of the set was read to write a rule of the stage.
+
 ## Files
 
 * `cases.json` · the frozen definition: apps, commits, expectations, rules.
