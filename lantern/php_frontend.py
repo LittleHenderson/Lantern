@@ -41,7 +41,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import deep
+from . import deep, workspace
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, project_text, skipped
 
@@ -1073,7 +1073,8 @@ def add_php(g: Graph, repo: str | Path) -> dict:
         if f.top:
             mid = f"php:{f.rel}"
             if f.page and not g.nodes[mid].entry and mid not in included:   # an included file is not opened directly
-                url = re.sub(r"^(?:.*/)?(?:public|public_html|htdocs|www|web)/", "", f.rel)   # the web root
+                # the web root, reckoned in a workspace from the page's own project (`workspace.below`)
+                url = re.sub(r"^(?:.*/)?(?:public|public_html|htdocs|www|web)/", "", workspace.below(g.meta, f.rel)[1])
                 g.nodes[mid].entry = {"kind": "route", "detail": f"ANY /{url}"}
                 routes += 1
 

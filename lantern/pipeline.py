@@ -136,6 +136,9 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
     from . import deep
     if deep.line_words(g.meta):   # code nested deeper than a reader follows was left where the reading stopped
         log(f"deep    {deep.line_words(g.meta)}")
+    if g.meta.get("workspace"):   # several projects as one map (`lantern workspace`): what crosses between them
+        from . import workspace
+        log(f"across  {workspace.summary(g.meta['workspace'])}")
     from . import __version__
     # which Lantern made this check: two checks made by two versions may differ for that alone (`lantern diff` says so)
     run_meta: dict = {"lantern": __version__, "timings": timings, "privacy": privacy, "offline": offline}

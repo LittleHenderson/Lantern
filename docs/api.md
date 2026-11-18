@@ -70,6 +70,7 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | Route | Body | Returns |
 |---|---|---|
 | `POST /api/projects` | `{"path": "/folder or https://github.com/owner/repo"}` | A folder: the project summary (200). A link: `{"job", "project"}` (202) while it clones and analyzes |
+| `POST /api/projects` | `{"paths": ["/folder", "https://github.com/owner/repo", "name=/folder", …], "name"?: "notes"}` | Several projects as one map (`lantern workspace`, `docs/workspaces.md`): `{"job", "project"}` (202), the job's `kind` is `workspace`; the project is the workspace's folder (`LANTERN_HOME/workspaces/<name>`), listed at once under the name it will have, made (links cloned, each project copied) and analyzed in the job, and forgotten again when no workspace of that name was made. 400 before anything is listed for what cannot be one (`workspace.plan`): not a list of two to 12 texts, a project's name that is not lowercase letters, digits and dashes or one Lantern's folder rules give a meaning, a link that is none, a folder that is not there, a workspace's name that cannot be one, or a folder or record under that name that Lantern did not make |
 | `DELETE /api/projects/<id>` | | `{"ok": true, "note"}`; files are never deleted |
 | `POST /api/projects/<id>/analyze` | | job (202). Builds the map, scans, scores readiness, writes report and Evidence Report |
 | `GET /api/projects/<id>/plan?depth=3&limit=40` | | `{"nodes": N, "input_tokens", "output_tokens", "note"}`: what an explain run would cover (an estimate, no model call) |
@@ -202,6 +203,20 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   seconds it gets for one file (`deep.PARSE_SECONDS`; the first 40 by name). Such a file is on the map as a file and
   nothing written in it is; the log's `deep` line and the Limits say so. Only the Dart reader's parser has such a
   limit so far).
+* `meta.workspace` (since 2026-11-17, roadmap stage 6; only on the map of a workspace, `lantern/workspace.py`):
+  `{"name", "made", "members": [{"name", "from": "folder"|"link", "source", "commit", "dirty", "branch", "remote",
+  "files", "links", "left_out", "accepted"}], "across": {"requests", "code", "rows": [{"from", "to", "kind":
+  "request"|"code", "via", "confidence", "src", "dst", "call"?, "route"?}], "more"}, "shared": {"names", "examples"}}`.
+  `source` is a link as it was given, or a folder's own name (the whole path stays in the record beside the
+  workspace). `files`, `links` count what was copied of the member, `left_out` `{why: count}` what was not (`folder`,
+  `link-out`, `kind`, `large`, `name`, `unreadable`); `accepted` says the member has a `lantern-accepted.json`, which is
+  not read in the workspace. `across.rows`: a request one member makes that another answers (`kind` `request`, the
+  bridge's own `via` and confidence, `call` what was asked, `route` the route that answers) and code of one member
+  linked into another (`code`, always `possible`); at most 200, `more` counts the rest. `shared.names`: names on the
+  map that more than one member writes (found when the workspace was made, each member read alone); every link that
+  touches one is `possible`, and `examples` names the first 20 with the members that write them. The call-site
+  inventory's records of such links say `possible` too. A reader whose rule is about the project's own top reckons
+  from the member's folder (`workspace.below`: a plain PHP page's address). The log's line is `across  …`.
 * `meta.db_calls` (since 2026-11-14, roadmap stage 1; only when the project has one): the calls into database tables
   the JS/TS reader wrote down, one row per call written `<client>.from("<table>").<op>(…)` with `<op>` one of
   `select`, `insert`, `update`, `upsert`, `delete`: `{"src"` (the function the call is written in), `"table",
@@ -1069,7 +1084,13 @@ and otherwise ends in `blocked` or `incomplete`), `architecture`,
 `security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`, `incomplete`: `[{tool, state, status,
 why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a
 notice under the tiles and the badge say `scan incomplete`, and the badge is never green), `understanding`,
-`provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs, and
+`provenance` (`workspace`, only for the map of a workspace: `{"name", "made", "members": [{"name", "from",
+"source", "commit", "dirty", "branch", "remote"}]}`, which the page shows as "Projects in this map", and which the
+digest takes in through `payload.workspace` = `{"members": ["<name>:<commit>[+changes]", …], "shared": <count>}`, so
+a project of its own has no such part and its digest is as before; the Limits then say the map is a workspace of
+those projects, which of them is in no git repository or had changes not committed, how many links of code cross
+between them and how many names two of them write, and whose accepted risks are not read there;
+`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs, and
 since 2026-11-13 `libraries`: the libraries the project's tests ran on, taken from `run.json` by shape,
 `{state: "fetched"|"installed", store, exact, checked, left_out, above, packages: [{name, version, exact, checked,
 fingerprint, built_from?}], optional_left?, built?}`, or null when no test run is in the results or the tests ran on no library; the page lists them

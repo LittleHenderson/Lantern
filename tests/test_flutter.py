@@ -109,6 +109,28 @@ def test_generated_and_platform_dart_is_skipped(tmp_path):
     assert "dt:Gen" not in g.nodes and "dt:Reg" not in g.nodes and "dt:main" in g.nodes
 
 
+def test_a_folder_named_like_a_platform_is_left_out_only_beside_a_pubspec(tmp_path):
+    """A Flutter project's platform folders (`ios/`, `android/`, `web/` beside its `pubspec.yaml`) hold generated
+    code; a folder of the same name anywhere else is a project's own (a Dart site in a repository's `web/` folder, or
+    a project called `web` in a workspace). Until 2026-11-17 every Dart file under such a name was left out."""
+    other = tmp_path / "repo"
+    _write(other, {"web/pubspec.yaml": "name: site\n", "web/bin/server.dart": "void serve() {}\n",
+                   "web/tool/build.dart": "void build() {}\n", "web/integration_test/app_test.dart": "void check() {}\n",
+                   "android/tool/sign.dart": "void sign() {}\n"})
+    g = build_graph(other)
+    assert {"dt:serve", "dt:build", "dt:check", "dt:sign"} <= set(g.nodes)
+    # the twin: a Flutter project's own platform folders, at the top and in a folder of the repository, are left out
+    flutter = "name: a\ndependencies:\n  flutter:\n    sdk: flutter\n"
+    app = tmp_path / "app"
+    _write(app, {"pubspec.yaml": flutter, "lib/main.dart": "void main() {}\n",
+                 "ios/Runner/Reg.dart": "class Reg {}\n", "web/plugins.dart": "class WebReg {}\n",
+                 "android/app/x.dart": "class AndroidReg {}\n", "mobile/pubspec.yaml": flutter,
+                 "mobile/lib/start.dart": "void start() {}\n", "mobile/ios/Runner/Reg2.dart": "class Reg2 {}\n"})
+    g = build_graph(app)
+    assert {"dt:main", "dt:start"} <= set(g.nodes)
+    assert not {"dt:Reg", "dt:WebReg", "dt:AndroidReg", "dt:Reg2"} & set(g.nodes)
+
+
 def test_a_broken_dart_file_does_not_stop_the_map(tmp_path):
     _write(tmp_path, {"lib/bad.dart": "class Bad { void x( {\n", "lib/good.dart": "int ok() => 1;\n"})
     g = build_graph(tmp_path)

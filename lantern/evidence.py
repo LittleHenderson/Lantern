@@ -16,7 +16,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult, typecheck
+from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult, typecheck, workspace
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph, route_words
 from .lanes import LANE_WORDS, LANES
@@ -111,6 +111,8 @@ def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | No
                                                    for c in cat["checks"]),
             "protections": sorted(f"{x['id']}:{x['status']}" for x in rd.get("protections") or []),
             **_release_part(rd.get("release"))},
+        # several projects as one map: each one's commit (lantern/workspace.py); nothing for a project of its own
+        **workspace.payload(g.meta),
     }
 
 
@@ -515,6 +517,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "server (no network during the analysis, writes only to its own temp folder), analysed without "
                    "running any of its code, and the copy was deleted afterwards. The sandbox is a restricted process, "
                    "not a separate virtual machine.")
+    out += workspace.limits(g.meta)     # several projects as one map: what that does not prove
     return out
 
 
@@ -544,7 +547,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
                        "failed": s.get("failed"), "prompt_version": next(
                            (r.get("prompt_version") for r in (exp.get("explanations") or {}).values()), None)})
     payload = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False), run_options(sec, run_meta))
-    return {
+    ev = {
         "evidence_version": EVIDENCE_VERSION,
         "header": {"repo": gi.get("remote") or repo.name, "name": repo.name, **gi,
                    "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
@@ -595,6 +598,10 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         "limits": limits(g, sec, rd, run_meta, privacy, exp, baseline_unread),
         "digest": digest(payload), "payload": payload,
     }
+    ws = workspace.shown(g.meta)
+    if ws is not None:      # several projects as one map: each one, where it came from and its commit
+        ev["provenance"]["workspace"] = ws
+    return ev
 
 
 def read_digest(report: Path) -> tuple[str | None, dict | None]:
@@ -1097,8 +1104,10 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     rd = sc["readiness"]
     rel = _release(ev)
     commit = commit_named(h.get("commit"))
+    wsp = ev["provenance"].get("workspace") if isinstance(ev["provenance"].get("workspace"), dict) else None
     commit_html = (f"<code>{E(commit[:12])}</code>" + (" <b class='warn'>with uncommitted changes</b>" if h.get("dirty") else "")
-                   if commit else "<b class='warn'>not pinned: no git commit</b>")
+                   if commit else "several projects, each at the commit named under Architecture" if wsp
+                   else "<b class='warn'>not pinned: no git commit</b>")
     note = h.get("note")    # why there is no commit, or why the files count as changed (`gitfacts`)
     if isinstance(note, str) and note and note != gitfacts.NOT_ONE:
         commit_html += f" <span class='muted'>({E(note[:300])})</span>"
@@ -1116,6 +1125,23 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     br = ar.get("bridge") or {}
     bridge = (f"<p>{E(br.get('matched', 0))} of {E(br.get('http_calls', 0))} frontend HTTP calls are linked to a backend "
               f"route in this repo; {E(br.get('external', 0))} go to external services.</p>" if br.get("http_calls") else "")
+    ws_html = ""
+    if wsp:     # several projects as one map (lantern/workspace.py): each one with the commit it was copied at
+        members = [m for m in wsp.get("members") or [] if isinstance(m, dict)]
+        ws_rows = "".join(
+            f"<tr><td><b>{E(m.get('name'))}</b></td><td>{E(m.get('source') or '')} <span class='muted'>"
+            f"({'repository link' if m.get('from') == 'link' else 'folder'})</span></td><td>"
+            + (f"<code>{E(commit_named(m.get('commit'))[:12])}</code>"
+               + (" <b class='warn'>with uncommitted changes</b>" if m.get("dirty") else "")
+               if commit_named(m.get("commit")) else "<b class='warn'>no git commit</b>") + "</td></tr>"
+            for m in members)
+        ws_html = (f"<h4>Projects in this map</h4><p class='muted'>A workspace of {len(members)} projects, copied side "
+                   "by side and checked as one map: a request one of them makes is linked to the route of another "
+                   "that answers it.</p>"
+                   f"<table>{ws_rows}</table><p class='muted'>To check the digest on another computer, check each "
+                   "project out at the commit named here, make the workspace there under the same names "
+                   f"(<code>lantern workspace NAME=FOLDER … --name {E(wsp.get('name'))}</code>) and run the line in "
+                   "section 9.</p>")
 
     def glyph(f):
         # the stack strip's 4-dot glyph (design 11c): filled = the path goes there, coloured = where the problem lives
@@ -1206,6 +1232,8 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
               f"{'@' + engine if engine else ''}\" "
               f"&& lantern verify . --report evidence.html") if commit else NO_COMMIT_LINE
+    if wsp and not commit and isinstance(wsp.get("name"), str) and workspace.NAME.fullmatch(wsp["name"]):
+        verify = workspace.VERIFY_LINE.format(name=wsp["name"])
     words = _words_of(ev)
     words_html = ("<p class='muted'>This report was made with a test run, which runs the project's code. Lantern does "
                   "not write that command into the line above. This is the command as the report names it, word by "
@@ -1288,7 +1316,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
 <section><h2>4 · Architecture</h2>
 <p>{E(ar['files'])} files, {E(ar['lines'])} lines{(' · ' + E(', '.join(ar['frameworks']))) if ar['frameworks'] else ''}.
 {E(len(ar['entries']))} entry points: the places a user, a request, or a command can start running code.</p>
-<ul>{entries}</ul>{bridge}
+<ul>{entries}</ul>{bridge}{ws_html}
 {f'<h4>Recommended deployment</h4><div class="diagram">{_deploy_svg(ar["shape"])}</div><ul>' + ''.join(f'<li>{E(a)}</li>' for a in ar['advice']) + '</ul>' if ar['advice'] else ''}
 </section>
 

@@ -491,6 +491,29 @@ class App:
         job = self.jobs.start(p["id"], "clone", work)
         return {"job": job, "project": self.summary(p)}
 
+    def workspace_project(self, members, name=None) -> dict:
+        """Several folders or repository links read as one map (`lantern workspace`): the workspace is listed at once
+        under the name it will have, made in a job (links cloned, each project copied), then checked. What cannot be
+        one is refused before anything is listed (`workspace.plan`, a ValueError: 400); a workspace that was not made
+        is forgotten again."""
+        from . import workspace
+        name = workspace.plan(members, name if name not in (None, "") else None)
+        dest = workspace.folder_of(name)
+        p = self.store.add_project(dest)
+        privacy = self.store.settings().get("privacy", "full")
+
+        def work(log):
+            try:
+                workspace.make(members, name=name, log=log)
+            except Exception:
+                if workspace.record_for(dest) is None:     # no workspace of that name was made: forget the project
+                    self.store.remove_project(p["id"])
+                raise
+            return pipeline.analyze(dest, self.out(p), privacy, log=log)
+
+        job = self.jobs.start(p["id"], "workspace", work)
+        return {"job": job, "project": self.summary(p)}
+
     def provider_info(self) -> list[dict]:
         from .providers import DATA_NOTICES, gateway_url, load_token
         allowance = bool(load_token() and gateway_url())
@@ -1332,6 +1355,8 @@ class Handler(BaseHTTPRequestHandler):
             job = app.jobs.stop(m.group(1))   # ValueError (400) for a job that cannot be stopped part-way
             return self._json(job) if job else self._err(404, "no such job")
         if path == "/api/projects" and method == "POST":
+            if "paths" in b:            # several folders or links: one map of them (`lantern workspace`)
+                return self._json(app.workspace_project(b["paths"], b.get("name")), 202)
             raw = str(b.get("path") or "").strip()
             if not raw:
                 raise ValueError("give a folder path or a repository link")

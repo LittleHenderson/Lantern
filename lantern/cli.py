@@ -3,6 +3,7 @@
   lantern serve [PATH ...]                                the local app in your browser (start here)
   lantern learn [NAME [DIR]]                              create a starter app to learn Lantern step by step
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
+  lantern workspace PROJECT PROJECT ... [--name NAME]     several folders or repository links checked as one map
   lantern trace PATH -- python -m pytest -q               record what actually runs
   lantern behave PATH                                     start the app in the sandbox and run its lantern-behaviour.json
   lantern behave PATH --init [--force]                    run nothing: write a first lantern-behaviour.json from the code
@@ -125,6 +126,57 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
 
 
 RANKS = ["critical", "high", "medium", "low"]
+
+
+def cmd_workspace(a) -> int:
+    """`lantern workspace` (lantern/workspace.py): several projects copied side by side and checked as one map, so a
+    request one of them makes is linked to the route of another that answers it."""
+    from . import workspace
+    from .pipeline import analyze
+
+    def say(line):
+        print(line, file=sys.stderr)
+
+    try:
+        if a.list:
+            recs = workspace.listed()
+            if not recs:
+                print("No workspace yet: `lantern workspace FOLDER FOLDER ...` makes one.")
+            for rec in recs:
+                print(f"{rec['name']}   made {rec.get('made') or '?'}   {workspace.folder_of(rec['name'])}")
+                for m in rec["members"]:
+                    at = str(m.get("commit") or "")[:12] or "no commit"
+                    print(f"  {_printable(str(m.get('name')))}   {_printable(str(m.get('source')))}   ({at}"
+                          f"{', changes not committed' if m.get('dirty') else ''})")
+            return 0
+        if a.remove:
+            workspace.remove(a.remove)
+            print(f"removed  the workspace {a.remove}: its copies and its record (the projects themselves are untouched)")
+            return 0
+        if a.members:
+            rec = workspace.make(a.members, name=a.name, log=say)
+        elif a.name:
+            rec = workspace.again(a.name, log=say)
+        else:
+            print("error: name two projects or more (folders or repository links), or give --name of a workspace "
+                  "made before, --list or --remove NAME", file=sys.stderr)
+            return 2
+    except workspace.Refused as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    folder = workspace.folder_of(rec["name"])
+    print(f"workspace {rec['name']}: " + ", ".join(
+        f"{m['name']}" + (f" at {str(m['commit'])[:12]}" if m.get("commit") else " (no commit)")
+        for m in rec["members"]) + f"  ({folder})")
+    out = _out(folder, a.out)
+    try:
+        analyze(folder, out, a.privacy, offline=a.offline or None)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(f"again   lantern workspace --name {rec['name']}   (copies the projects anew and checks them)")
+    print(f"serve   lantern serve {folder}")
+    return 0
 
 
 def cmd_evidence(a) -> int:
@@ -784,6 +836,21 @@ def _main(argv: list[str]) -> int:
                     help="exit 1 unless this run's release decision is good enough (for CI): not-blocked stops on "
                          "Blocked; passed also stops on Incomplete, so it needs the tests run (--trace) and passing")
 
+    sp = sub.add_parser("workspace", help="several projects (folders or repository links) checked as one map: a "
+                                          "request one makes is linked to the route of another that answers it")
+    sp.add_argument("members", nargs="*", metavar="PROJECT",
+                    help="a folder or a repository link; NAME=FOLDER or NAME=LINK gives it its name in the map")
+    sp.add_argument("--name", help="the workspace's name (default: made from its projects' names); given alone, the "
+                                   "projects of that workspace are copied anew from where they came from and checked")
+    sp.add_argument("--out", help="results folder (default: the workspace's own folder/.lantern)")
+    sp.add_argument("--offline", action="store_true",
+                    help="skip dependency audits (pip-audit, npm audit), the only steps that use the network")
+    sp.add_argument("--privacy", choices=["full", "structure"], default="full",
+                    help="full embeds function source in the report; structure leaves it out")
+    sp.add_argument("--list", action="store_true", help="name the workspaces and their projects")
+    sp.add_argument("--remove", metavar="NAME",
+                    help="remove a workspace: its copies and its record (the projects themselves are not touched)")
+
     sp = sub.add_parser("trace", help="run a command and mark calls that actually happen")
     common(sp)
     sp.add_argument("--test-minutes", type=_minutes, metavar="N",
@@ -981,6 +1048,8 @@ def _main(argv: list[str]) -> int:
         atexit.register(usage.send, gateway_url(), 3.0)
     if a.cmd == "analyze":
         return cmd_analyze(a, trace_cmd if a.trace else [])
+    if a.cmd == "workspace":
+        return cmd_workspace(a)
     if a.cmd == "trace":
         return cmd_trace(a, trace_cmd)
     if a.cmd == "behave":

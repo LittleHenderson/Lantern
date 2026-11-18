@@ -9,6 +9,30 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Several projects as one map: `lantern workspace FOLDER|LINK FOLDER|LINK …` copies the projects side by side
+  (`LANTERN_HOME/workspaces/<name>/<project>/`) and checks them as one, so a page of one project is linked to the
+  route of another that answers it, by the bridge's own rule and `via`, and a finding is reached across them as
+  across a page and its server (`lantern/workspace.py`, `docs/workspaces.md`). Links of code from one project
+  into another and every link that touches a name two projects write are only `possible`, and what crosses is
+  listed (`meta.workspace`). The Evidence Report names each project and the commit it was copied at, and its
+  digest takes them in. Only the person's own command makes one: the record is kept beside the copies and never
+  read from a project, and a folder there that Lantern did not make is never replaced or removed. `--name N`
+  copies the projects anew, `--list`, `--remove N`; the app takes several folders or links in one `POST
+  /api/projects` (`paths`).
+- A project's name in a workspace is its folder's name, so names that Lantern's own folder rules give a meaning
+  are never given (95 names and the beginnings `cmake-build-` and `bazel-`, found from the 87 rules by a test;
+  `tests`, `docs`, `build`, `vendor`, `src`, `lib`, …); a folder of such a name gets `-project` after it.
+- Go: a folder's files belong to the module of the nearest `go.mod` at or above it, as the go tool reads it.
+  Until now only a `go.mod` at the top of the repository was read, and a Go server in a folder of its own
+  (`backend/` beside `frontend/`) linked none of its own imports: on the Go sample in a folder of its own, 8
+  links became library calls and its SQL finding read high instead of critical.
+- Dart: only a Flutter project's own platform folders (`web`, `ios`, `android`, `macos`, `windows`, `linux`
+  beside its `pubspec.yaml`) are left out. Until now every folder of those names was, anywhere, so a repository's
+  own `web/` server lost its Dart.
+- `python bench/workspace.py`: each of the 15 sample projects read alone and as part of a workspace, compared on
+  functions, links, entry points, call sites and findings, and each of 7 split into its page and its server and
+  joined again: no difference after the Go fix, 2 of 2 requests linked again in each
+  (`bench/workspace_results.md`).
 - The measurements of roadmap stage 5 are written down in one place, `bench/security_packs_results.md`: each rule
   on 30 folders, the three AI rules on seven public AI projects, the held-out set before and after the whole
   stage (nine of its fourteen apps, offline: 235 findings before and after, none gone, new or changed; 29 of the
