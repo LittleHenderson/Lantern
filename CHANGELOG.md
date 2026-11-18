@@ -9,6 +9,10 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The website check in a browser waits for the team page to be drawn again after Done on the invite sheet, before
+  its next click there (`tools/cloud_site_smoke.js`, `tests/test_smoke_redraw.py`). A click that began on the page
+  before and ended on the page after it was lost, and the check in Firefox once waited 30 seconds for the sheet that
+  click should have opened and failed (CI, 2026-11-18; the same commit passed in the other run of the checks).
 - The Python library audit asks pypi.org again when pypi.org fails it. pip-audit does not ask again itself, so
   one slow answer ("Read timed out"), a cut connection, or an error answer of the service (5xx, 429) ended the
   whole audit, and Lantern's check of itself read as not done (CI, 2026-11-18). pip-audit is started again then,
