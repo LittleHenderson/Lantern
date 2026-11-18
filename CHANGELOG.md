@@ -20,6 +20,26 @@ file. New entries go under `## Unreleased`, on top.
   none and says so. The health page says which (`steps`: `apart`, `open`, `unchecked`, `shared`) and the uptime
   check fails on `open` and `shared`. Until now every check's steps ran as one user (`docs/deploy.md`, "Each
   check as a user of its own"; threat model, open risk 0).
+- The website check in a browser waits for the team page to be drawn again after Done on the invite sheet, before
+  its next click there (`tools/cloud_site_smoke.js`, `tests/test_smoke_redraw.py`). A click that began on the page
+  before and ended on the page after it was lost, and the check in Firefox once waited 30 seconds for the sheet that
+  click should have opened and failed (CI, 2026-11-18; the same commit passed in the other run of the checks).
+- The Python library audit asks pypi.org again when pypi.org fails it. pip-audit does not ask again itself, so
+  one slow answer ("Read timed out"), a cut connection, or an error answer of the service (5xx, 429) ended the
+  whole audit, and Lantern's check of itself read as not done (CI, 2026-11-18). pip-audit is started again then,
+  at most 3 times in all, after a pause of 2 and then 5 seconds, and only while a minute of the audit's 5 minutes
+  is left; what the last try found is the audit's, and the record says how often it was started and why (`tries`,
+  `asked_again`). A failure another try would not change (a certificate, a proxy that refuses, the service's
+  refusal, a file pip-audit refuses) is still the audit's one try.
+- Every check of CI has a time limit, and a check that hangs says where it stood. A test that runs past 15 minutes
+  has every thread of the run print where it waits, while it is still running (pytest's `faulthandler_timeout`,
+  `pyproject.toml`). The no-network runner takes `--deadline MINUTES` (`tools/netless.py`): a run still going then
+  has every process of it listed, thread by thread, the tests asked to end so that pytest says where it stood, and
+  what is left ended (result 7). Every job of every workflow, and every step that runs tests, has a limit of its
+  own, in the order `tests/test_time_limits.py` keeps. Until now a run of CI's tests that printed 89% and then
+  nothing went on for 2 h 39 min, until it was cancelled by hand, and nothing said where it stood. The runner also
+  says when its recorder (strace) stopped before the command did (result 6), where strace's own result read like
+  failed tests.
 - The badge `lantern serve` and the website serve beside a report (`badge.svg`) follows the release decision, as
   the `badge.svg` a check writes into its results folder already did: it says "blocked" or "incomplete" where the
   decision does, and "scan incomplete" in grey where a scanner that applies did not finish. Until now it was

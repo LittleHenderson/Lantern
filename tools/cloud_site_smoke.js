@@ -215,7 +215,10 @@ async function until(p, fn, timeout) {
       const inv = await p.$eval('#invurl', i => i.value);
       if (!/#\/join\/[A-Za-z0-9_-]{20,}$/.test(inv)) errs.push(`${tag}: the invite link looks wrong (${inv})`);
       await p.screenshot({ path: `${out}-${tag}-invite.png` });
-      await p.click('#invdone');
+      // Done draws the team page again once the server has answered. A click that began on the page before that
+      // and ended on the page after it would be lost (tests/test_smoke_redraw.py), so the next click waits for the
+      // page drawn again, the one that says an invite link is not used yet
+      await p.click('#invdone'); await p.waitForSelector('#cancelinv');
       await p.click('#addrun'); await p.click('.sheet [data-add="done1-demo-00000"]'); await p.waitForSelector('.apps [data-open="done1-demo-00000"]');
       await p.screenshot({ path: `${out}-${tag}-team.png`, fullPage: true });
       const ctxT = await b.newContext({ viewport, colorScheme: scheme });
