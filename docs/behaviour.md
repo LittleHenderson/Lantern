@@ -85,6 +85,7 @@ databases are not started yet (see Limits).
 | `address` | the app sets out for no address but `may_reach` | one | outside address |
 | `limit` | after `times` tries the next is refused (`limited`, default 429 or 423), straight after, after a restart, and on another copy of the app | three | unlimited; forgotten |
 | `ended` | `request` works for `who`; after the `end` request (a sign-out, an account switched off, an invitation taken back; `{"request": …, "as": …}` when somebody else makes it) the same request is refused (`refused`, default 401 or 403; name 302 where the app sends people to its sign-in page): straight after, after a restart, and on another copy of the app that had answered the request before (`across` picks some of `same`, `restart`, `other-worker`) | three | lived on (the request was accepted again). Inconclusive when the request did not work before, when `end` did not work, or when the answer afterwards is neither a refusal the check names nor accepted |
+| `ended-midway` | `request` changes something for `who`; when the `end` request (a sign-out, an account removed; `{"request": …, "as": …}` when somebody else makes it) comes after the app let the request in and before it wrote anything, the change is not made (the first copy of the app is held at its first database write, the end is sent to a second copy, then the first goes on) | two | lived on (the change was made after the sign-in had ended). Inconclusive when the request alone changes nothing or the end did not work; not run when the request writes nothing, so it cannot be held half-way |
 | `once` | two of the same request at the same moment end as one after the other does (undecided when the request does not work even when it is sent alone) | one | raced |
 | `retry` | the same request sent again, or sent again after the answer was lost, is not done twice | two | repeated |
 | `faults` | the request is made to fail at each of its database writes and commits, and is cut off before each and before the answer leaves; afterwards all of its work is there or none, and `then` (somebody else's ordinary request) works and saves only its own | one per place | partial; carried over; stuck |
@@ -142,6 +143,9 @@ What it reads, and what it writes from it:
 * **Somebody else's row.** A route with one number in its address (`/notes/{note_id}`), whose rows are made by a
   POST to the same place (`POST /notes`): `alice` makes a row, and `bob` and `nobody` ask for it. For a GET the
   answer must not hold what alice wrote either.
+* **Ended half-way.** Where the app has a sign-out (a POST with no number in its address whose path says logout or
+  sign-out, else a DELETE of a session), up to five routes that change something and show a login get an
+  `ended-midway` check: `alice` makes the change and signs herself out while it is held at its first write.
 * **Limits and repeats.** Wrong passwords at the sign-in (`limit`: as many tries as a limit written on the route
   says, else ten, and then once more: straight after, after a restart, and on a second copy of the app); a route
   that reaches a paid service (`limit`); a route named for a payment (`once`: two requests at the same moment); a
@@ -167,20 +171,21 @@ It is a first plan: read it once, correct it, and commit it. What `--init` does 
   sign-in kept in a cookie, an API key in a header of its own and every other framework are written by hand.
 * A made-up value that the app refuses makes its case read undecided, and in the first steps it stops the run
   ("the plan's set-up failed at step N"): put a value the app accepts.
-* It writes the kinds `refuse`, `limit`, `once` and `retry`. The others (`hide`, `tokens`, `input`, `keeps`,
-  `contain`, `redirect`, `address`, `ended`, `faults`) are written by hand.
+* It writes the kinds `refuse`, `limit`, `once`, `retry` and `ended-midway`. The others (`hide`, `tokens`, `input`,
+  `keeps`, `contain`, `redirect`, `address`, `ended`, `faults`) are written by hand.
 * What it reads from names (which request makes an account, which route is a payment, which table keeps a record
   of what was tried) can be wrong, which is why each such case is on the review list.
 * The two people it makes are strangers to each other: each makes an account of their own. What two people of one
   team, or a member and an admin, may do to each other is a case for a person to write.
 
-How far a first plan gets was measured on the benchmark's throw-away app, the safe version and 32 versions with
+How far a first plan gets was measured on the benchmark's throw-away app, the safe version and 33 versions with
 one planted problem each, with the plan written from each version's own code and run as written
 (`python bench/behaviour/run_behaviour.py WORKDIR --first-plan`, `bench/behaviour/first_plan_results.md`): on the
 safe app no case is broken; it catches the 8 planted problems of the kinds it asks about (a visitor let in,
-somebody else's row, wrong passwords not counted or the count forgotten); the other 24 (tokens, uploads, archives,
-redirects, addresses the app fetches, a request that fails half-way, two people of one team) it does not, and
-the plan a person wrote for that app catches all 32.
+somebody else's row, wrong passwords not counted or the count forgotten); the other 25 (tokens, uploads, archives,
+redirects, addresses the app fetches, a request that fails half-way, two people of one team, an account removed
+while a request is under way: the app has no sign-out to write that case from) it does not, and the plan a person
+wrote for that app catches all 33.
 
 ## Limits
 

@@ -2547,6 +2547,11 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += failopen.fails_open(g)
     from . import effectfirst       # money or an order sent out before anything of it is written down
     findings += effectfirst.effect_first(g)
+    from . import selfproof         # marked done on the caller's word; proof the checked side writes itself
+    findings += selfproof.caller_says_done(g)
+    findings += selfproof.self_written(g)
+    from . import staleauth         # a sign-in checked under a lock that is let go before the change
+    findings += staleauth.ended_midway(g)
     from . import publicvalues      # a setting for the browser whose value is a secret, where its name says nothing
     findings += publicvalues.public_values(
         repo, said={(f["file"], f["snippet"]) for f in findings if f["rule"] == "LW-PUBLIC-SECRET"})

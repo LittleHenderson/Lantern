@@ -9,6 +9,22 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Four more checks from the side-by-side with another review tool (`bench/four_checks_results.md`), each written from
+  examples of Lantern's own beside safe twins, each a heuristic (`tool_confidence: LOW`, ranked medium) that says
+  "check":
+  - `LW-CALLER-SAYS-DONE` (`lantern/selfproof.py`): something is marked paid, settled or confirmed on a value the
+    caller sent whose name says it is the proof (a provider's transaction id, a receipt number), and nothing asks the
+    provider whether it is real.
+  - `LW-SELF-WRITTEN-PROOF` (`lantern/selfproof.py`): a function named for checking asks for at least two kinds of
+    record that a side the program trusts less (a runner, a worker, a client) may write itself, one of them a record
+    that something happened.
+  - `LW-SIGN-IN-ENDED-MIDWAY` (`lantern/staleauth.py`): a sign-in is checked under a lock, the lock is let go, and a
+    change follows; meanwhile another method rotates the same field under that lock, so a sign-in ended half-way
+    still gets its change made.
+  - `lantern behave` has a kind `ended-midway`: the change request is held at its first database write while the
+    sign-in is ended on a second copy of the app, and the change must not be made. `--init` writes it where the app
+    has a sign-out; the benchmark app has a planted version of it (`note-after-removal`), which the plan catches and
+    the safe app holds.
 - What a side-by-side with another review tool showed, on a project both were run on (`bench/report_comparison_results.md`).
   Measured on 31 folders before and after: 0 findings gone, 4 new (all on that project, all real), 15 ranked
   otherwise (all on that project: critical to low, each with its reason). That project read Blocked, 59, before.
