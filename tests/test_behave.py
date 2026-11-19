@@ -1079,7 +1079,7 @@ def _bench():
 
 @pytest.fixture(scope="module")
 def corkboard():
-    """Corkboard (bench/behaviour): a FastAPI app with sign-in tokens, the safe version and 32 with one planted
+    """Corkboard (bench/behaviour): a FastAPI app with sign-in tokens, the safe version and 33 with one planted
     problem each. tests/test_behaviour_apps.py tests the apps themselves."""
     pytest.importorskip("fastapi")
     pytest.importorskip("jwt")
@@ -1090,7 +1090,7 @@ def corkboard():
 def test_the_safe_app_holds_in_every_case_of_the_whole_plan(corkboard, tmp_path):
     row = corkboard.run_one(tmp_path, corkboard.SAFE)
     assert row["differences"] == [], row["log"]
-    assert row["summary"] == {"held": 83, "broken": 0, "inconclusive": 0, "not-run": 0}
+    assert row["summary"] == {"held": 84, "broken": 0, "inconclusive": 0, "not-run": 0}
 
 
 @starts_an_app
@@ -1099,7 +1099,7 @@ def test_every_planted_problem_is_caught_by_the_cases_written_down_for_it_before
     codes, the cases the problem leaves undecided come out so, and the other cases of the same checks hold.
     `bench/behaviour/run_behaviour.py` runs the whole plan against every version (no other case may break)."""
     names = list(corkboard.apps.PLANTED)
-    assert len(names) == 32 and set(names) == set(corkboard.plans.EXPECTED)
+    assert len(names) == 33 and set(names) == set(corkboard.plans.EXPECTED)
     with ThreadPoolExecutor(min(4, os.cpu_count() or 1)) as pool:
         rows = list(pool.map(lambda name: corkboard.run_one(tmp_path, name, own_checks=True), names))
     assert {r["name"]: r["differences"] for r in rows if r["differences"]} == {}
@@ -1120,3 +1120,75 @@ def test_the_table_of_what_must_come_out_names_only_cases_the_plan_has(corkboard
     for planted, undecided in corkboard.plans.INCONCLUSIVE.items():
         assert planted in corkboard.apps.PLANTED and set(undecided) <= cases
     assert corkboard.plans.differences(None, {"ran": False, "why_not": "x"}) == ["not run: x"]
+
+
+# ----------------------------------------------------------------------- a sign-in ended while a change is under way
+# The change is held at its first write, the sign-in is ended on another copy of the app, and the change goes on:
+# it must not be made for a sign-in that no longer holds (2026-11-19, after another review tool named a check let go
+# before its change in a project Lantern was measured on). Each version has its own `add_note(conn, token)`.
+MIDWAY = DOORS.replace('''        elif scope["method"] == "POST" and scope["path"] == "/signout":''', '''        elif scope["method"] == "POST" and scope["path"] == "/notes":
+            status = 201 if add_note(conn, token) else 401
+        elif scope["method"] == "POST" and scope["path"] == "/signout":''').replace(
+    '''    conn.execute("CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY)")''',
+    '''    conn.execute("CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY)")
+    conn.execute("CREATE TABLE IF NOT EXISTS notes (token TEXT)")''') + '''
+signed_in, sign_out = in_the_database, taken_out
+'''
+CHECKED_BEFORE = MIDWAY + '''
+def add_note(conn, token):
+    conn.execute("INSERT INTO notes (token) VALUES (?)", (token,))      # the sign-in was checked above, not here
+    conn.commit()
+    return True
+'''
+CHECKED_IN_THE_WRITE = MIDWAY + '''
+def add_note(conn, token):
+    added = conn.execute("INSERT INTO notes (token) SELECT ? WHERE EXISTS (SELECT 1 FROM sessions WHERE token = ?)",
+                         (token, token)).rowcount
+    conn.commit()
+    return added == 1
+'''
+WRITES_NOTHING = MIDWAY + '''
+def add_note(conn, token):
+    return True
+'''
+HALF_WAY = {"id": "midway", "kind": "ended-midway", "about": "A note is not added for a sign-in ended under way",
+            "who": "alice", "request": {"method": "POST", "path": "/notes"},
+            "end": {"request": {"method": "POST", "path": "/signout"}, "as": "alice"}}
+MIDWAY_PLAN = dict(DOORS_PLAN, checks=[HALF_WAY])
+
+
+@starts_an_app
+def test_a_change_let_through_before_its_sign_in_was_ended_is_reported(tmp_path):
+    assert _by_case(_run(_repo(tmp_path / "before", CHECKED_BEFORE, MIDWAY_PLAN))) == \
+        {"midway/ended half-way": ("broken", ["lived-on"])}
+    assert _by_case(_run(_repo(tmp_path / "write", CHECKED_IN_THE_WRITE, MIDWAY_PLAN))) == \
+        {"midway/ended half-way": ("held", [])}
+    nothing = _run(_repo(tmp_path / "nothing", WRITES_NOTHING, MIDWAY_PLAN))
+    assert [(o["outcome"], o["why"]) for o in nothing["outcomes"]] == \
+        [("not-run", "the request writes nothing, so it cannot be held half-way")]
+
+
+def test_what_a_change_ended_half_way_counts_as():
+    alone = [{"status": 201, "changes": {"tables": {"notes": [1, 0, 0]}}, "state": {"loud": "x1"}}]
+    held, ended = {"paused": True, "state": {"loud": "s"}}, {"status": 200, "state": {"loud": "e"}}
+
+    def judged(last, end=ended, control=alone):
+        return _judged(HALF_WAY, {"the change alone": control, "ended half-way": [held, end, last]})["ended half-way"]
+    assert judged({"status": 401, "state": {"loud": "e"}}) == HELD
+    assert judged({"status": 201, "state": {"loud": "e"}}) == HELD            # it said yes and saved nothing
+    assert judged({"status": 201, "state": {"loud": "e2"}}) == LIVED_ON
+    assert judged({"status": 401, "state": {"loud": "e2"}}) == LIVED_ON       # refused, and saved all the same
+    assert judged({"status": 500, "state": {"loud": "e"}}) == ("broken", ["crashed"])
+    assert judged({"status": 201, "state": {"loud": "e2"}}, end={"status": 404, "state": {"loud": "s"}}) == \
+        ("inconclusive", [])                                                  # nothing was ended
+    assert judged({"status": 201, "state": {"loud": "e2"}}, control=[{"status": 401, "state": {"loud": "s"}}]) == \
+        ("inconclusive", [])                                                  # the change never worked alone
+    plan = behave.check({"app": {"asgi": "app:app"}, "people": PEOPLE, "checks": [HALF_WAY]})
+    inside_, cases = behave.scene(plan)
+    assert [c["case"] for c in cases] == ["the change alone", "ended half-way"]
+    note = {"request": HALF_WAY["request"], "as": "alice"}
+    assert inside_["probes"][1]["steps"] == [
+        dict(note, fault={"kind": "pause", "on": "write", "at": 1}),
+        {"request": {"method": "POST", "path": "/signout"}, "as": "alice", "worker": 1}, {"resume": {"worker": 0}}]
+    with pytest.raises(behave.PlanError):
+        behave.check({"app": {"asgi": "app:app"}, "people": PEOPLE, "checks": [dict(HALF_WAY, end=None)]})

@@ -269,12 +269,7 @@ def me(user=Depends(current_user), conn=Depends(get_db)):
 @@list_notes@@
 
 
-@app.post("/notes", status_code=201)
-def create_note(body: NoteIn, user=Depends(can_write), conn=Depends(get_db)):
-    note_id = conn.execute("INSERT INTO notes (team_id, owner_id, text, private) VALUES (?, ?, ?, ?)",
-                           (user["team_id"], user["id"], body.text, int(body.private))).lastrowid
-    conn.commit()
-    return {"id": note_id}
+@@create_note@@
 
 
 @@read_note@@
@@ -595,6 +590,26 @@ def read_note(note_id: int, user=Depends(current_user), conn=Depends(get_db)):
     return dict(note)
 ''')
 
+piece("create_note", "safe", '''
+@app.post("/notes", status_code=201)
+def create_note(body: NoteIn, user=Depends(can_write), conn=Depends(get_db)):
+    # the person is asked for again in the write itself: one removed since the sign-in was read adds nothing
+    made = conn.execute("INSERT INTO notes (team_id, owner_id, text, private) SELECT ?, ?, ?, ? "
+                        "WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)",
+                        (user["team_id"], user["id"], body.text, int(body.private), user["id"]))
+    conn.commit()
+    if made.rowcount != 1:
+        raise HTTPException(401, "Sign in again")
+    return {"id": made.lastrowid}
+''')
+piece("create_note", "asked-before", '''
+@app.post("/notes", status_code=201)
+def create_note(body: NoteIn, user=Depends(can_write), conn=Depends(get_db)):
+    note_id = conn.execute("INSERT INTO notes (team_id, owner_id, text, private) VALUES (?, ?, ?, ?)",
+                           (user["team_id"], user["id"], body.text, int(body.private))).lastrowid
+    conn.commit()
+    return {"id": note_id}
+''')
 piece("change_note", "safe", '''
 @app.put("/notes/{note_id}")
 def change_note(note_id: int, body: NoteIn, user=Depends(can_write), conn=Depends(get_db)):
@@ -1015,6 +1030,8 @@ PLANTED: dict[str, tuple[str, str, dict[str, str]]] = {
     "scope-unchecked": ("credential", "A token meant for reading only can change things", {"can_write": "no-scope"}),
     "sign-in-remembered": ("ended", "A removed person's sign-in goes on working on the copy of the app that let "
                            "them in before", {"current_user": "remembered"}),
+    "note-after-removal": ("ended-midway", "A person removed while their note is on its way still gets the note "
+                           "added", {"create_note": "asked-before"}),
     "role-in-profile": ("invalid-input", "A member can make themself admin through the profile form",
                         {"profile_model": "with-role", "update_me": "with-role"}),
     "negative-transfer": ("invalid-input", "A negative amount moves credits the wrong way", {"amount": "any-number"}),

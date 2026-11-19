@@ -64,7 +64,10 @@ was written down before the first run.
 
 ## Not done
 
-- Two points of the comparison are not changed by this: a report that names who wrote it and how that can be
-  checked by someone else, and a check made through the commit itself. They need a design of their own.
+- Two points of the comparison were not changed by this, and were first described wrongly here (as "a report that
+  names who wrote it" and "a check made through the commit itself"; corrected 2026-11-19). What the comparison
+  asks for is about the app's code, not Lantern's report: who may write the proof that something happened, and
+  whether the part that approves sees the event itself (its item 3); and whether the sign-in still holds at the
+  moment the change is saved (its item 4). Both were built after this: `bench/four_checks_results.md`.
 - Of the 11 problems the other tool named, the new rules find 4 on the project. The others are of kinds no rule of
   Lantern reads yet.

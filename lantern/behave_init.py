@@ -59,6 +59,8 @@ WORDS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")     # the words of a nam
 LOGIN_WORDS = frozenset({"login", "signin", "token", "session", "sessions", "auth", "authenticate", "authorize"})
 SIGNUP_WORDS = frozenset({"signup", "register", "registration", "users", "user", "accounts", "account"})
 PASSWORD = frozenset({"password", "passwd", "pwd", "passphrase"})
+SIGN_OUT_WORDS = frozenset({"logout", "signout", "logoff", "signoff"})
+MOST_MIDWAY = 5              # changes a first plan holds half-way while the sign-in is ended
 PAY_WORDS = frozenset({"pay", "payment", "payments", "charge", "charges", "checkout", "transfer", "transfers", "purchase",
                        "purchases", "redeem", "withdraw", "withdrawal", "refund", "refunds", "donate", "donation",
                        "topup", "deposit", "buy", "spend"})
@@ -951,6 +953,7 @@ def draft(repo, g: Graph | None = None) -> dict:
     checks: list[dict] = []
     ids: set = set()
     case_of: dict = {}                       # a route's id -> the id of its case without a login
+    midway: list = []                        # (route, its case): changes behind a login, to be held half-way
 
     def new_id(text: str) -> str:
         base, n = _slug(text)[:60], 1
@@ -1065,6 +1068,33 @@ def draft(repo, g: Graph | None = None) -> dict:
                                   "and the case reads undecided: put an address the app accepts."})
         checks.append(c)
         case_of[route.node.id] = c["id"]
+        if changes and shown:
+            midway.append((route, c))
+
+    # ---- a sign-in ended while a change is under way
+    sign_out = next((r for r in routes if r.verb in MUTATING and not r.params and r.words() & SIGN_OUT_WORDS), None) \
+        or next((r for r in routes if r.verb == "DELETE" and not r.params and r.words() & {"session", "sessions"}),
+                None)
+    if sign_out is not None:
+        try:
+            ends = sign_out.request(OWNER, [])
+            _request_ok(ends, "")
+        except (_Cannot, PlanError):
+            ends = None
+        for route, c in midway[:MOST_MIDWAY] if ends is not None else []:
+            if route is sign_out or len(checks) >= MOST_CHECKS:
+                continue
+            m = {"id": new_id(f"midway {route.verb} {route.path}"), "kind": "ended-midway", "request": c["request"],
+                 "who": OWNER, "end": {"request": ends, "as": OWNER},
+                 "about": (f"{route.detail} is held at its first write to the database while {OWNER} signs out at "
+                           f"{sign_out.detail}: the change must not be made for a sign-in that was ended.")}
+            if c.get("arrange"):
+                m["arrange"] = c["arrange"]
+            checks.append(m)
+            out["review"].append({"check": m["id"], "why": "The change is held at the app's first write to the "
+                                  "database. If that write is not the change itself (a record of the request, a "
+                                  "count), the case holds the wrong moment: take it out, or make the request one "
+                                  "whose first write is the change."})
 
     # ---- limits and repeats
     wrong = dict(_sign_in_values(login, made[OWNER], OWNER))
