@@ -10,7 +10,7 @@
 #
 #    pip-compile --allow-unsafe --extra=dev --extra=scan --output-file=requirements-lock.txt --strip-extras pyproject.toml
 #
-annotated-doc==0.0.5
+annotated-doc==0.0.6
     # via fastapi
 annotated-types==0.8.0
     # via pydantic
@@ -35,7 +35,7 @@ cffi==2.1.1
     # via cryptography
 charset-normalizer==3.5.2
     # via requests
-click==8.5.0
+click==8.5.1
     # via uvicorn
 cryptography==50.0.2
     # via pyjwt
@@ -43,9 +43,9 @@ cyclonedx-python-lib==11.12.0
     # via pip-audit
 defusedxml==0.7.1
     # via py-serializable
-fastapi==0.162.0
+fastapi==0.163.1
     # via lantern (pyproject.toml)
-filelock==4.2.9
+filelock==4.2.10
     # via cachecontrol
 h11==0.16.0
     # via
@@ -64,7 +64,7 @@ iniconfig==2.3.1
     # via pytest
 license-expression==30.4.4
     # via cyclonedx-python-lib
-markdown-it-py==4.2.0
+markdown-it-py==4.3.0
     # via rich
 mdurl==0.1.2
     # via markdown-it-py
@@ -91,13 +91,13 @@ platformdirs==4.14.5
     # via pip-audit
 pluggy==1.7.0
     # via pytest
-py-serializable==2.1.0
+py-serializable==2.2.0
     # via cyclonedx-python-lib
 pycparser==3.12
     # via cffi
-pydantic==2.14.2
+pydantic==2.14.3
     # via fastapi
-pydantic-core==2.50.2
+pydantic-core==2.50.4
     # via pydantic
 pygments==2.21.0
     # via
@@ -111,7 +111,7 @@ pyparsing==3.3.3
     # via pip-requirements-parser
 pytest==9.2.0
     # via lantern (pyproject.toml)
-python-multipart==0.0.32
+python-multipart==0.0.34
     # via lantern (pyproject.toml)
 pyyaml==6.0.3
     # via bandit
@@ -127,13 +127,13 @@ sortedcontainers==2.4.0
     # via cyclonedx-python-lib
 starlette==1.10.0
     # via fastapi
-stevedore==5.9.1
+stevedore==5.10.0
     # via bandit
 tomli==2.5.0
     # via pip-audit
 tomli-w==1.2.0
     # via pip-audit
-tree-sitter==0.25.2
+tree-sitter==0.26.1
     # via lantern (pyproject.toml)
 tree-sitter-c==0.24.2
     # via lantern (pyproject.toml)
