@@ -262,6 +262,68 @@ def find_calls(g: Graph, cache: dict[str, list[str]] | None = None) -> list[dict
     return out
 
 
+# A model provider's own API address: a call there is a paid model call whatever library makes it, also a plain HTTP
+# request with no provider library (2026-11-19: a project measured beside another review tool sent its model calls
+# with `urllib.request` to addresses kept in a table, and Lantern's record said "no model calls found").
+PROVIDER_HOSTS = {
+    "api.openai.com": "OpenAI", "api.anthropic.com": "Anthropic", "generativelanguage.googleapis.com": "Google",
+    "aiplatform.googleapis.com": "Google Vertex AI", "api.mistral.ai": "Mistral", "api.groq.com": "Groq",
+    "api.deepseek.com": "DeepSeek", "api.cohere.ai": "Cohere", "api.cohere.com": "Cohere",
+    "api.together.xyz": "Together", "openrouter.ai": "OpenRouter", "api.x.ai": "xAI",
+    "api.perplexity.ai": "Perplexity", "api.fireworks.ai": "Fireworks", "api.replicate.com": "Replicate",
+}
+HOST = re.compile(r"(?<![\w.-])(" + "|".join(re.escape(h) for h in PROVIDER_HOSTS) + r")(?![\w-]|\.[\w-])")
+# a request made with no provider's library
+RAW_HTTP = re.compile(r"\burlopen\(|\brequest\.Request\(|\brequests\.(?:post|get|put|request)\(|"
+                      r"\b(?:httpx|session|client|self\.\w+)\.(?:post|stream)\(|\bhttpx\.(?:get|request)\(|"
+                      r"\bHTTPSConnection\(|\bfetch\(|\baxios(?:\.(?:post|request))?\(|\bhttp\.NewRequest\(|\bhttp\.Post\(")
+
+
+def http_model_calls(g: Graph, cache: dict[str, list[str]], pinned: set[tuple[str, int]]) -> tuple[list[dict], list[str]]:
+    """The plain HTTP requests of files whose code names a model provider's API address (`PROVIDER_HOSTS`), as model
+    calls with `how: "http"`, and the files that name such an address and make no such request. Read by the file, not
+    followed: an address kept in one place and a request made in another place of the same file are joined, an
+    address in another file is not. A remark is no address and no request (`read_as_code`). Such a call is listed and
+    marks the function; the rules about paid calls (`LA-WALLET-DRAIN`, `LA-MODEL-OUTPUT-TO-TOOL`) do not read it,
+    because which request goes to which address is not known."""
+    repo = Path(g.repo_root)
+    nodes_of: dict[str, list] = {}
+    for n in g.nodes.values():
+        if n.kind == "callable" and n.file and n.start_line:
+            nodes_of.setdefault(n.file, []).append(n)
+    out: list[dict] = []
+    named_only: list[str] = []
+    for rel in sorted({n.file for n in g.nodes.values() if n.file}):
+        lines = _lines(repo, rel, cache)
+        if not lines or not any(h in "\n".join(lines) for h in PROVIDER_HOSTS):
+            continue
+        code_of, text_of = read_as_code(lines, rel)
+        hosts = sorted({m.group(1) for i, t in enumerate(text_of) if len(lines[i]) <= MAX_LINE and not _comment(lines[i])
+                        for m in HOST.finditer(t)})
+        if not hosts:
+            continue
+        provider = ", ".join(sorted({PROVIDER_HOSTS[h] for h in hosts}))
+        found = 0
+        for i, raw in enumerate(lines, 1):
+            if _comment(raw) or len(raw) > MAX_LINE or (rel, i) in pinned:
+                continue
+            code = code_of[i - 1]
+            code = strings.sub(QUOTES, "''", code) if "'" in code or '"' in code else code
+            if not RAW_HTTP.search(code):
+                continue
+            found += 1
+            owner = None
+            for n in nodes_of.get(rel, []):
+                if n.start_line <= i <= (n.end_line or n.start_line):
+                    if owner is None or (n.end_line or n.start_line) - n.start_line <= (owner.end_line or owner.start_line) - owner.start_line:
+                        owner = n
+            out.append({"node": owner.id if owner else None, "file": rel, "line": i, "kind": "model", "provider": provider,
+                        "how": "http", "hosts": hosts, "snippet": raw.strip()[:160]})
+        if not found:
+            named_only.append(rel)
+    return out, named_only
+
+
 def _limits(g: Graph):
     """Where the code puts a request limit to work (`ratelimit.View`). A library that is installed limits nothing:
     until 2026-11-11 its name in the dependencies or in an import kept this rule quiet for every route."""
@@ -662,6 +724,8 @@ def scan_ai(g: Graph) -> tuple[list[dict], dict]:
     cache: dict[str, list[str]] = {}
     calls = find_calls(g, cache)
     findings = wallet_drain(g, calls, cache) + model_output_sinks(g, calls, cache)
+    by_http, named_only = http_model_calls(g, cache, {(c["file"], c["line"]) for c in calls})
+    calls = calls + by_http      # listed and marked; the rules above read only calls through a provider's library
     nb_findings, books = notebooks(Path(g.repo_root))
     findings += nb_findings
     by_node: dict[str, list[dict]] = {}
@@ -670,5 +734,6 @@ def scan_ai(g: Graph) -> tuple[list[dict], dict]:
             by_node.setdefault(c["node"], []).append({"kind": c["kind"], "provider": c["provider"], "line": c["line"]})
     summary = {"calls": calls, "by_node": by_node, "kinds": sorted({c["kind"] for c in calls}),
                "providers": sorted({c["provider"] for c in calls}), "notebooks": books,
-               "is_ai_app": any(c["kind"] in ("model", "embedding", "vector") for c in calls)}
+               "is_ai_app": any(c["kind"] in ("model", "embedding", "vector") for c in calls),
+               "by_http": len(by_http), "hosts_named_only": named_only[:20], "hosts_named_only_count": len(named_only)}
     return findings, summary

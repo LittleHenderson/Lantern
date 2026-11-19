@@ -408,6 +408,9 @@ def _whose(o) -> str:
 def _claim(f: dict, kind: str) -> str:
     """What the finding says, attributed to the tool and stated no more strongly than the evidence."""
     base = str(f.get("title") or "").rstrip(".")
+    if f.get("category") == "secret" and isinstance(f.get("secret_shape"), dict):
+        what = "a digest" if f["secret_shape"].get("kind") == "digest" else "a fixed label"
+        return f"{base}. By its shape and its name the text is {what}, not a key; Lantern does not test it."
     if f.get("category") == "secret":
         return f"{base}. The text looks like a key; Lantern does not test it."
     if f.get("rule") == "LW-PUBLIC-SECRET":

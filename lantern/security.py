@@ -673,12 +673,45 @@ def _run_gitleaks(repo: Path, gitleaks: str) -> tuple[list[dict], dict]:
                     "tool_severity": "HIGH", "tool_confidence": "MEDIUM",
                     "file": rel, "line": r.get("StartLine"),
                     "snippet": "[redacted]", "category": "secret",
+                    **_no_key(r),
                 })
         if outside:
             return [], scanresult.record(
                 "gitleaks", "failed", f"gitleaks named {outside} file{'s' if outside != 1 else ''} outside the folder it was "
                 "handed, so its list cannot be told to be whole", **base)
         return out, scanresult.record("gitleaks", "ok", findings=len(out), **base)
+
+
+def _no_key(row: dict) -> dict:
+    """What a finding of gitleaks says when the text it matched is a digest or a fixed label by its own shape and the
+    name it is kept under (`lantern/secretshape.py`): ranked low with the reason, still listed; the value is not kept."""
+    from . import secretshape
+    look = secretshape.shape(row.get("Match"), row.get("Secret"))
+    if not look:
+        return {}
+    return {"secret_shape": {"kind": look["kind"], "name": look["name"]}, "fixed_rank": "low", "fixed_why": look["why"]}
+
+
+def _ai_status(ai: dict) -> str:
+    """The AI pack's line in the record, in words that say no more than it read: calls made through a provider's
+    library, calls read only by the provider's address a file names, and files that name such an address where no
+    request was found."""
+    calls = ai.get("calls") or []
+    http = int(ai.get("by_http") or 0)
+    only = int(ai.get("hosts_named_only_count") or 0)
+    said = []
+    if len(calls) - http:
+        said.append(f"{len(calls) - http} call{'s' if len(calls) - http != 1 else ''} through a provider's library")
+    if http:
+        said.append(f"{http} plain web request{'s' if http != 1 else ''} in files that name a model provider's address "
+                    "(read by the file; not used by the paid-call rules)")
+    if only:
+        said.append(f"{only} file{'s' if only != 1 else ''} name a model provider's address and make no request Lantern "
+                    "knows: calls may be made elsewhere")
+    if not said:
+        return ("ok (no call through a model, vector or paid API library and no model provider's address found; "
+                "a call to an address built elsewhere would not show)")
+    return "ok (" + "; ".join(said) + ")"
 
 
 def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
@@ -1469,8 +1502,7 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
     findings += wf
     tools += wt
     findings += af
-    tools.append({"tool": "lantern-ai", "status": "ok" + ("" if ai["calls"] else " (no model, vector or paid API calls found)"),
-                  "version": "0.1"})
+    tools.append({"tool": "lantern-ai", "status": _ai_status(ai), "version": "0.2"})
     if loaded:
         findings += pf
         tools += pt

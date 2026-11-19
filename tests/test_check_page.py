@@ -123,7 +123,7 @@ def test_the_check_page_names_the_commit_the_code_the_decision_the_scanners_and_
     ran = {r["tool"] for r in ev["provenance"]["tools"] if r.get("role") == "scanner" and r.get("state") == "ok"}
     assert f["whole"] and set(f["finished"]) == ran and {n for n, _ in f["left"]} == unfinished
     assert f["percent"] == 100 * len(ran) // (len(ran) + len(unfinished))
-    assert f"{len(ran)} of {len(ran) + len(unfinished)} that apply finished and covered everything" in page
+    assert f"{len(ran)} of {len(ran) + len(unfinished)} that apply finished and left out nothing they read" in page
     engine = ev["header"]["engine"]
     assert _line(page) == (f"git clone {LINK} lantern-check && cd lantern-check && git checkout {commit} && "
                            f"pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@{engine}\" && "

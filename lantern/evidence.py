@@ -576,6 +576,8 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
             "open": [_f(f) for f in live if f.get("status") == "open"],
             "accepted": [_f(f) | {"accepted": f.get("accepted")} for f in findings if f.get("status") == "accepted"],
             "fixed": fixed, "changed": changed, "in_tests": sum(1 for f in findings if f.get("in_tests")),
+            # each one, so that "N more are in test code" can be read and not only counted (2026-11-19)
+            "in_tests_open": [_f(f) for f in findings if f.get("in_tests") and f.get("status") == "open"][:MOST_TEST_ROWS],
             "protections": [{k: x.get(k) for k in ("id", "title", "status", "why", "evidence", "how", "found")}
                             for x in (rd or {}).get("protections") or []],
             # scanners that applied and did not finish or did not cover everything (scanresult.py); the badge says
@@ -698,6 +700,37 @@ def compare_baseline(findings: list[dict], baseline: dict | None) -> tuple[list[
             continue
         (changed if (v.get("rule"), v.get("file")) in new_by_place else fixed).append(dict(v, id=k))
     return fixed, changed
+
+
+RANKS = ("critical", "high", "medium", "low")
+MOST_TEST_ROWS = 500     # findings in test code listed one by one on the page; the rest are counted
+GROUP_AT = 3            # low findings of one rule and one title are folded into one row from this many on
+
+
+def _grouped(items: list, frow) -> str:
+    """The rows of a list of findings, with the low ones of one rule and one title folded into one row that opens to
+    show each (a page with 40 `import subprocess` lines reads as one thing to look at, not 40). Nothing is left out:
+    every finding is still a row inside its fold, and the counts are the same."""
+    groups: dict[tuple, list] = {}
+    for f in items:
+        if f.get("rank") == "low":
+            groups.setdefault((f.get("rule"), f.get("title")), []).append(f)
+    out, done = [], set()
+    for f in items:
+        key = (f.get("rule"), f.get("title"))
+        many = groups.get(key) if f.get("rank") == "low" else None
+        if not many or len(many) < GROUP_AT:
+            out.append(frow(f))
+            continue
+        if key in done:
+            continue
+        done.add(key)
+        files = len({x.get("file") for x in many})
+        out.append(f"<tr><td><span class='sev low'>low</span></td><td><details><summary><b>{E(f['title'])}</b> "
+                   f"<span class='tag'>{len(many)} places in {files} file{'s' if files != 1 else ''}</span><br>"
+                   f"<span class='muted'>{E(f.get('tool') or '')} {E(f['rule'])}: one kind of finding, folded; open it "
+                   "to see each place</span></summary><table>" + "".join(frow(x) for x in many) + "</table></details></td></tr>")
+    return "".join(out)
 
 
 def _f(f: dict) -> dict:
@@ -1056,7 +1089,7 @@ def check_html(ev, link: str | None = None) -> str:
                if f["decision"] else "<p class='verdict none'><b>– No decision</b> This record names no release "
                                      "decision.</p>")
     if f["applies"]:
-        scanners = (f"{len(f['finished'])} of {f['applies']} that apply finished and covered everything "
+        scanners = (f"{len(f['finished'])} of {f['applies']} that apply finished and left out nothing they read "
                     f"({f['percent']}%)" + "".join(f"<br><span class='muted'>{E(n)} {E(SCANNER_LEFT[s])}</span>"
                                                      for n, s in f["left"]))
     else:
@@ -1402,7 +1435,9 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
                 f"<span class='muted'>{glyph(f)}{E(f.get('tool') or '')} {E(f['rule'])} · {E(f['file'] or '')}:{E(f.get('line') or '')}"
                 f"</span>{'<br><span class=path>' + path + '</span>' if path else ''}{extra}</td></tr>")
 
-    open_rows = "".join(frow(f) for f in se["open"]) or "<tr><td colspan=2 class='muted'>None.</td></tr>"
+    open_rows = _grouped(se["open"], frow) or "<tr><td colspan=2 class='muted'>None.</td></tr>"
+    test_open = [x for x in se.get("in_tests_open") or [] if isinstance(x, dict) and x.get("rank") in RANKS]
+    test_rows = _grouped(test_open, frow)
     acc_rows = "".join(frow(f, f"<div class='reason'>{E(accepted_words(f['accepted']))}</div>") for f in se["accepted"])
     changed_rows = "".join(f"<tr><td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td><td><b>{E(f['title'])}</b> "
                            f"<span class='tag'>changed · still open</span><br><span class='muted'>{E(f['rule'])} · "
@@ -1548,7 +1583,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
 <section><h2>3 · Scorecard</h2>
 {_release_html(ev)}
 {f'''<div class="score"><span class="big">{E(rd["score"])}<span style="font-size:20px" class="muted">/100</span></span><span class="grade {rd["grade"] if rd.get("grade") in ("A", "B", "C", "D", "F") else ""}">{E(rd["grade"])}</span>
-<div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.<br>Low findings don't lower the score; critical, high and medium ones do.{"<br>A required check that was skipped (tests not run, libraries not looked up) earns no points. The score reads 100 only when the release decision is Passed and is held at 59 while it is Blocked" + (f" (the checklist alone gives {E(rd.get('checklist'))})." if isinstance(rd.get("checklist"), (int, float)) and rd.get("checklist") != rd.get("score") else ".") if rel else ""}</div></div>
+<div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Most points come from files and patterns found in the code (a test folder, a lock file, a handler), not from running anything: a full mark says the thing is there, not that it works. Only the tests and a behaviour plan, where they ran, are run.<br>Checks that don't apply are skipped, not counted.<br>Low findings don't lower the score; critical, high and medium ones do.{"<br>A required check that was skipped (tests not run, libraries not looked up) earns no points. The score reads 100 only when the release decision is Passed and is held at 59 while it is Blocked" + (f" (the checklist alone gives {E(rd.get('checklist'))})." if isinstance(rd.get("checklist"), (int, float)) and rd.get("checklist") != rd.get("score") else ".") if rel else ""}</div></div>
 <table style="margin-top:12px">{cats}</table>''' if rd else '<p class="muted">Readiness was not computed.</p>'}
 <div class="kv" style="margin-top:14px"><div>Open findings now</div><div>{cnt(sc['now'])}</div>
 <div>At first analysis</div><div>{cnt(sc['before'])}{(' <span class="muted">(' + E(sc['baseline_date'] or '') + ')</span>') if sc.get('before') else ''}</div></div></section>
@@ -1566,11 +1601,11 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
 {f"<h4>Changed but still open ({len(se.get('changed') or [])})</h4><p class='muted'>The flagged line changed, and the same rule now flags new code in the same file, so these are not counted as fixed.</p><table>{changed_rows}</table>" if se.get('changed') else ''}
 {f"<h4>Accepted risks ({len(se['accepted'])})</h4><table>{acc_rows}</table>" if se['accepted'] else ''}
 {f"<h4>Protections to add ({sum(1 for x in prot if x.get('status') != 'in place')})</h4><p class='muted'>Heuristic: shown only where the code gives a reason; they don't change findings or the score.</p><table>{prot_rows}</table>" if prot else ''}
-{f"<p class='muted'>{E(se['in_tests'])} more finding(s) are in test code only.</p>" if se['in_tests'] else ''}
+{(f"<details><summary class='muted'>{E(se['in_tests'])} more finding(s) are in test code only: they do not block a release. Open to see each.</summary><table>{test_rows}</table>" + (f"<p class='muted'>The first {len(test_open)} are listed.</p>" if isinstance(se['in_tests'], int) and se['in_tests'] > len(test_open) else '') + "</details>") if se['in_tests'] and test_rows else (f"<p class='muted'>{E(se['in_tests'])} more finding(s) are in test code only.</p>" if se['in_tests'] else '')}
 </section>
 
 <section><h2>6 · Understanding</h2>
-{_narratives_html(ev['understanding']) if ev['understanding'] else f'<p class="muted">No path narratives attached. Write how your key flows work in <code>{NARRATIVES_FILE}</code> at the repository root and regenerate.</p>'}
+{(f"<p class='muted'>These words are the project's own, from <code>{NARRATIVES_FILE}</code>. Lantern shows them as written and did not check them against the code.</p>" + _narratives_html(ev['understanding'])) if ev['understanding'] else f'<p class="muted">No path narratives attached. Write how your key flows work in <code>{NARRATIVES_FILE}</code> at the repository root and regenerate.</p>'}
 </section>
 
 <section><h2>7 · Provenance</h2><table>{tools}</table>
