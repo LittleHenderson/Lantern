@@ -131,6 +131,7 @@ class Context:
     metaphor: str = "a restaurant"
     reached_from: list[str] = field(default_factory=list)   # node ids from a page/route to this unit (the map's path)
     places: set[str] = field(default_factory=set)            # pages, routes and HTTP calls the prompt shows
+    path_words: list[str] = field(default_factory=list)      # names the REACHED FROM line shows (made from reached_from)
 
     def hash(self) -> str:
         h = hashlib.sha256()
@@ -178,10 +179,15 @@ def build_context(g: Graph, nid: str, findings: list[dict], done: dict[str, dict
     places = {str(g.nodes[x].entry.get("detail") or "") for x in path + [nid] if g.nodes[x].entry}
     places |= {str(e.detail or "") for x in path + [nid] for e in g.callees(x) if (e.via or "").startswith("http-")}
     places |= {str(e.detail or "") for e in g.callers(nid) if (e.via or "").startswith("http-")}
+    reached = path if len(path) > 1 else []
+    # What the REACHED FROM line will show: each hop's name, its page or route, and the detail of each step between.
+    words = [g.nodes[x].qualname for x in reached]
+    words += [f"{g.nodes[x].entry['kind']} {g.nodes[x].entry.get('detail', '')}" for x in reached if g.nodes[x].entry]
+    words += [str(e.detail) for a, b in zip(reached, reached[1:]) for e in g.callees(a) if e.dst == b and e.detail]
     return Context(node=n, source=read_source(repo, n), allowed_symbols=allowed,
                    line_range=(n.start_line or 1, n.end_line or n.start_line or 1),
                    findings=mine, callers=callers, callees=callees, callee_summaries=summaries, metaphor=metaphor,
-                   reached_from=path if len(path) > 1 else [], places={p for p in places if p})
+                   reached_from=reached, places={p for p in places if p}, path_words=words)
 
 
 def render_prompt(ctx: Context, g: Graph) -> str:
@@ -269,9 +275,10 @@ def _unknown_names_in_lens1(l1: dict, ctx: Context) -> list[str]:
     blob = " ".join(str(l1.get(k, "")) for k in ("summary", "role", "outputs")) + " " + " ".join(
         str(x) for k in ("inputs", "side_effects", "errors") for x in (l1.get(k) or []) if isinstance(l1.get(k), list))
     # Everything the model was shown counts as context: this unit's code, the names of its callers, callees and
-    # parent, the one-line summaries of its callees (which legitimately mention what those call), and its file.
+    # parent, the one-line summaries of its callees (which legitimately mention what those call), its file, and the
+    # route and functions on the REACHED FROM line.
     known = " ".join([ctx.source, ctx.node.file or "", *ctx.allowed_symbols.values(),
-                      *ctx.callee_summaries.values()]).lower()
+                      *ctx.callee_summaries.values(), *ctx.path_words]).lower()
     out = []
     for m in _NAME_RE.finditer(blob):
         name = re.sub(r"^(?:self|this|cls)\.", "", m.group(0).strip("."))

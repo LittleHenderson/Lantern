@@ -231,6 +231,31 @@ def test_lens1_read_back_rejects_names_not_in_the_map(gs):
     assert errs and "fetch_profile_cache" in errs[0] and "not in this function" in errs[0]
 
 
+def test_lens1_may_name_what_the_reached_from_line_showed(gs):
+    """The prompt's REACHED FROM line names the route and the functions on the way to this unit; a Lens 1 that
+    names one of them is reading the context, not inventing code. A name shown nowhere is still refused."""
+    g, findings = gs
+    nid = "py:shop.repo.UserRepo.get"
+    path = ["py:shop.app.read_user", "py:shop.auth.Session.login", nid]
+    ctx = build_context(g, nid, [], {}, "a hotel", reach={nid: {"path": path}})
+    assert "read_user" not in ctx.allowed_symbols.values()
+    assert "REACHED FROM" in render_prompt(ctx, g) and "GET /users/{user_id}" in render_prompt(ctx, g)
+    lo, hi = ctx.line_range
+    sym = next(iter(ctx.allowed_symbols))
+    text = "The helper takes a request and hands back an answer."
+    base = {"lens2": {"text": text, "example": "e", "analogy": "a"},
+            "lens3": {"text": text, "pairs": [
+                {"plain": "The helper", "technical": "t", "anchor": {"type": "symbol", "id": sym}},
+                {"plain": "takes a request", "technical": "t", "anchor": {"type": "term", "term": "argument"}},
+                {"plain": "hands back an answer", "technical": "t", "anchor": {"type": "lines", "start": lo, "end": hi}}]}}
+    ok = {**base, "lens1": {"summary": "Reached from read_user() on GET /users/{user_id} by way of Session.login;"
+                                       " runs a SELECT through self.execute().", "role": "r"}}
+    assert validate(ok, ctx) == []
+    bad = {**base, "lens1": {"summary": "Reached from read_user() and then calls fetch_profile_cache().", "role": "r"}}
+    errs = validate(bad, ctx)
+    assert errs and "fetch_profile_cache" in errs[0] and "read_user" not in errs[0]
+
+
 def test_undetermined_is_an_honest_answer(gs, tmp_path):
     g, findings = gs
 
