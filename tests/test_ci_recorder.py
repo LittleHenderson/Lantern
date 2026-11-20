@@ -133,6 +133,11 @@ def test_the_step_shows_the_makers_test_failing_on_the_release_and_passing_with_
         passed = _at(run, """grep -qx ':test-result: PASS' "$b.trs" ||""")
         assert (fix < first < configured < made < helper < harness < release < failed < fixed < remade < installed
                 < again < passed), (wf, name)
+        # where the test's result is not the one it must be, the step shows each test's own log (what it compared and
+        # what strace said) before it stops: the end of the build's log names only which tests failed
+        assert 'for t in $tests; do echo "--- tests/${t%.test}.log:"; cat "tests/${t%.test}.log" || true; done' in run
+        assert _at(run, 'if makers_test "$PWD/src/strace"; then tail -n 25 "$log"; makers_logs;') == release
+        assert _at(run, f'makers_test {BUILT} || {{ tail -n 25 "$log"; makers_logs;') == again
 
 
 def test_the_step_ends_by_checking_that_the_recorder_finds_the_strace_it_built():

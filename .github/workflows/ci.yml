@@ -68,8 +68,11 @@ jobs:
           makers_test() {   # their test, run by their own harness on the strace named; each test's result is in its .trs file
             STRACE="$1" TIMEOUT_DURATION=120 make -C tests check TESTS="$tests" check_PROGRAMS="run_expect_termsig unblock_reset_raise" >> "$log" 2>&1
           }
+          makers_logs() {   # each test's own log: what it compared and what strace said, where its result is not the one it must be
+            for t in $tests; do echo "--- tests/${t%.test}.log:"; cat "tests/${t%.test}.log" || true; done
+          }
           fault='ptrace\(PTRACE_LISTEN,[^)]*\): Input/output error'
-          if makers_test "$PWD/src/strace"; then tail -n 80 "$log"; echo "::error::The makers' test of the fault passed on strace 7.3 as released: here it shows nothing"; exit 1; fi
+          if makers_test "$PWD/src/strace"; then tail -n 25 "$log"; makers_logs; echo "::error::The makers' test of the fault passed on strace 7.3 as released: here it shows nothing"; exit 1; fi
           for t in $tests; do
             b="tests/${t%.test}"
             grep -qx ':test-result: FAIL' "$b.trs" && grep -E "$fault" "$b.log" > "$at/${t%.test}.fault" \
@@ -79,7 +82,7 @@ jobs:
           git apply --include=src/strace.c "$fix"
           quietly make -j"$(nproc)"
           quietly sudo make install
-          makers_test /usr/local/bin/strace || { tail -n 80 "$log"; echo "::error::The makers' test of the fault failed on strace 7.3 with their fix"; exit 1; }
+          makers_test /usr/local/bin/strace || { tail -n 25 "$log"; makers_logs; echo "::error::The makers' test of the fault failed on strace 7.3 with their fix"; exit 1; }
           for t in $tests; do
             b="tests/${t%.test}"
             grep -qx ':test-result: PASS' "$b.trs" || { cat "$b.log"; echo "::error::$t did not pass on strace 7.3 with their fix"; exit 1; }
