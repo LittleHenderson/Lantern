@@ -26,8 +26,71 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Tesseract, so the screenshot-reading tests run (tests/test_ocr.py), and strace, which writes down every address a program tries
-        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr strace
+      - name: Tesseract, so the screenshot-reading tests run (tests/test_ocr.py)
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
+      - name: strace 7.3 with its makers' fix of 2026-11-10, built from its source (it writes down every address a program of the tests tries)
+        timeout-minutes: 10
+        # tools/netless.py --watch has strace write down every address any program of the tests tries. Every released
+        # strace (7.3, of 2026-10-22, and older) can stop at random when a program it follows ends right after a
+        # signal: it takes a failed PTRACE_GETSIGINFO for a group-stop, asks PTRACE_LISTEN of a program that is in none,
+        # gets an input/output error and ends the record (strace's issue 433). In this job that cut the record of the
+        # tests off on 2026-11-14, 2026-11-17 and 2026-11-18 (the runner then says so: result 6). Its makers fixed it
+        # after that release, so no packaged strace has the fix yet. This builds the release, checked against its
+        # fingerprint, with their commit as it is (tools/strace/3a4f0c7.patch; the owner's choice of 2026-11-20).
+        # Three of the commit's eight files are not applied: its news, git's list of files to ignore (not in a
+        # release) and the build list the release's build files were made from; the helper the commit adds for its
+        # test is built with the rule of its twin, disable_ptrace_getregset. The makers' own test of the fault
+        # (getsiginfo-esrch, with and without --seccomp-bpf) must first fail on the release as it is, with the error CI
+        # saw, and then pass on the fixed strace once it is installed in /usr/local. No other strace is installed, and
+        # the step ends by checking that the strace found on the PATH the recorder is handed under sudo is this one,
+        # at 7.3 (tests/test_ci_recorder.py).
+        shell: bash
+        run: |
+          at="$RUNNER_TEMP/strace"
+          mkdir -p "$at" && cd "$at"
+          log="$at/build.log"   # what configure, make and the makers' tests say; its end is shown when a part fails
+          quietly() { "$@" >> "$log" 2>&1 || { tail -n 80 "$log"; echo "::error::Building strace stopped at: $*"; exit 1; }; }
+          curl --fail --location --silent --show-error --retry 4 --retry-delay 5 --retry-all-errors --max-time 120 \
+            --output strace-7.3.tar.xz https://github.com/strace/strace/releases/download/v7.3/strace-7.3.tar.xz
+          echo "529634c40910895a9a1f3c5c1e65da2ca9ed72fb158dfc4bcc89efdf05e39b72  strace-7.3.tar.xz" | sha256sum --check --strict
+          tar -xJf strace-7.3.tar.xz
+          cd strace-7.3
+          fix="$GITHUB_WORKSPACE/tools/strace/3a4f0c7.patch"
+          # 1. The release as it is, with the helper and the test the commit adds: the makers' test must fail, with the fault
+          git apply --exclude=NEWS --exclude=src/.gitignore --exclude=src/Makefile.am --exclude=src/strace.c "$fix"
+          quietly ./configure --enable-mpers=no --enable-stacktrace=no --without-libselinux --disable-dependency-tracking
+          quietly make -j"$(nproc)"
+          quietly make -C src -f Makefile -f - disable_ptrace_getsiginfo <<'RULE'
+          disable_ptrace_getsiginfo$(EXEEXT): disable_ptrace_getsiginfo.$(OBJEXT) $(disable_ptrace_getregset_DEPENDENCIES) ; $(LINK) disable_ptrace_getsiginfo.$(OBJEXT) $(disable_ptrace_getregset_LDADD) $(LIBS)
+          RULE
+          tests="getsiginfo-esrch.gen.test getsiginfo-esrch--seccomp-bpf.gen.test"
+          for t in $tests; do tests/gen_tests.sh tests/gen_tests.in "tests/$t"; done
+          makers_test() {   # their test, run by their own harness on the strace named; each test's result is in its .trs file
+            STRACE="$1" TIMEOUT_DURATION=120 make -C tests check TESTS="$tests" check_PROGRAMS="run_expect_termsig unblock_reset_raise" >> "$log" 2>&1
+          }
+          fault='ptrace\(PTRACE_LISTEN,[^)]*\): Input/output error'
+          if makers_test "$PWD/src/strace"; then tail -n 80 "$log"; echo "::error::The makers' test of the fault passed on strace 7.3 as released: here it shows nothing"; exit 1; fi
+          for t in $tests; do
+            b="tests/${t%.test}"
+            grep -qx ':test-result: FAIL' "$b.trs" && grep -E "$fault" "$b.log" > "$at/${t%.test}.fault" \
+              || { cat "$b.log"; echo "::error::$t did not fail on strace 7.3 as released with the fault CI saw"; exit 1; }
+          done
+          # 2. Their fix, built and installed: the same test must pass on what was installed
+          git apply --include=src/strace.c "$fix"
+          quietly make -j"$(nproc)"
+          quietly sudo make install
+          makers_test /usr/local/bin/strace || { tail -n 80 "$log"; echo "::error::The makers' test of the fault failed on strace 7.3 with their fix"; exit 1; }
+          for t in $tests; do
+            b="tests/${t%.test}"
+            grep -qx ':test-result: PASS' "$b.trs" || { cat "$b.log"; echo "::error::$t did not pass on strace 7.3 with their fix"; exit 1; }
+          done
+          # 3. The strace the recorder will find: the no-network runner looks it up on the PATH it is handed under sudo
+          found=$(sudo env "PATH=$PATH" sh -c 'command -v strace')
+          test "$found" = /usr/local/bin/strace || { echo "::error::The strace found under sudo is ${found:-none}, not the one built here"; exit 1; }
+          first=$(sudo env "PATH=$PATH" strace -V | sed -n 1p)
+          test "$first" = "strace -- version 7.3" || { echo "::error::$found says: $first"; exit 1; }
+          echo "$found: strace 7.3 with its makers' fix of 2026-11-10 (commit 3a4f0c7). Their test of the fault passed on it; on 7.3 as released it failed with:"
+          cat "$at"/*.fault
       - run: pip install -e ".[scan,dev]" pytest-cov
       - name: Docker answers before the tests start (four sandbox tests need it)
         # Where Docker does not answer, those four tests are skipped and the log names them. In one of the six Linux
