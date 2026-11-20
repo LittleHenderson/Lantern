@@ -24,10 +24,14 @@ kept apart only when the very try was named (kind, address and port), the addres
 RFC 3849: no computer has one) and the kernel refused it; anything else that was tried still gives 4.
 
 With --watch the end of the command is watched too. strace writes the end of every process it follows (`+++ exited
-with N +++`), and the command's own end must be in that record: when strace stops before the command ends (twice in
-CI it stopped with "ptrace(PTRACE_LISTEN, ...): Input/output error", telling the command to end and ending with 1 at
-once), the command's result is not known and what it tried after that is not written down, so the result is 6 and the
-runner says so, where until 2026-11-18 strace's 1 read like a failure of the command.
+with N +++`), and the command's own end must be in that record: when strace stops before the command ends (three
+times in CI, from 2026-11-14 to 2026-11-18, it stopped with "ptrace(PTRACE_LISTEN,pid:N,sig:0): Input/output error",
+telling the command to end and ending with 1 at once), the command's result is not known and what it tried after that
+is not written down, so the result is 6 and the runner says so, where until 2026-11-18 strace's 1 read like a failure
+of the command. That stop is a fault of every released strace (7.3 and older; strace's issue 433): a program that ends
+right after a signal is taken for one in a group-stop. Its makers fixed it on 2026-11-10, after their newest release,
+and CI builds 7.3 with that fix (tools/strace/, tests/test_ci_recorder.py); a strace of a release from before the fix
+can still stop that way, and this runner still says so.
 
 --deadline MINUTES (with --watch): the time the command is given. Past it the runner lists every process of the run
 that is still there, with the state of each of its threads and what each waits in (the kernel's own word), asks the

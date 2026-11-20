@@ -1,0 +1,265 @@
+From 3a4f0c7c3969ec6e25e729ed6b36a0391764a375 Mon Sep 17 00:00:00 2001
+From: "Dmitry V. Levin" <ldv@strace.io>
+Date: Tue, 10 Nov 2026 18:00:00 +0000
+Subject: [PATCH] strace: handle ESRCH from PTRACE_GETSIGINFO during
+ termination
+
+A tracee can become unavailable for ptrace operations after wait4 reports
+a signal-delivery-stop, for example when another thread calls exit_group.
+PTRACE_GETSIGINFO then fails with ESRCH, which next_event currently treats
+as a group-stop.  If the tracee reaches PTRACE_EVENT_EXIT before the
+subsequent PTRACE_LISTEN, that request fails with EIO and strace aborts
+the trace, killing remaining tracees when kill-on-exit is enabled.
+
+Skip the stale event on ESRCH and let subsequent termination events be
+processed normally.  Recognize a group-stop only on EINVAL and diagnose
+unexpected errors.  Add synchronized regression tests with and without
+seccomp-BPF tracing, forcing the query failure before killing the tracee.
+
+* src/strace.c (next_event): Distinguish EINVAL, ESRCH, and unexpected
+PTRACE_GETSIGINFO failures.
+* src/disable_ptrace_getsiginfo.c: New helper.
+* src/Makefile.am (noinst_PROGRAMS): Add disable_ptrace_getsiginfo.
+(disable_ptrace_getsiginfo_LDADD): New variable.
+* src/.gitignore: Add /disable_ptrace_getsiginfo.
+* tests/getsiginfo-esrch.sh: New common regression test driver.
+* tests/Makefile.am (EXTRA_DIST): Add getsiginfo-esrch.sh.
+* tests/gen_tests.in (getsiginfo-esrch, getsiginfo-esrch--seccomp-bpf):
+New tests.
+* NEWS: Mention this fix.
+
+Fixes: v4.7~186 "Add experimental code to use PTRACE_SEIZE, disabled by default"
+Resolves: https://github.com/strace/strace/issues/433
+Assisted-by: OpenCode:gpt-6.1-sol
+---
+ NEWS                            |  2 +
+ src/.gitignore                  |  1 +
+ src/Makefile.am                 |  2 +
+ src/disable_ptrace_getsiginfo.c | 14 +++++++
+ src/strace.c                    | 39 ++++++++++++------
+ tests/Makefile.am               |  1 +
+ tests/gen_tests.in              |  2 +
+ tests/getsiginfo-esrch.sh       | 71 +++++++++++++++++++++++++++++++++
+ 8 files changed, 119 insertions(+), 13 deletions(-)
+ create mode 100644 src/disable_ptrace_getsiginfo.c
+ create mode 100644 tests/getsiginfo-esrch.sh
+
+diff --git a/NEWS b/NEWS
+index d5717d1..84ec724 100644
+--- a/NEWS
++++ b/NEWS
+@@ -14,6 +14,8 @@ Noteworthy changes in release ?.? (????-??-??)
+     options.
+ 
+ * Bug fixes
++  * Fixed a tracing failure during process termination caused by mistaking
++    an unavailable signal-delivery-stop for a group-stop.
+   * Fixed -yy PTY endpoint annotations for file descriptors belonging to another
+     process in kcmp and pidfd_getfd.
+   * Prevented CLONE_UNTRACED children from escaping --seccomp-bpf tracing
+diff --git a/src/.gitignore b/src/.gitignore
+index f258ce6..2eaaaad 100644
+--- a/src/.gitignore
++++ b/src/.gitignore
+@@ -5,6 +5,7 @@
+ /disable_ptrace
+ /disable_ptrace_get_syscall_info
+ /disable_ptrace_getregset
++/disable_ptrace_getsiginfo
+ /disable_ptrace_setregset
+ /disable_ptrace_set_syscall_info
+ /gnu
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 647ff6a..5f6dd06 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -50,12 +50,14 @@ noinst_PROGRAMS = \
+ 	disable_ptrace	\
+ 	disable_ptrace_get_syscall_info	\
+ 	disable_ptrace_getregset	\
++	disable_ptrace_getsiginfo	\
+ 	disable_ptrace_setregset	\
+ 	disable_ptrace_set_syscall_info	\
+ 	#
+ disable_ptrace_LDADD = $(strace_LDADD)
+ disable_ptrace_get_syscall_info_LDADD = $(strace_LDADD)
+ disable_ptrace_getregset_LDADD = $(strace_LDADD)
++disable_ptrace_getsiginfo_LDADD = $(strace_LDADD)
+ disable_ptrace_setregset_LDADD = $(strace_LDADD)
+ disable_ptrace_set_syscall_info_LDADD = $(strace_LDADD)
+ 
+diff --git a/src/disable_ptrace_getsiginfo.c b/src/disable_ptrace_getsiginfo.c
+new file mode 100644
+index 0000000..fb754ed
+--- /dev/null
++++ b/src/disable_ptrace_getsiginfo.c
+@@ -0,0 +1,14 @@
++/*
++ * A helper that executes the specified program
++ * with PTRACE_GETSIGINFO failing with ESRCH.
++ *
++ * Copyright (c) 2026 The strace developers.
++ * All rights reserved.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#define DISABLE_PTRACE_REQUEST		PTRACE_GETSIGINFO
++#define DISABLE_PTRACE_ERRNO		ESRCH
++#define DEFAULT_PROGRAM_INVOCATION_NAME	"disable_ptrace_getsiginfo"
++#include "disable_ptrace_request.c"
+diff --git a/src/strace.c b/src/strace.c
+index 0b174bf..4212426 100644
+--- a/src/strace.c
++++ b/src/strace.c
+@@ -3960,19 +3960,32 @@ next_event(void)
+ 				} else if (sig == syscall_trap_sig) {
+ 					wd->te = TE_SYSCALL_STOP;
+ 				} else {
+-					/*
+-					 * True if tracee is stopped by signal
+-					 * (as opposed to "tracee received
+-					 * signal").
+-					 * TODO: shouldn't we check for
+-					 * errno == EINVAL too?
+-					 * We can get ESRCH instead, you know...
+-					 */
+-					bool stopped = ptrace(PTRACE_GETSIGINFO,
+-						pid, 0, &wd->si) < 0;
+-
+-					wd->te = stopped ? TE_GROUP_STOP
+-							 : TE_SIGNAL_DELIVERY_STOP;
++					if (ptrace(PTRACE_GETSIGINFO,
++						   pid, 0, &wd->si) == 0) {
++						wd->te =
++							TE_SIGNAL_DELIVERY_STOP;
++					} else if (errno == EINVAL) {
++						/*
++						 * The kernel returns EINVAL if
++						 * last_siginfo is NULL, as in a
++						 * legacy group-stop.
++						 */
++						wd->te = TE_GROUP_STOP;
++					} else if (errno == ESRCH) {
++						/*
++						 * The task may still exist but
++						 * not be in ptrace-stop, or
++						 * have a fatal signal pending.
++						 * Ignore this stale stop and
++						 * wait for the next event, not
++						 * restart the tracee.
++						 */
++						wd->te = TE_NEXT;
++					} else {
++						perror_msg_and_die(
++							"PTRACE_GETSIGINFO: %d",
++							pid);
++					}
+ 				}
+ 				break;
+ 			case PTRACE_EVENT_STOP:
+diff --git a/tests/Makefile.am b/tests/Makefile.am
+index 8205651..0dcb752 100644
+--- a/tests/Makefile.am
++++ b/tests/Makefile.am
+@@ -920,6 +920,7 @@ EXTRA_DIST = \
+ 	gen_tests.in \
+ 	gen_tests.sh \
+ 	getresugid.c \
++	getsiginfo-esrch.sh \
+ 	init_delete_module.h \
+ 	ioctl_kvm_run_common.c \
+ 	kernel_old_timespec.h \
+diff --git a/tests/gen_tests.in b/tests/gen_tests.in
+index 600aaf9..3ab637c 100644
+--- a/tests/gen_tests.in
++++ b/tests/gen_tests.in
+@@ -291,6 +291,8 @@ getrlimit	-a27 'QUIRK:START-OF-TEST-OUTPUT:getrlimit(0x10 /* RLIMIT_??? */, NULL
+ getrusage	-v
+ getsid	-a10
+ getsid--pidns-translation	test_pidns -e trace=getsid -a10
++getsiginfo-esrch	+getsiginfo-esrch.sh
++getsiginfo-esrch--seccomp-bpf	+getsiginfo-esrch.sh --seccomp-bpf
+ getsockname	-a27
+ getsockname--secontext	-a27 --secontext -e trace=getsockname
+ getsockname--secontext_full	-a27 --secontext=full -e trace=getsockname
+diff --git a/tests/getsiginfo-esrch.sh b/tests/getsiginfo-esrch.sh
+new file mode 100644
+index 0000000..5e3de80
+--- /dev/null
++++ b/tests/getsiginfo-esrch.sh
+@@ -0,0 +1,71 @@
++#!/bin/sh -efu
++#
++# Check that ESRCH from PTRACE_GETSIGINFO does not cause a false group-stop
++# and that the subsequent termination events are still handled.
++#
++# Model the termination race by forcing the siginfo query to fail, rather
++# than relying on a tracee to die between wait4 and PTRACE_GETSIGINFO.
++# Arguments are passed to the inner strace; the seccomp variant adds
++# --seccomp-bpf.
++#
++# Copyright (c) 2026 The strace developers.
++# All rights reserved.
++#
++# SPDX-License-Identifier: GPL-2.0-or-later
++
++. "${srcdir=.}/init.sh"
++
++check_prog grep
++check_prog sed
++
++fault_helper='../../src/disable_ptrace_getsiginfo'
++$fault_helper true || skip_ "$fault_helper does not work"
++[ $# -eq 0 ] || . "${srcdir=.}/filter_seccomp.sh"
++
++tracee_pid=
++cleanup()
++{
++	[ -z "$tracee_pid" ] || kill -KILL "$tracee_pid" 2> /dev/null ||:
++}
++trap cleanup EXIT
++
++query='^ptrace(PTRACE_GETSIGINFO, \([0-9]*\), '
++> "$OUT"
++> "$LOG"
++# The outer strace records ptrace calls in OUT.  The helper installs a
++# seccomp filter in the inner strace to make PTRACE_GETSIGINFO return ESRCH.
++# The tracee raises SIGTERM (15), causing the inner strace to query siginfo.
++# Its signal output goes to LOG, which must contain no false group-stop.
++../run_expect_termsig 9 \
++	$STRACE -qq -e trace=ptrace -e signal=none -o "$OUT" \
++	$fault_helper $STRACE -qq -f -e trace=none -o "$LOG" "$@" \
++	../unblock_reset_raise 15 2> "$LOG.err" &
++runner_pid=$!
++
++# Wait until the outer trace confirms the failed query.  This synchronizes
++# the kill below with the injected error and also gives us the tracee PID.
++while :; do
++	tracee_pid=$(sed -n "s/$query.* = -1 ESRCH .*/\1/p" "$OUT")
++	[ -z "$tracee_pid" ] || break
++	kill -0 "$runner_pid" 2> /dev/null || {
++		cat "$OUT" "$LOG.err" >&2
++		dump_log_and_fail_with 'tracer exited before GETSIGINFO failed'
++	}
++	$SLEEP_A_BIT
++done
++
++# Unlike a real termination race, the forced ESRCH leaves the tracee in its
++# SIGTERM delivery stop.  Kill it now to supply real termination events,
++# which the inner strace must process after skipping the stale stop.
++kill -KILL "$tracee_pid" 2> /dev/null ||:
++# Both strace processes propagate the tracee's SIGKILL (9) termination;
++# run_expect_termsig turns that expected outcome into a successful exit.
++wait "$runner_pid" || {
++	cat "$OUT" "$LOG.err" >&2
++	dump_log_and_fail_with 'tracer did not terminate with SIGKILL'
++}
++
++printf '%s +++ killed by SIGKILL +++\n' "$tracee_pid" > "$EXP"
++tracee_pid=
++match_diff "$LOG" "$EXP" 'unexpected signal or group-stop output'
++match_diff "$LOG.err" /dev/null 'unexpected tracer diagnostics'
+-- 
+2.43.0
+
