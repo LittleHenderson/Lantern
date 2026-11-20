@@ -390,7 +390,12 @@ jobs:
           echo "LANTERN_TYPESCRIPT=$at/typescript" >> "$GITHUB_ENV"
           echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
           echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
+      - name: The sealed box's tests for Windows first, so what the box lets a project's tests do here is known minutes in
+        # The whole suite below runs them again, and it runs whatever this step gave.
+        run: python -m pytest -q -rs tests/test_sandbox_windows.py
+        timeout-minutes: 10
       - run: python -m pytest -q -rs
+        if: ${{ !cancelled() }}
         timeout-minutes: 100
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached

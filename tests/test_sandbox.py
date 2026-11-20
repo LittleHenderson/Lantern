@@ -252,20 +252,14 @@ def test_an_event_loop_runs_and_a_thread_can_wake_it():
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_tests_that_use_an_event_loop_run_except_on_windows_where_the_guard_still_refuses_them(backend, tmp_path):
+def test_tests_that_use_an_event_loop_run(backend, tmp_path):
     """Every async test, and every test of a FastAPI or Starlette app through its test client, starts an event loop.
 
-    Known and not fixed on Windows (found 2026-11-11): there Python makes the pair of sockets a loop wakes itself
-    with out of a listener on this computer, the guard refuses the listener, and the test fails. The guard does not
-    let that listener through, because the loop Windows uses by default connects with a call the guard is never
-    told about: a loop that could start could connect with nothing seen. This test says so on Windows itself, so the
-    day a loop starts there it fails, and is rewritten together with a guard that sees what such a loop connects to."""
+    On Windows (found 2026-11-11) Python makes the pair of sockets a loop wakes itself with out of a listener on this
+    computer, and the guard refused every listener, so the test failed there; until stage 4 of a firm pass or fail
+    this test said so on Windows itself. Twins of what such a loop may not reach: `tests/test_sandbox_windows.py`."""
     r = sandbox.run(_tiny(tmp_path / "tiny", LOOP), ["python", "-m", "pytest", "-q", "-p", "no:randomly"],
                     log=lambda m: None, backend=backend)
-    if sys.platform == "win32":
-        assert r["returncode"] != 0, r["output_tail"]
-        assert any(b["kind"] == "network" for b in r["blocked"]), (r["blocked"], r["output_tail"])
-        return
     assert r["returncode"] == 0, r["output_tail"]
     assert r["blocked"] == []
 
