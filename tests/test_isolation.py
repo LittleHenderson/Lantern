@@ -446,8 +446,8 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
                    '"$RUNNER_TEMP/own-network.log" || status=$?'], own
     third = ci[ci.index(again[0]): ci.index(own[0])]               # after the second pass, in the third pass's own step
     users = [line for name, line in runs if name == "ci.yml" and "tests/test_cloud_step_user.py" in line]
-    assert users == ['python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py | tee '
-                     '"$RUNNER_TEMP/step-user.log"'], users
+    assert users == ['python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py '
+                     'tests/test_cloud_switcher.py | tee "$RUNNER_TEMP/step-user.log"'], users   # the switcher's too
     fourth = ci[ci.index(own[0]): ci.index(users[0])]               # after the third pass, in the fourth pass's own step
     fourth = fourth[fourth.index("LANTERN_TESTS_COMPLETE: no-skips"):]
     assert "set -o pipefail" in fourth and "LANTERN_TESTS_NETLESS" not in fourth, fourth

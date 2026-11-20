@@ -9,6 +9,22 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Completing the separation of the website's steps, second part: only a small program of the website's image stays
+  root. The image now starts its switcher (`cloud/lantern_cloud/switcher.py`), which starts the website's service as
+  an ordinary user of its own (`app`, number 1000) and stays beside it; when the service asks, it gives a check its
+  user, hands the check's folders to that user before each step and back to the service after it, starts each step as
+  that user and stops it with everything it started. While it hands things over it follows no link, changes no file
+  with a second name, opens no pipe and never goes onto another disk; it starts nothing as root while the service's
+  user could change code Python would load for it, or the settings file of a virtual environment that names that code
+  (it names the file), and refuses a service user that is root, nobody or a check's user, and a service folder or
+  place that is not the service's own. The service itself no longer runs as root. The health page says which user it
+  runs as (`service_user`: `own` or `root`) and the uptime check fails on `root`; CI starts the image and reads the
+  system's own process table (the first program is the switcher as root; the service is not root, nobody or a check's
+  user), and Lantern's check of itself allows the image to start as root only while its first program is that switcher
+  with an ordinary service user and a folder of its own named (`docs/deploy.md`, "The switcher"; the owner's answer of
+  2026-11-20). `sandbox._stream(start=)` runs a command another program starts for the caller. Tests:
+  `tests/test_cloud_switcher.py` (65, each refusal beside a safe twin; as root they start the real switcher, and one
+  runs a whole check of the shop sample through the real website under it).
 - CI's record of every address the tests try is written by strace 7.3 with its makers' fix of 2026-11-10, built from
   its source (`.github/workflows/ci.yml`, `tools/strace/`). Every released strace can stop at random when a program
   it follows ends right after a signal (strace's issue 433), and that cut the record of the tests off three times from

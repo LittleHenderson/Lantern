@@ -1915,6 +1915,8 @@ class _Run:
 
     def ended(self) -> bool:
         p = self.proc
+        if getattr(p, "remote", False):       # a process another program runs for this one: it says
+            return p.ended()
         if p.returncode is not None:
             return True
         if _WAITID:
@@ -1931,6 +1933,13 @@ class _Run:
         if self.said is not None:
             return self.said
         p, said = self.proc, []
+        if getattr(p, "remote", False):
+            # The cloud service's steps, started by its switcher (`lantern_cloud.switcher`): the switcher stops the
+            # step as above, where the step's user may be signalled, and says what it could not end.
+            said, left = p.stop(self.ask)
+            self.left.extend(left)
+            self.said = said
+            return said
 
         def failed(text: str) -> None:
             said.append(text)
@@ -2010,7 +2019,7 @@ class _Run:
 
 
 def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None, cancel=None, ask: float = 0.0,
-            also=None, left: list | None = None) -> tuple[int | None, str, bool]:
+            also=None, left: list | None = None, start=None) -> tuple[int | None, str, bool]:
     """Run, streaming each output line to `log`, and leave nothing behind: when the command ends, at the wall
     clock (`timeout`), when `cancel` (a threading.Event) is set and when `stop_all` is called, every process it
     started is ended too. Returns (result, output, stopped at the wall clock); the result is None when the command
@@ -2021,18 +2030,24 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
     launcher that does so (`_jail`), before everything is killed. `also`: called once the command was stopped
     before its end (Docker: remove the container); it returns None, or the words for what it could not do.
     `left`: a list that is given what could not be ended, each in Lantern's own words (empty: all of it was).
-    When `cancel` is set before the command is made, nothing is started: the result is that of a stopped command."""
+    When `cancel` is set before the command is made, nothing is started: the result is that of a stopped command.
+    `start`: called in place of making the process here, for a command another program runs for this one (the cloud
+    service's switcher, which starts each step as the check's own user: `lantern_cloud.switcher.Remote`); `cmd`,
+    `cwd`, `env` and `job` are then the caller's to hand to it, and are not used here."""
     if cancel is not None and cancel.is_set():
         return None, "", False
-    held = job() if job is not None else None
+    held = job() if job is not None and start is None else None
     if sys.platform == "win32":
         from . import winjob
         kw: dict = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | (winjob.SUSPENDED if held is not None else 0)}
     else:
         kw = {"start_new_session": True}
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **kw)
+        if start is not None:
+            proc = start()
+        else:
+            proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **kw)
     except BaseException:
         if held is not None:
             held.close()

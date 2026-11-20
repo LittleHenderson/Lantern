@@ -286,10 +286,13 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         # Public: versions and limits only, never counters, accounts or links.
         # `steps`: "apart" (each check's steps run as a user of its own, who could read none of the service's own
         # files when last asked), "open" (that user could), "unchecked" (not asked yet), "shared" (the service is
-        # not root, and its steps run as its own user). The uptime check fails on "open" and "shared" (`apart.py`).
+        # not root and no switcher started it, and its steps run as its own user). `service_user`: "own" (the
+        # service runs as an ordinary user: the website's image has its switcher start it so, `switcher.py`) or
+        # "root". The uptime check fails on "open", "shared" and "root" (`apart.py`, `tools/uptime.py`).
         return {"ok": True, "service": "lantern-cloud", "version": __version__, "engine": _engine_version(),
                 "limits": s.limits(), "hosts": s.hosts() or "all", "cleanup": cleanup_word(),
-                "steps": worker.steps if worker is not None else ("unchecked" if apart.as_root() else "shared")}
+                "steps": worker.steps if worker is not None else ("unchecked" if apart.can_keep_apart() else "shared"),
+                "service_user": "root" if apart.as_root() else "own"}
 
     @app.get("/v1/me")
     async def me(request: Request):

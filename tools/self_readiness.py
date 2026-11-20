@@ -67,17 +67,67 @@ def _not_root(stage: list[str]) -> bool:
     return bool(users) and users[-1].split(":")[0] not in ("root", "0")
 
 
+def _last(stage: list[str], word: str) -> str | None:
+    """What follows the image's last `word` instruction (CMD, ENTRYPOINT), or None when it has none."""
+    found = None
+    for ins in stage:
+        m = re.match(rf"{word}\s+(.*)", ins, re.I | re.S)
+        if m:
+            found = m.group(1).strip()
+    return found
+
+
+# Options of Python that take no value: the words a command may hold between the program and `-m`.
+PYTHON_FLAGS = {"-I", "-E", "-s", "-S", "-B", "-u", "-O", "-OO", "-P", "-q"}
+SWITCHER = "lantern_cloud.switcher"
+
+
+def _switcher_first(stage: list[str]) -> bool:
+    """The image's first program is its switcher, and the service's command comes after it: no ENTRYPOINT (which
+    would make the command its arguments), and a command in the form that starts no shell, which is Python with
+    nothing but options before `-m lantern_cloud.switcher`, then `--`, then a command."""
+    if _last(stage, "ENTRYPOINT") is not None:
+        return False
+    cmd = _last(stage, "CMD")
+    if cmd is None or not cmd.startswith("["):
+        return False
+    try:
+        words = json.loads(cmd)
+    except ValueError:
+        return False
+    if not (isinstance(words, list) and len(words) > 4 and all(isinstance(w, str) for w in words)):
+        return False
+    if not re.fullmatch(r"(?:/usr(?:/local)?/bin/)?python3?(?:\.\d+)?", words[0]) or "-m" not in words:
+        return False
+    at = words.index("-m")
+    return (all(w in PYTHON_FLAGS for w in words[1:at]) and words[at + 1:at + 3] == [SWITCHER, "--"]
+            and len(words) > at + 3)
+
+
 def _steps_apart(root: Path) -> str | None:
-    """None while the repository shows why the website's image may start as root: the image it builds requires each
-    check's steps to run apart, as a user of that check's own (`LANTERN_CLOUD_STEPS_APART=required`, which only a
-    service started as root can keep: cloud/lantern_cloud/apart.py), and every other image of the project names a user
-    that is not root, so the check's failure can only be about this image. Otherwise what no longer holds."""
+    """None while the repository shows why the website's image may start as root: root is its switcher's alone (the
+    image's first program, cloud/lantern_cloud/switcher.py), which starts the service as an ordinary user it names
+    (`LANTERN_CLOUD_SERVICE_USER`, not root and not nobody) with its own places on one disk (`LANTERN_CLOUD_DATA`)
+    and each check's steps as a user of that check's own, which only root can switch to; the image requires each
+    check's steps to run apart (`LANTERN_CLOUD_STEPS_APART=required`, cloud/lantern_cloud/apart.py); and every other
+    image of the project names a user that is not root, so the check's failure can only be about this image.
+    Otherwise what no longer holds."""
     from lantern.readiness import Repo
     site = root / "cloud" / "Dockerfile"
     if not site.is_file():
         return "there is no cloud/Dockerfile"
-    if _env(_stage(site.read_text(encoding="utf-8")), "LANTERN_CLOUD_STEPS_APART") != "required":
+    stage = _stage(site.read_text(encoding="utf-8"))
+    if _env(stage, "LANTERN_CLOUD_STEPS_APART") != "required":
         return "the image cloud/Dockerfile builds does not set LANTERN_CLOUD_STEPS_APART=required"
+    if not _switcher_first(stage):
+        return ("the image cloud/Dockerfile builds does not start its switcher first "
+                f'(CMD ["python", "-I", "-m", "{SWITCHER}", "--", <the service\'s command>], no ENTRYPOINT)')
+    service = _env(stage, "LANTERN_CLOUD_SERVICE_USER")
+    if not service or service.strip() != service or service in ("root", "0", "nobody", "65534"):
+        return "the image cloud/Dockerfile builds names no ordinary user for its service (LANTERN_CLOUD_SERVICE_USER)"
+    data = _env(stage, "LANTERN_CLOUD_DATA")
+    if not data or not data.startswith("/") or data.rstrip("/") == "":
+        return "the image cloud/Dockerfile builds names no folder of the service's own (LANTERN_CLOUD_DATA)"
     for f in Repo(root).project_files:          # the files the readiness checks read (the tests' own are not)
         if f.rsplit("/", 1)[-1].lower() == "dockerfile" and f != "cloud/Dockerfile":
             if not _not_root(_stage((root / f).read_text(encoding="utf-8", errors="replace"))):
@@ -88,10 +138,10 @@ def _steps_apart(root: Path) -> str | None:
 # Checks that may fail here, each with its reason and what must still hold for it (`holds(root)`: None, or what no
 # longer holds, and then the failure stops CI as any other does).
 ALLOWED_FAIL = {
-    "pkg-user": ("the website's image (cloud/Dockerfile) starts as root so that it can run each check's steps as a "
-                 "user of that check's own, which only root can switch to; the steps never run as root (the owner's "
-                 "answer of 2026-11-20, which also asks that root be narrowed next to the small part that starts "
-                 "the steps)", _steps_apart),
+    "pkg-user": ("the website's image (cloud/Dockerfile) starts as root for its switcher alone, which starts the "
+                 "service as an ordinary user of its own and each check's steps as a user of that check's own, which "
+                 "only root can switch to; neither the service nor a step runs as root (the owner's answer of "
+                 "2026-11-20: root narrowed to the small part that starts the steps)", _steps_apart),
 }
 ALLOWED_PARTIAL: dict[str, str] = {}
 # Checks the release decision requires that this step cannot have run.

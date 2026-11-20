@@ -162,3 +162,35 @@ def test_checks_kept_apart_not_asked_yet_or_not_said_pass(capsys):
         assert uptime.main(["--gateway", gu]) == 0
     finally:
         g.shutdown()
+
+
+def test_a_website_service_that_runs_as_root_fails_the_check(capsys):
+    """lantern-cloud's health says which user its service runs as (website stage, step 3): "own" where the image's
+    switcher started it as an ordinary user of its own, "root" where the whole service runs as root again (the
+    image lost its switcher). "root" and a word the check does not know are an email to the owner."""
+    for word, mark in (("root", "| ROOT |"), ("someone", "| UNKNOWN |")):
+        c, cu = serve({"ok": True, "service": "lantern-cloud", "version": "0.1.0", "steps": "apart", "service_user": word})
+        try:
+            assert uptime.main(["--cloud", cu]) == 1
+            got = capsys.readouterr()
+            assert "| lantern-cloud service user |" in got.out and mark in got.out, got.out
+            assert "FAIL lantern-cloud service user" in got.err
+        finally:
+            c.shutdown()
+
+
+def test_a_website_service_of_its_own_user_or_from_before_the_word_passes(capsys):
+    """The safe twins: "own"; a live service from before the word existed; and the gateway, which does not say it."""
+    for body in ({"ok": True, "service": "lantern-cloud", "version": "0.1.0", "steps": "apart", "service_user": "own"},
+                 {"ok": True, "service": "lantern-cloud", "version": "0.1.0", "steps": "apart"}):
+        c, cu = serve(body)
+        try:
+            assert uptime.main(["--cloud", cu]) == 0
+            assert "service user" not in capsys.readouterr().out
+        finally:
+            c.shutdown()
+    g, gu = serve({"ok": True, "version": "0.2.5", "service_user": "root"})     # only lantern-cloud says this word
+    try:
+        assert uptime.main(["--gateway", gu]) == 0
+    finally:
+        g.shutdown()
