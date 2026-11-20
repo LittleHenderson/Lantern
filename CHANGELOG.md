@@ -14,7 +14,9 @@ file. New entries go under `## Unreleased`, on top.
   it follows ends right after a signal (strace's issue 433), and that cut the record of the tests off three times from
   2026-11-14 to 2026-11-18. The step checks the release against its fingerprint, applies the makers' commit as it is,
   shows their own test of the fault failing on the release and passing with the fix, installs that strace and checks
-  that the recorder finds it; no packaged strace is installed beside it (`tests/test_ci_recorder.py`).
+  that the recorder finds it; no packaged strace is installed beside it (`tests/test_ci_recorder.py`). Their test
+  expects process numbers of five digits, as in their own runs, so the step first starts short programs until a
+  fresh machine's numbers have five digits, and shows each test's own log when its result is not the one it must be.
 - Four more checks from the side-by-side with another review tool (`bench/four_checks_results.md`), each written from
   examples of Lantern's own beside safe twins, each a heuristic (`tool_confidence: LOW`, ranked medium) that says
   "check":

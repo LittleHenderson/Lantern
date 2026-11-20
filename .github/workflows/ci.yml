@@ -72,6 +72,11 @@ jobs:
             for t in $tests; do echo "--- tests/${t%.test}.log:"; cat "tests/${t%.test}.log" || true; done
           }
           fault='ptrace\(PTRACE_LISTEN,[^)]*\): Input/output error'
+          # Their test expects "<pid> +++ killed by SIGKILL +++" with one space after the number, which is how strace
+          # writes a process number of five digits or more; a machine that has not yet started 10,000 programs gives
+          # a smaller one two spaces, and the test fails for that alone (this step's first build: process 9103). Short
+          # programs are started until the numbers have five digits; the test itself is left as it is.
+          until [ "$(sh -c 'echo $$')" -ge 10000 ]; do :; done
           if makers_test "$PWD/src/strace"; then tail -n 25 "$log"; makers_logs; echo "::error::The makers' test of the fault passed on strace 7.3 as released: here it shows nothing"; exit 1; fi
           for t in $tests; do
             b="tests/${t%.test}"

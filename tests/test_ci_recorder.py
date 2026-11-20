@@ -138,6 +138,12 @@ def test_the_step_shows_the_makers_test_failing_on_the_release_and_passing_with_
         assert 'for t in $tests; do echo "--- tests/${t%.test}.log:"; cat "tests/${t%.test}.log" || true; done' in run
         assert _at(run, 'if makers_test "$PWD/src/strace"; then tail -n 25 "$log"; makers_logs;') == release
         assert _at(run, f'makers_test {BUILT} || {{ tail -n 25 "$log"; makers_logs;') == again
+        # their test expects "<pid> +++ killed by SIGKILL +++" with one space after the number, which is how strace
+        # writes a process number of five digits or more ("%-5u "); a machine that has not yet started 10,000
+        # programs gives the tracee a smaller one (the step's first build: 9103, two spaces, a failure for that
+        # alone). The numbers are brought to five digits before the test first runs, and the test is left as it is.
+        five = _at(run, """until [ "$(sh -c 'echo $$')" -ge 10000 ]; do :; done""")
+        assert harness < five < release, (wf, name)
 
 
 def test_the_step_ends_by_checking_that_the_recorder_finds_the_strace_it_built():

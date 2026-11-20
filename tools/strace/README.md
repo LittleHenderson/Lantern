@@ -11,6 +11,8 @@ CI's Linux test jobs apply it (`.github/workflows/ci.yml`, the step that builds 
 strace write down every address a program of the tests tries, and every released strace (7.3 and older) can stop at
 random when a program it follows ends right after a signal, which cut the record of the tests off three times between
 2026-11-14 and 2026-11-18. The fix came after strace's newest release, so CI builds the 7.3 release with it, shows
-strace's own test of the fault failing on the release and passing with the fix, and installs that one.
+strace's own test of the fault failing on the release and passing with the fix, and installs that one. That test
+expects process numbers of five digits (it writes the number with one space after it, as strace does from five
+digits on), so CI first starts short programs until a fresh machine's numbers have five digits.
 `tests/test_ci_recorder.py` keeps the file and the step as they are. When a strace release that holds the fix comes
 out, CI can take that release instead and this folder can go.
