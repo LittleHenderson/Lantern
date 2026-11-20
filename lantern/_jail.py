@@ -3,9 +3,10 @@ run the command, and leave nothing it started behind.
 
     python -c "...main(argv)" POLICY_JSON -- command args...
 
-POLICY_JSON: {"writable": [dirs], "nobody": bool, "python": bool, "net": bool, "own_net": bool, "net_told": bool,
-              "must": bool, "parent": pid, "cpu": seconds, "memory": bytes, "readable": [paths], "runs": path,
-              "read": {"closed": [dirs], "open": [paths], "list": [dirs]}, "shm": bytes, "sockets": bool}
+POLICY_JSON: {"writable": [dirs], "nobody": bool, "user": uid, "python": bool, "net": bool, "own_net": bool,
+              "net_told": bool, "must": bool, "parent": pid, "cpu": seconds, "memory": bytes, "readable": [paths],
+              "runs": path, "read": {"closed": [dirs], "open": [paths], "list": [dirs]}, "shm": bytes,
+              "sockets": bool}
 * resource limits: processor time for each process (600 s, or `cpu`: the run's time limit on every processor it
   may use, so a test at work on several at once meets the clock first; until 2026-11-13 it was 600 s whatever
   the limit and however many processors), files up to 512 MB, no core dumps;
@@ -108,6 +109,13 @@ POLICY_JSON: {"writable": [dirs], "nobody": bool, "python": bool, "net": bool, "
   three rates: 3 to 7, 86 to 98, 2,008 to 2,789), so tests that fail while held up that way are read as the
   sandbox's doing; tests that never end run into the run's time limit;
 * `nobody`: drop to uid/gid 65534 when started as root (root ignores file modes);
+* `user` (2026-11-18, the cloud service's steps): drop to that uid and the gid of the same number instead, with no
+  other group. It must be one of `STEP_USERS`, numbers kept for the steps of the service's checks, and the launcher
+  must be root: anything else (root itself, `nobody`, an ordinary user of the computer, a launcher that cannot change
+  user) and the command is not started (the word `user`), whatever `must` says. The service gives each check a
+  user of its own (`lantern_cloud.apart`), so a step cannot read another check's folders, the service's own files or
+  its running program, which a shared user could (`nobody` was one user for every check; where the service was not
+  root, its steps ran as the service's own user). `end_user` ends what still runs as such a user;
 * no_new_privs, so nothing it runs can gain privileges.
 
 `must` (set for a project's own tests, the one place Lantern runs untrusted code): when a restriction the sandbox
@@ -150,13 +158,20 @@ LIMIT_MARK = "LANTERN-SANDBOX-LIMIT:"
 # by the clock, which reads as a run that did not finish, and not by this limit, which would read as a failure.
 CPU_SECONDS, CPU_MOST = 600, 240 * 60 * 4096
 MARK = "LANTERN-SANDBOX-UNAVAILABLE:"
+NOBODY = 65534
+# The users the cloud service's steps run as (policy key `user`): one per check, never root, never `nobody`, and
+# above the numbers a system gives its people and services (up to 65,535 on Linux by custom, 60,000 and up being
+# kept for system use) and above the ranges container tools hand out to a person by default (from 100,000, 65,536
+# each). Nobody else on the service's machine has one of them, so a file of the service's that others may not read
+# is closed to every step, and one check's folders to every other check.
+STEP_USERS = range(300_000, 800_000)
 # Why the command was not started: the word printed after MARK, and the words `lantern.sandbox` shows for it. The
 # words shown to a person are always these, never text read from a run's output.
 REASONS = {
     "landlock-ruleset": "the kernel refused the rules that keep writes inside the sandbox's temp folder",
     "landlock-restrict": "the kernel refused to put the tests under the rules that keep writes inside the sandbox's temp folder",
     "no-new-privileges": "the kernel refused to stop the tests from gaining privileges",
-    "user": "the tests could not be handed to the unprivileged user they must run as",
+    "user": "the command could not be handed to the unprivileged user it must run as",
     "parent-gone": "Lantern ended while the sandbox was starting",
     "guard": "the guard that refuses writes and network connections did not load into the tests' Python",
     "libraries": "the tests' Python could not be limited to the libraries fetched for them (the ones installed "
@@ -491,10 +506,28 @@ def try_own_memory(nobody: bool) -> int:
     return _own_memory(size, True)
 
 
-def _become_nobody() -> None:
+def _become(uid: int) -> None:
+    """Root becomes `uid`, with the group of the same number and no other group. No way back."""
     os.setgroups([])
-    os.setgid(65534)
-    os.setuid(65534)
+    os.setgid(uid)
+    os.setuid(uid)
+
+
+def _become_nobody() -> None:
+    _become(NOBODY)
+
+
+def _user(policy: dict) -> int | None:
+    """The user the command is to run as: the policy's `user`, else `nobody` where the policy asks for it, else None
+    (the launcher's own). A `user` that is not one of `STEP_USERS` is refused, and so is any `user` where the
+    launcher is not root: the command never runs as the one starting it in place of a user of its own."""
+    if "user" in policy:
+        want = policy["user"]
+        if type(want) is not int or want not in STEP_USERS or os.geteuid() != 0:
+            _say("sandbox: the command was to run as a user of its own, and that user cannot be given here")
+            _refuse("user")
+        return want
+    return NOBODY if policy.get("nobody") and os.geteuid() == 0 else None
 
 
 def try_own_network(nobody: bool) -> int:
@@ -557,13 +590,16 @@ def _restrict(policy: dict, hand=None) -> dict:
     if shm and os.geteuid() == 0:
         shm_number = _own_memory(shm)
         kept = shm_number == 0
-    if policy.get("nobody") and os.geteuid() == 0:
+    want = _user(policy)
+    if want is not None:
         try:
-            _become_nobody()
+            _become(want)
         except OSError as e:
-            _refuse("user", e.errno)        # never as root what was to run as nobody
-        if os.getuid() != 65534 or os.geteuid() != 65534 or os.getgid() != 65534:
+            _refuse("user", e.errno)        # never as root what was to run as another user
+        if {os.getuid(), os.geteuid(), os.getgid(), os.getegid()} != {want} or os.getgroups():
             _refuse("user")
+        if "user" in policy:
+            _say("sandbox: a user of its own for this check, who may read only this check's files")
     # What the command is made of (`readable`: files and folders, `runs`: the program) is looked at by the user
     # the command will run as: root's own home folder is closed to `nobody`, and a Python that finds no Lantern
     # and no test runner there would end with an error that reads as tests that failed.
@@ -1593,6 +1629,52 @@ def end_beneath(top: int, seconds: float = 2.0) -> int:
         ours = set(family) | {top}
         for pid in running:
             _kill(pid, lambda row, ours=ours: row is not None and row[1] in ours)
+        time.sleep(0.01)
+
+
+def _uids(pid: int) -> tuple[int, ...] | None:
+    """The user numbers of one process (real, effective, saved, for files), or None when it is gone or has ended
+    and waits to be collected."""
+    try:
+        with open(f"/proc/{pid}/status", "rb") as f:
+            text = f.read()
+    except OSError:
+        return None
+    ids, zombie = None, False
+    for line in text.splitlines():
+        if line.startswith(b"State:"):
+            zombie = line.split()[1:2] == [b"Z"]
+        elif line.startswith(b"Uid:"):
+            try:
+                ids = tuple(int(x) for x in line.split()[1:5])
+            except ValueError:
+                return None
+    return None if zombie else ids
+
+
+def processes_of(uid: int) -> list[int]:
+    """Linux: every process still running that holds the user `uid` in any of its user numbers."""
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return []
+    return [int(n) for n in names if n.isdigit() and uid in (_uids(int(n)) or ())]
+
+
+def end_user(uid: int, seconds: float = 2.0) -> int:
+    """Linux, as root: end every process of `uid`, one of `STEP_USERS` (any other number raises ValueError, so
+    neither the service nor anybody else of the computer is ever asked for). The cloud service calls it when a
+    check is over: each step's launcher has ended what its command started, and this is the second wall, for
+    whatever got away from it. Returns how many still run."""
+    if type(uid) is not int or uid not in STEP_USERS:
+        raise ValueError("not one of the users kept for the cloud service's steps")
+    deadline = time.monotonic() + seconds
+    while True:
+        running = processes_of(uid)
+        if not running or time.monotonic() > deadline:
+            return len(running)
+        for pid in running:
+            _kill(pid, lambda row, pid=pid: uid in (_uids(pid) or ()))
         time.sleep(0.01)
 
 

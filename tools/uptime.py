@@ -10,6 +10,11 @@ lantern-cloud's health also says one word about its own clean-up: "behind" means
 waiting to be removed for more than a day, or that runs past the retention time are still there. That fails this check
 too, so the owner gets the email; the counts and reasons are in the service's /v1/admin/stats under "cleanup"
 (docs/deploy.md). A service that says nothing about clean-up (a version from before 2026-11-10) passes.
+It also says whether each check's steps run as a user of their own who could read none of the service's own files
+when last asked ("steps", 2026-11-18; cloud/lantern_cloud/apart.py): "open" (that user could, and the service starts
+no check), "shared" (the service is not root, and cannot give a check a user of its own) and any word but "apart" and
+"unchecked" (said in the seconds after a start, before the first proof) fail this check. A service that says nothing
+about it (a version from before that day) passes.
 """
 from __future__ import annotations
 
@@ -78,6 +83,16 @@ def main(argv: list[str] | None = None) -> int:
                 why = f"the service could not say whether its clean-up is up to date (it said {word!r}); look at its logs"
             rows.append(("lantern-cloud clean-up", url, "OWED" if word == "behind" else "UNKNOWN", why))
             bad.append(f"lantern-cloud clean-up: {why}")
+        if name == "lantern-cloud" and ok and body.get("steps") not in (None, "apart", "unchecked"):
+            word = str(body.get("steps"))[:40]
+            why = {"open": "a check's user could read what is the service's own when it was last asked, so the service "
+                           "starts no check until that is put right (docs/deploy.md)",
+                   "shared": "the service is not root, so it cannot run a check's steps as a user of their own, and "
+                             "the website starts no check (docs/deploy.md)"}.get(
+                word, f"the service could not say whether its checks are kept apart (it said {word!r}); look at its logs")
+            rows.append(("lantern-cloud checks kept apart", url, word.upper() if word in ("open", "shared") else "UNKNOWN",
+                         why))
+            bad.append(f"lantern-cloud checks kept apart: {why}")
     md = "| service | url | status | detail |\n|---|---|---|---|\n" + "\n".join(f"| {n} | {u} | {s} | {w} |" for n, u, s, w in rows)
     print(md)
     if a.summary:

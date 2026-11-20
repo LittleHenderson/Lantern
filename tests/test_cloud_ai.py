@@ -26,6 +26,7 @@ from test_allowance_flow import free_port, good_answer  # noqa: E402
 from test_cloud_runs import (LINK, SOURCE_LINE, bearer, clone_from, holds, left_by_a_step, origin,  # noqa: E402,F401
                              wait, workdir)
 from fastapi.testclient import TestClient  # noqa: E402
+from lantern_cloud import apart  # noqa: E402
 from lantern_cloud import worker as worker_mod  # noqa: E402
 from lantern_cloud.app import create_app  # noqa: E402
 from lantern_cloud.settings import Settings  # noqa: E402
@@ -274,8 +275,11 @@ def test_at_the_time_limit_a_planted_link_is_not_followed_either(env, monkeypatc
     res = Path(s.results_dir) / rid
     secret = tmp_path / "not-a-result.json"
     secret.write_text(json.dumps({"secret": SECRET}), encoding="utf-8")
+    real = worker_mod.Worker._jailed
 
     def out_of_time(self, key, root, cmd, **kw):
+        if apart.PROOF in cmd:      # where the service is root, its own proof comes first; that is not this step
+            return real(self, key, root, cmd, **kw)
         cache = root / "tmp" / "out" / "cache"
         cache.mkdir(parents=True, exist_ok=True)
         (cache / "0123456789abcdef01234567.json").write_text('{"written": "before the time limit"}', encoding="utf-8")

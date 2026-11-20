@@ -35,7 +35,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from lantern import learn, scope
 
-from . import __version__
+from . import __version__, apart
 from .cleanup import Cleanup
 from .identity import GatewayUnavailable, Identity
 from .idle import IdleExit
@@ -284,8 +284,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     @app.get("/v1/health")
     def health():
         # Public: versions and limits only, never counters, accounts or links.
+        # `steps`: "apart" (each check's steps run as a user of its own, who could read none of the service's own
+        # files when last asked), "open" (that user could), "unchecked" (not asked yet), "shared" (the service is
+        # not root, and its steps run as its own user). The uptime check fails on "open" and "shared" (`apart.py`).
         return {"ok": True, "service": "lantern-cloud", "version": __version__, "engine": _engine_version(),
-                "limits": s.limits(), "hosts": s.hosts() or "all", "cleanup": cleanup_word()}
+                "limits": s.limits(), "hosts": s.hosts() or "all", "cleanup": cleanup_word(),
+                "steps": worker.steps if worker is not None else ("unchecked" if apart.as_root() else "shared")}
 
     @app.get("/v1/me")
     async def me(request: Request):

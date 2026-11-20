@@ -127,3 +127,38 @@ def test_clean_up_that_is_up_to_date_or_not_mentioned_passes(capsys):
         assert uptime.main(["--gateway", gu]) == 0
     finally:
         g.shutdown()
+
+
+def test_checks_that_are_not_kept_apart_fail_the_check(capsys):
+    """lantern-cloud's health says whether each check's steps run as a user of their own, who could read none of the
+    service's own files when last asked (website stage, step 2): "open" (that user could, so the service starts no
+    check), "shared" (the service is not root and cannot give a check a user of its own) and a word the check does
+    not know are an email to the owner."""
+    for word, mark in (("open", "| OPEN |"), ("shared", "| SHARED |"), ("sideways", "| UNKNOWN |")):
+        c, cu = serve({"ok": True, "service": "lantern-cloud", "version": "0.1.0", "steps": word})
+        try:
+            assert uptime.main(["--cloud", cu]) == 1
+            got = capsys.readouterr()
+            assert "| lantern-cloud checks kept apart |" in got.out and mark in got.out, got.out
+            assert "FAIL lantern-cloud checks kept apart" in got.err
+        finally:
+            c.shutdown()
+
+
+def test_checks_kept_apart_not_asked_yet_or_not_said_pass(capsys):
+    """The safe twins: "apart"; "unchecked", what the service says in the seconds after it starts and before its
+    first proof (this check may be what woke it); and a live service from before the word existed."""
+    for body in ({"ok": True, "service": "lantern-cloud", "version": "0.1.0", "steps": "apart"},
+                 {"ok": True, "service": "lantern-cloud", "version": "0.1.0", "steps": "unchecked"},
+                 {"ok": True, "service": "lantern-cloud", "version": "0.1.0"}):
+        c, cu = serve(body)
+        try:
+            assert uptime.main(["--cloud", cu]) == 0
+            assert "kept apart" not in capsys.readouterr().out
+        finally:
+            c.shutdown()
+    g, gu = serve({"ok": True, "version": "0.2.5", "steps": "open"})     # only lantern-cloud says this word
+    try:
+        assert uptime.main(["--gateway", gu]) == 0
+    finally:
+        g.shutdown()
