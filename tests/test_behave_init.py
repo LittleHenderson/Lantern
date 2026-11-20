@@ -1100,7 +1100,7 @@ def test_a_run_that_differs_from_what_is_written_down_is_said_case_by_case():
 @starts_an_app
 @pytest.mark.parametrize("version", ["safe", "no-login-list", "refused-but-deleted", "limit-in-memory", "double-spend"])
 def test_the_plan_lantern_writes_for_the_benchmark_app_shows_what_was_written_down_before_its_first_run(tmp_path, version):
-    """Five of the 33 versions (`python bench/behaviour/run_behaviour.py WORKDIR --first-plan` runs them all): the
+    """Five of the 34 versions (`python bench/behaviour/run_behaviour.py WORKDIR --first-plan` runs them all): the
     safe app, three planted problems a first plan is to catch, and one it is not (two coupons at the same moment)."""
     pytest.importorskip("fastapi")
     pytest.importorskip("jwt")
@@ -1109,3 +1109,51 @@ def test_the_plan_lantern_writes_for_the_benchmark_app_shows_what_was_written_do
     assert row["differences"] == []
     assert bool(row["broken"]) == (version in bench.first.CAUGHT)
     assert row["checks"] == 16 and row["summary"]["held"] >= 14
+
+
+# ------------------------------------------------------------------------- a sign-in ended while a change is under way
+SIGN_OUT = '''
+
+@app.post("/logout")
+def logout(authorization: str = Header(default="")):
+    con = get_db()
+    con.execute("DELETE FROM sessions WHERE token = ?", (authorization.removeprefix("Bearer "),))
+    con.commit()
+    con.close()
+    return {"signed_out": True}
+'''
+ADD_CHECKED_IN_THE_WRITE = '''
+
+@app.post("/notes")
+def add_note(note: NoteIn, authorization: str = Header(default=""), user: int = Depends(current_user)):
+    con = get_db()
+    made = con.execute("INSERT INTO notes (owner, text) SELECT ?, ? WHERE EXISTS "
+                       "(SELECT 1 FROM sessions WHERE token = ?)", (user, note.text, authorization.removeprefix("Bearer ")))
+    con.commit()
+    con.close()
+    if made.rowcount != 1:
+        raise HTTPException(401, "Sign in first")
+    return {"id": made.lastrowid}
+'''
+
+
+def test_where_the_app_has_a_sign_out_a_change_is_held_half_way_while_it_is_used(tmp_path):
+    plan = _drafted(tmp_path / "with", {"pinboard.py": _pinboard() + SIGN_OUT})["plan"]
+    midway = [c for c in plan["checks"] if c["kind"] == "ended-midway"]
+    assert [c["id"] for c in midway] == ["midway-post-notes", "midway-put-notes-note-id", "midway-delete-notes-note-id"]
+    assert midway[1]["arrange"] and midway[1]["who"] == "alice"
+    assert midway[0]["end"] == {"request": {"method": "POST", "path": "/logout"}, "as": "alice"}
+    assert all(c["kind"] != "ended-midway" for c in _drafted(tmp_path / "without", {"pinboard.py": _pinboard()})["plan"]["checks"])
+
+
+@starts_an_app
+def test_a_note_added_for_a_sign_in_ended_half_way_breaks_and_one_checked_in_its_write_holds(tmp_path):
+    pytest.importorskip("fastapi")
+    got = _run_as_written(tmp_path / "before", _pinboard() + SIGN_OUT)
+    assert got["midway-post-notes/ended half-way"] == ("broken", ["lived-on"])
+    head, _, rest = PIN_HEAD.partition('\n\n@app.post("/notes")')
+    safe = head + ADD_CHECKED_IN_THE_WRITE + "".join(
+        {"login": LOGIN, "listing": LISTING, "read": READ, "change": CHANGE, "remove": REMOVE}.values()) + SIGN_OUT
+    assert rest and safe != _pinboard() + SIGN_OUT
+    got = _run_as_written(tmp_path / "write", safe)
+    assert got["midway-post-notes/ended half-way"] == ("held", [])

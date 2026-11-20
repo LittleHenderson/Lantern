@@ -84,6 +84,12 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                "paid AI account, your email service) now works for them, and the bill or the data is yours.",
                "The key lives only on the server in an environment variable, and you replace (rotate) the old one, "
                "because anyone may already have a copy."),
+    "not-a-key": (None,
+                  "Most likely nothing: the text reads as a fingerprint of data or a fixed label, which open nothing. "
+                  "If it is in fact a key kept under a misleading name, they copy it and use it from their own "
+                  "computer.",
+                  "The text stays a fingerprint or a label, and any real key lives only on the server in an "
+                  "environment variable."),
     "service-role": (None,
                      "They copy the service-role key from the code. That key skips every database rule, so they "
                      "can read and change every row of every table.",
@@ -186,6 +192,43 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                           "Every use of the connection waits its turn under one lock (or each thread has a "
                           "connection of its own), so requests of the same moment are answered as they "
                           "would be one after the other."),
+    "secret-file": (None,
+                    "They put a file of their own, or a link to one, at the place the program is told to take its "
+                    "secret from. The program reads it and takes their text for its secret, and whatever the secret "
+                    "guards now opens for them.",
+                    "The program opens the file without following a link and refuses it unless it is a plain file "
+                    "of its own user that nobody else may read or change."),
+    "limit-fails-open": (None,
+                         "A limit somebody set with a typo, or set to Infinity, is taken as no limit at all or as a "
+                         "looser default, and nothing says so. The program spends or sends far more than whoever "
+                         "set the limit meant.",
+                         "A limit that is set and cannot be read stops the program with a message, and a limit that "
+                         "is not a finite number is refused."),
+    "effect-first": (None,
+                     "The program stops right after it has asked the other service to move money or to place an "
+                     "order, and before it has written anything down. The money has moved, or the order stands, and "
+                     "the program's own books say nothing; when it starts again it may send the same thing a second "
+                     "time.",
+                     "The program writes down what it is about to send first, sends it with a key that makes a "
+                     "second send the same as the first, and marks it done afterwards."),
+    "caller-done": (None,
+                    "They call it with a made-up id, receipt or confirmation number. The program stores it and "
+                    "marks the payment, the transfer or the order done, though nothing happened at the provider: "
+                    "goods ship, money is counted, a limit is freed.",
+                    "Before it marks anything done the program asks the provider about that id itself (that it "
+                    "exists, its status and amount, and that it belongs to this record), or only the provider's "
+                    "signed message marks it done."),
+    "self-proof": (None,
+                   "The side whose work is checked writes the records the check asks for itself, real or made up, "
+                   "and the check passes: the program trusts work that never happened.",
+                   "The trusted side observes the event itself (its own connection, its own clock, the provider's "
+                   "own answer), writes that record, and checks against that, never against what the checked side "
+                   "wrote."),
+    "ended-midway": (None,
+                     "Their request passes the sign-in check. While it is on its way to the change, the sign-in is "
+                     "ended (they are signed out, the token is rotated), and the change is still made for it.",
+                     "The check and the change happen under one lock, or the change checks the session again inside "
+                     "its own transaction, so a sign-in ended in between stops it."),
     "owner": (None,
               "The server finds the record with that id and hands it over (or changes it), because nothing compares "
               "the record's owner with who is asking. Going through the numbers one by one, they reach everyone's "
@@ -397,6 +440,9 @@ RULE_KIND = {
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LW-TOKEN-PICKUP": "pickup", "LW-LOOPBACK-COOKIE": "local-cookie", "LW-SW-KEEPS-PAGES": "kept-pages",
     "LW-LIMIT-COUNTED-LATER": "counted-later", "LW-SHARED-CONNECTION": "shared-connection",
+    "LW-SECRET-FILE-UNCHECKED": "secret-file", "LW-LIMIT-FAILS-OPEN": "limit-fails-open",
+    "LW-EFFECT-BEFORE-RECORD": "effect-first", "LW-CALLER-SAYS-DONE": "caller-done",
+    "LW-SELF-WRITTEN-PROOF": "self-proof", "LW-SIGN-IN-ENDED-MIDWAY": "ended-midway",
     "LW-UNSIGNED-WEBHOOK": "unsigned-webhook", "LW-NONATOMIC-BALANCE": "balance-race",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-UNSAFE-MCP-TOOL": "tool-unsafe", "LA-UNBOUNDED-AGENT-LOOP": "agent-loop",
@@ -496,6 +542,8 @@ def kind_of(f: dict) -> str:
         return RULE_KIND[rule]
     if f.get("category") == "dependency":
         return "dependency"
+    if f.get("category") == "secret" and f.get("secret_shape"):
+        return "not-a-key"      # a digest or a fixed label by its shape (lantern/secretshape.py)
     if f.get("category") == "secret":
         return "secret"
     try:
@@ -794,6 +842,28 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                      "it.")
         basis.append("the model's fields come from the project's own model file; the query and the answer from "
                      "the lines Lantern read")
+    elif kind == "secret-file":
+        steps.append(f"{who} can put a file, or a link, at the place the program is told to read its secret from.")
+        basis.append("the read and where its place comes from are from the function's own lines")
+    elif kind == "limit-fails-open":
+        steps.append(f"{who} (or a typo of the person who sets up the program) gives the limit a value that cannot "
+                     "be read, or Infinity.")
+        basis.append("how the limit is read comes from the file's own lines")
+    elif kind == "effect-first":
+        steps.append("The program stops at the wrong moment: a crash, a deploy, a time limit.")
+        basis.append("the order of the call and of the write comes from the function's own lines")
+    elif kind == "caller-done":
+        steps.append(f"{who} can call this and hand it a value of their own choosing for the provider's id or "
+                     "receipt.")
+        basis.append("what the function marks done and what it holds as proof come from its own lines")
+    elif kind == "ended-midway":
+        steps.append(f"{who} holds a sign-in that is about to be ended (a stolen token being rotated, a session being "
+                     "signed out) and sends a request that changes something at that moment.")
+        basis.append("the check, its lock, what ends the sign-in and the change after it come from the file's own code")
+    elif kind == "self-proof":
+        steps.append(f"{who} controls the side the program trusts less (a worker, a runner, a client) and writes "
+                     "the records it is allowed to write.")
+        basis.append("who may write which record, and what the check asks for, are read from names in the code")
     elif kind == "shared-connection":
         steps.append(f"{who} uses the app while somebody else does, or sends several requests at the same "
                      "moment.")
@@ -994,6 +1064,7 @@ FIXED_HEADLINES = {
     "ios-tls-off": "A secure-connection check is switched off",
     "weak-hash": "A weak scrambling method (such as MD5) is used",
     "secret": "A password or key is written in the code",
+    "not-a-key": "A scanner took a fingerprint or a label for a key",
     "service-role": "The master database key is sent to every visitor's browser",
     "open-db": "Anyone can read this database table",
     "cors": "Any website can call your server as your visitors",
@@ -1010,6 +1081,12 @@ FIXED_HEADLINES = {
     "unsigned-webhook": "A made-up message may be taken for your payment or message provider's",
     "balance-race": "A balance may be spent more than once by requests sent at the same moment",
     "shared-connection": "Requests of the same moment may meet on one database connection",
+    "secret-file": "A secret is taken from a file nobody checked",
+    "limit-fails-open": "A safety limit gives way when its value is wrong",
+    "effect-first": "Money or an order goes out before it is written down",
+    "caller-done": "Something may be marked paid or done on the caller's word alone",
+    "self-proof": "A check may accept proof written by the side it checks",
+    "ended-midway": "A sign-in ended at the wrong moment may still make its change",
     "server-code": "Code written for your server may be in the files every visitor downloads",
     "server-key": "A secret key may be written into the files every visitor downloads",
     "whole-record": "An answer may carry a secret field that no page shows",

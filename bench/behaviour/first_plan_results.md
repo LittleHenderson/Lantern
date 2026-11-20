@@ -1,6 +1,6 @@
 # Behaviour benchmark: the plan Lantern writes by itself, on Corkboard, safe and with each planted problem
 
-`python bench/behaviour/run_behaviour.py WORKDIR --first-plan`, 2026-11-16 (UTC), Python 3.13.18 on Linux, 3 side by side, 143 s in all (one version alone: 12.3 to 13.7 s while the others ran). Every app ran in Lantern's test sandbox with no network.
+`python bench/behaviour/run_behaviour.py WORKDIR --first-plan`, 2026-11-19 (UTC), Python 3.13.18 on Linux, 3 side by side, 195 s in all (one version alone: 15.5 to 17.2 s while the others ran). Every app ran in Lantern's test sandbox with no network.
 
 | Version | What is planted | Checks | Held | Broken | Undecided | Not run | Broken cases | As written down |
 |---|---|---|---|---|---|---|---|---|
@@ -19,6 +19,7 @@
 | `unsigned-token` | A sign-in token that was altered or made up still works | 16 | 16 | 0 | 6 | 1 | none | yes |
 | `scope-unchecked` | A token meant for reading only can change things | 16 | 16 | 0 | 6 | 1 | none | yes |
 | `sign-in-remembered` | A removed person's sign-in goes on working on the copy of the app that let them in before | 16 | 16 | 0 | 6 | 1 | none | yes |
+| `note-after-removal` | A person removed while their note is on its way still gets the note added | 16 | 16 | 0 | 6 | 1 | none | yes |
 | `role-in-profile` | A member can make themself admin through the profile form | 16 | 16 | 0 | 6 | 1 | none | yes |
 | `negative-transfer` | A negative amount moves credits the wrong way | 16 | 16 | 0 | 6 | 1 | none | yes |
 | `no-size-limit` | A request of several megabytes is accepted and stored | 16 | 16 | 0 | 6 | 1 | none | yes |
@@ -38,4 +39,4 @@
 | `retry-repeats` | The same transfer sent again moves the credits again | 16 | 16 | 0 | 6 | 1 | none | yes |
 | `shared-connection` | The half of a failed transfer is saved by the next person's request | 16 | 16 | 0 | 6 | 1 | none | yes |
 
-33 versions, 33 as written down, 0 differing. The plan Lantern wrote by itself catches 8 of the 32 planted problems run here (8 are written down as its to catch: a visitor let in, somebody else's row, wrong passwords not counted); the plan a person wrote (`plan.py`, `results.md`) catches all of them. An undecided case is one whose check the plan named to look at first: Lantern made up a value the app does not take.
+34 versions, 34 as written down, 0 differing. The plan Lantern wrote by itself catches 8 of the 33 planted problems run here (8 are written down as its to catch: a visitor let in, somebody else's row, wrong passwords not counted); the plan a person wrote (`plan.py`, `results.md`) catches all of them. An undecided case is one whose check the plan named to look at first: Lantern made up a value the app does not take.

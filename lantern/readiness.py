@@ -336,9 +336,13 @@ def check_secrets(repo: Repo, sec: dict | None, env: dict[str, str]) -> list[dic
     secret_rules = {"LW-PUBLIC-SECRET", "LW-SERVICE-ROLE"}
     secrets = [f for f in (sec or {}).get("findings", []) if not f.get("in_tests") and
                f.get("status") != "accepted" and (f["category"] == "secret" or f["rule"] in secret_rules)]
+    shaped = [f for f in secrets if f.get("secret_shape")]     # a digest or a label by its shape: ranked low, named
+    secrets = [f for f in secrets if not f.get("secret_shape")]
     out.append(_check("secrets-none", "No secrets in code", 5, "pass" if not secrets else "fail",
                       f"{len(secrets)} possible secret{'s' if len(secrets) != 1 else ''}"
-                      + (": " + ", ".join(f"{f['file']}:{f['line']}" for f in secrets[:3]) if secrets else ""),
+                      + (": " + ", ".join(f"{f['file']}:{f['line']}" for f in secrets[:3]) if secrets else "")
+                      + (f"; {len(shaped)} more flagged text{'s' if len(shaped) != 1 else ''} read as a digest or a "
+                         "label, ranked low" if shaped else ""),
                       "" if not secrets else "Move each value to an environment variable and rotate it; "
                       "anything committed should be treated as leaked.", how="secret scanner"))
     out.append(_check("secrets-env", "Config read from the environment", 3,

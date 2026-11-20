@@ -37,7 +37,7 @@ from .python_frontend import project_text
 PLAN_NAME = "lantern-behaviour.json"
 RESULT_NAME = "behaviour.json"
 KINDS = ("refuse", "hide", "tokens", "input", "keeps", "contain", "redirect", "address", "limit", "ended", "once",
-         "retry", "faults")
+         "retry", "faults", "ended-midway")
 TOKEN_VARIANTS = ("none", "empty", "garbage", "truncated", "altered", "unsigned", "other-key", "expired")
 CODES = {
     "let-in": "was let in",
@@ -50,7 +50,7 @@ CODES = {
     "outside-file": "the app wrote, or tried to write, outside the folders it keeps its files in",
     "unlimited": "the tries were not limited",
     "forgotten": "the limit was forgotten",
-    "lived-on": "what was ended was accepted again",
+    "lived-on": "what was ended was accepted again, or a change it had let through was still made",
     "raced": "two requests at the same moment did what one after the other does not",
     "repeated": "the same request sent again was done again",
     "partial": "a request that failed half-way left half of its work behind",
@@ -133,7 +133,7 @@ def check(plan: dict) -> dict:
             raise PlanError(f"{where}: its id is used twice, or holds a slash")
         seen.add(c["id"])
         _request_ok(c.get("request"), where)
-        if c["kind"] == "ended":
+        if c["kind"] in ("ended", "ended-midway"):
             _ended_ok(c, where, people)
         for key in ("good", "then", "after", "end"):
             if key in c:
@@ -155,7 +155,7 @@ def _ended_ok(c: dict, where: str, people: dict) -> None:
     app refuses."""
     end = c.get("end")
     if not isinstance(end, dict):
-        raise PlanError(f'{where}: a check of the kind "ended" names under "end" the request that ends something '
+        raise PlanError(f'{where}: a check of the kind "{c["kind"]}" names under "end" the request that ends something '
                         "(a sign-out, an account switched off, an invitation taken back)")
     if "request" in end and end.get("as", "nobody") != "nobody" and end["as"] not in people:
         raise PlanError(f"{where}: the plan names nobody called {str(end['as'])[:40]}")
@@ -256,6 +256,15 @@ def scene(plan: dict) -> tuple[dict, list]:
                 add(c, f"one after the other ({n})", [one, two], role="control", fresh=True)
             add(c, "at the same moment", [dict(one, fault={"kind": "pause", "on": "write", "at": 1}), two,
                                           {"resume": {"worker": 0}}], fresh=True)
+        elif kind == "ended-midway":
+            # The change is held at its first write to the database (its sign-in was checked by then), the request
+            # that ends the sign-in is made on another copy of the app, and the change goes on. Beside it the change
+            # alone, which must work and write something, or nothing is proven.
+            end = c["end"]
+            change, ends = _step(req, who), _step(end.get("request", end), end.get("as", who))
+            add(c, "the change alone", [change], role="control", fresh=True)
+            add(c, "ended half-way", [dict(change, fault={"kind": "pause", "on": "write", "at": 1}), dict(ends, worker=1),
+                                      {"resume": {"worker": 0}}], fresh=True)
         elif kind == "retry":
             add(c, "once", [_step(req, who)], role="control", fresh=True)
             add(c, "sent again", [_step(req, who), _step(req, who)], fresh=True)
@@ -520,6 +529,24 @@ def judge(plan: dict, cases: list, observed: dict) -> list:
                 if alone is None or alone >= 400:     # never done once: that it was not done twice proves nothing
                     why = (f"the request did not work when it was sent alone (status {alone}), so two at the same "
                            "moment prove nothing")
+        elif kind == "ended-midway":
+            if not steps[0].get("paused"):
+                outcomes.append(_outcome(case, check, "not-run",
+                                         why="the request writes nothing, so it cannot be held half-way"))
+                continue
+            alone = next((cs for cs in ctl_steps if cs), [])
+            done = _status(alone[-1]) if alone else None
+            ended = _status(steps[1]) if len(steps) > 2 else None
+            if done is None or done >= 400 or not _loud(alone[-1].get("changes"), quiet):
+                why = (f"the change did not work when it was made alone (status {done}), so that it was not made "
+                       "after the end proves nothing")
+            elif ended is None or ended >= 400:
+                why = f"the request that ends it did not work (status {ended}), so nothing was ended"
+            elif len(steps) > 2 and "state" in steps[1] and "state" in last \
+                    and steps[1]["state"]["loud"] != last["state"]["loud"]:
+                codes.append("lived-on")            # written after the sign-in it was let through for was ended
+            elif status is None or status >= 500:
+                codes.append("crashed")
         elif kind == "retry":
             once = next((cs for cs in ctl_steps if cs), [])
             first = _status(steps[0])

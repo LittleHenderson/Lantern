@@ -190,7 +190,7 @@ def test_a_shared_run_has_a_badge_for_a_readme_and_a_page_that_says_how_to_check
     run = cloud.get(f"/v1/runs/{rid}", headers=bearer(tok)).json()
     ev = json.loads((Path(s.results_dir) / rid / "evidence.json").read_text(encoding="utf-8"))
     assert f"<code>{run['commit']}</code>" in page.text and ev["release"]["bound_to"]["code"]["sha256"][:12] in page.text
-    assert ev["release"]["decision"] in page.text and "that apply finished and covered everything" in page.text
+    assert ev["release"]["decision"] in page.text and "that apply finished and left out nothing they read" in page.text
     line = _line(page.text)
     assert line.startswith(f"git clone {LINK} lantern-check && cd lantern-check && git checkout {run['commit']} && ")
     assert line.endswith(f" && lantern verify . --digest {ev['digest']} --offline")      # the run was made offline

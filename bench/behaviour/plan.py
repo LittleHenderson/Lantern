@@ -126,6 +126,10 @@ def plan() -> dict:
             {"id": "removed-user", "kind": "ended", "about": "A removed person's sign-in gets nothing more",
              "request": _req("POST", "/tokens", json={"scope": "read"}), "who": "amir",
              "end": {"request": _req("DELETE", "/admin/users/{amir_id}"), "as": "tara"}},
+            {"id": "removed-midway", "kind": "ended-midway",
+             "about": "A note on its way is not added for a person removed in the meantime",
+             "request": _req("POST", "/notes", json={"text": "amir's note on its way"}), "who": "amir",
+             "end": {"request": _req("DELETE", "/admin/users/{amir_id}"), "as": "tara"}},
             # ---------------------------------------------------------------- what is sent
             {"id": "profile-role", "kind": "keeps", "about": "The profile form cannot change a person's role",
              "request": _req("PATCH", "/me", json={"email": "alice@kiln.test", "role": "admin"}), "who": "alice",
@@ -217,6 +221,8 @@ EXPECTED: dict[str, dict[str, list[str]]] = {
                         "note-delete/alice_read": LET_IN},
     # the copy that let him in answers from what it remembers; a copy started afresh has to look him up
     "sign-in-remembered": _all("removed-user", ("straight after", "on another worker"), ["lived-on"]),
+    # the person is read when the request comes in and not again in the write
+    "note-after-removal": {"removed-midway/ended half-way": ["lived-on"]},
     "role-in-profile": {"profile-role/the request": ["took-effect"]},
     "negative-transfer": {"negative-transfer/the bad request": ["accepted"]},
     "no-size-limit": {"huge-note/the bad request": ["accepted"], "huge-note-undeclared/the bad request": ["accepted"],
