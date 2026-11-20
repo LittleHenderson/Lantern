@@ -213,7 +213,7 @@ jobs:
           [ "$status" -eq 0 ] || exit "$status"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/own-network.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
       - name: The website's tests of each check under a user of its own and of its switcher, a second time as root (the pass above skips them)
-        timeout-minutes: 25
+        timeout-minutes: 20
         # The cloud service runs each check's steps as a user of that check's own (cloud/lantern_cloud/apart.py,
         # 2026-11-18), which only root can do, so the tests of it need root and the pass above names them as skipped;
         # so do the tests of the switcher, the one part of the website's image that stays root, which starts the
