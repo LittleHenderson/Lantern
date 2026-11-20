@@ -2541,6 +2541,17 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += balance.taken_apart(g, {(f["file"], f["line"]) for f in findings if f["rule"] == countlater.RULE})
     from . import sharedconn        # one database connection for every thread, used with no lock held
     findings += sharedconn.shared_connections(g)
+    from . import custody           # a secret taken from a file whose place comes from outside, unchecked
+    findings += custody.unchecked(g)
+    from . import failopen          # a safety limit that gives way when its value is wrong
+    findings += failopen.fails_open(g)
+    from . import effectfirst       # money or an order sent out before anything of it is written down
+    findings += effectfirst.effect_first(g)
+    from . import selfproof         # marked done on the caller's word; proof the checked side writes itself
+    findings += selfproof.caller_says_done(g)
+    findings += selfproof.self_written(g)
+    from . import staleauth         # a sign-in checked under a lock that is let go before the change
+    findings += staleauth.ended_midway(g)
     from . import publicvalues      # a setting for the browser whose value is a secret, where its name says nothing
     findings += publicvalues.public_values(
         repo, said={(f["file"], f["snippet"]) for f in findings if f["rule"] == "LW-PUBLIC-SECRET"})

@@ -60,7 +60,7 @@ NO_AUDIT = (
 )
 TITLES = {
     "findings": "No critical or high finding is open",
-    "scanners": "Every scanner that applies finished and covered everything",
+    "scanners": "Every scanner that applies finished and left out nothing it reads",
     "dependencies": "Every library was checked against the advisory databases",
     "tests": "The project's tests were run and passed",
     "behaviour": "The behaviour checks held when the app was started",

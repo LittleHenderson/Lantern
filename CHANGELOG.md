@@ -20,6 +20,47 @@ file. New entries go under `## Unreleased`, on top.
   none and says so. The health page says which (`steps`: `apart`, `open`, `unchecked`, `shared`) and the uptime
   check fails on `open` and `shared`. Until now every check's steps ran as one user (`docs/deploy.md`, "Each
   check as a user of its own"; threat model, open risk 0).
+- Four more checks from the side-by-side with another review tool (`bench/four_checks_results.md`), each written from
+  examples of Lantern's own beside safe twins, each a heuristic (`tool_confidence: LOW`, ranked medium) that says
+  "check":
+  - `LW-CALLER-SAYS-DONE` (`lantern/selfproof.py`): something is marked paid, settled or confirmed on a value the
+    caller sent whose name says it is the proof (a provider's transaction id, a receipt number), and nothing asks the
+    provider whether it is real.
+  - `LW-SELF-WRITTEN-PROOF` (`lantern/selfproof.py`): a function named for checking asks for at least two kinds of
+    record that a side the program trusts less (a runner, a worker, a client) may write itself, one of them a record
+    that something happened.
+  - `LW-SIGN-IN-ENDED-MIDWAY` (`lantern/staleauth.py`): a sign-in is checked under a lock, the lock is let go, and a
+    change follows; meanwhile another method rotates the same field under that lock, so a sign-in ended half-way
+    still gets its change made.
+  - `lantern behave` has a kind `ended-midway`: the change request is held at its first database write while the
+    sign-in is ended on a second copy of the app, and the change must not be made. `--init` writes it where the app
+    has a sign-out; the benchmark app has a planted version of it (`note-after-removal`), which the plan catches and
+    the safe app holds.
+- What a side-by-side with another review tool showed, on a project both were run on (`bench/report_comparison_results.md`).
+  Measured on 31 folders before and after: 0 findings gone, 4 new (all on that project, all real), 15 ranked
+  otherwise (all on that project: critical to low, each with its reason). That project read Blocked, 59, before.
+  - A text gitleaks flags that is a file's fingerprint or a fixed label is ranked low, with the reason on it, and
+    stays listed (`lantern/secretshape.py`): a whole hexadecimal text of a digest's length under a name that says
+    digest or under a file's name, or capitals and underscores under a name that says label. A name with a
+    password's word is never passed. The 10 critical findings of that project were all of these.
+  - A model call sent as a plain web request (`urllib.request`, `requests`, `httpx`, `fetch`, ...) in a file whose
+    code names a model provider's API address is listed as a model call (`how: "http"`; `aiapp.http_model_calls`),
+    and files that name such an address and make no request are counted. The record said "no model calls" before.
+    The paid-call rules do not read these calls yet.
+  - Three new heuristics, each `tool_confidence: LOW`, ranked medium, written from examples of Lantern's own beside
+    safe twins (`tests/test_three_orders.py`): `LW-SECRET-FILE-UNCHECKED` (a secret read from a file whose place
+    comes from outside, with no look at who owns the file or whether it is a link; `lantern/custody.py`),
+    `LW-LIMIT-FAILS-OPEN` (a limit read from the environment that turns a wrong value into the default, or that is
+    read as a `Decimal` or `float` with no check that it is finite; `lantern/failopen.py`), `LW-EFFECT-BEFORE-RECORD`
+    (money moved or an order placed before anything of it is written down, with no idempotency key;
+    `lantern/effectfirst.py`).
+  - The Evidence page folds low findings of one rule and one title into one row that opens to show each, lists the
+    open findings in test code in a fold of their own (at most 500; they were only counted), says that
+    most points of the score come from reading files and patterns and not from running anything, and labels its
+    Understanding section. The scanners criterion reads "left out nothing it reads".
+  - Not done here: a report that says who made it in a way someone else can check, and a check made through the
+    commit itself.
+
 - The website check in a browser waits for the team page to be drawn again after Done on the invite sheet, before
   its next click there (`tools/cloud_site_smoke.js`, `tests/test_smoke_redraw.py`). A click that began on the page
   before and ended on the page after it was lost, and the check in Firefox once waited 30 seconds for the sheet that
