@@ -19,7 +19,10 @@ file. New entries go under `## Unreleased`, on top.
   with `LANTERN_CLOUD_STEPS_APART=required` (the image's setting) a service that cannot keep checks apart starts
   none and says so. The health page says which (`steps`: `apart`, `open`, `unchecked`, `shared`) and the uptime
   check fails on `open` and `shared`. Until now every check's steps ran as one user (`docs/deploy.md`, "Each
-  check as a user of its own"; threat model, open risk 0).
+  check as a user of its own"; threat model, open risk 0). Lantern's check of itself (`tools/self_readiness.py`)
+  lets one check fail for that image, its container user (`pkg-user`), says so on every run, and only while the
+  image keeps each check's steps apart and every other image of the repository names a user (`ALLOWED_FAIL`; the
+  owner's answer of 2026-11-20, which also asks that root be narrowed next to the small part that starts the steps).
 - Four more checks from the side-by-side with another review tool (`bench/four_checks_results.md`), each written from
   examples of Lantern's own beside safe twins, each a heuristic (`tool_confidence: LOW`, ranked medium) that says
   "check":

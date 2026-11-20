@@ -52,7 +52,10 @@ python tools/netless.py --watch /tmp/net.json [--deadline MINUTES] -- python -m 
 python tools/netguard/lantern_netguard.py --allow pypi.org,registry.npmjs.org,api.osv.dev -- lantern analyze . --out /tmp/self   # any command, isolated
 ruff check lantern gateway cloud tests tools bench examples   # the linter CI runs (config in pyproject.toml)
 python tools/self_readiness.py /tmp/self/readiness.json      # Lantern must grade A on its own readiness checks, and its release decision
-                                                      # may be Incomplete only for the tests this step does not run (CI)
+                                                      # may be Incomplete only for the tests this step does not run (CI); the one
+                                                      # check that may fail is `pkg-user`, the website's image starting as root
+                                                      # (`ALLOWED_FAIL`: only while that image keeps each check's steps apart and
+                                                      # every other image names a user; the owner's answer of 2026-11-20)
 lantern analyze . --require not-blocked               # for CI: result 1 unless this run's release decision is not Blocked (or `passed`)
 python tools/licences.py [--lock-matches]             # licences of Lantern's own libraries; requirements-lock.txt current
 lantern serve tests/fixtures/shop                     # the app; prints a one-time link

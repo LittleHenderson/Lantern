@@ -625,6 +625,105 @@ def test_lanterns_own_check_reads_the_decision_and_names_every_skip(tmp_path, ca
         assert "no release decision" in out, out
 
 
+# --- the one check of Lantern's own that may fail: its website's image starts as root ----------------------------
+
+def _self_readiness():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("self_readiness", Path(__file__).parents[1] / "tools" / "self_readiness.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+WEBSITE_IMAGE = ('FROM golang:1.26 AS tools\nRUN go install example.com/tool@v1\n'
+                 'FROM python:3.12-slim\nRUN pip install .\n# the service starts as root (a comment)\n'
+                 'ENV LANTERN_CLOUD_DB=/home/app/data/db \\\n    LANTERN_CLOUD_STEPS_APART=required \\\n'
+                 '    PYTHONUNBUFFERED=1\nCMD ["uvicorn", "lantern_cloud.app:create_app"]\n')
+GATEWAY_IMAGE = 'FROM python:3.12-slim\nRUN useradd app\nUSER app\nCMD ["uvicorn", "gateway.app:create_app"]\n'
+PLAIN_IMAGE = 'FROM python:3.12-slim\nCMD ["python", "-m", "http.server"]\n'
+
+ROOT_IMAGE = {
+    "as the repository has it": ({"cloud/Dockerfile": WEBSITE_IMAGE, "gateway/Dockerfile": GATEWAY_IMAGE}, 0),
+    "the setting in the older form": ({"cloud/Dockerfile": PLAIN_IMAGE.replace(
+        "CMD", "ENV LANTERN_CLOUD_STEPS_APART required\nCMD"), "gateway/Dockerfile": GATEWAY_IMAGE}, 0),
+    "an image in the tests' own folders": ({"cloud/Dockerfile": WEBSITE_IMAGE, "gateway/Dockerfile": GATEWAY_IMAGE,
+                                            "tests/fixtures/app/Dockerfile": PLAIN_IMAGE}, 0),
+    # ... and where the reason no longer holds, the failure stops CI as any other does
+    "the image no longer keeps each check's steps apart": ({"cloud/Dockerfile": WEBSITE_IMAGE.replace(
+        "STEPS_APART=required", "STEPS_APART=off"), "gateway/Dockerfile": GATEWAY_IMAGE}, 1),
+    "the setting only in a comment": ({"cloud/Dockerfile": PLAIN_IMAGE.replace(
+        "CMD", "# ENV LANTERN_CLOUD_STEPS_APART=required\nCMD"), "gateway/Dockerfile": GATEWAY_IMAGE}, 1),
+    "the setting in a stage before the image's own": ({"cloud/Dockerfile": "FROM golang:1.26 AS tools\n"
+        "ENV LANTERN_CLOUD_STEPS_APART=required\n" + PLAIN_IMAGE, "gateway/Dockerfile": GATEWAY_IMAGE}, 1),
+    "the setting taken back further down": ({"cloud/Dockerfile": WEBSITE_IMAGE.replace(
+        "CMD", "ENV LANTERN_CLOUD_STEPS_APART=\"\"\nCMD"), "gateway/Dockerfile": GATEWAY_IMAGE}, 1),
+    "another image that runs as root": ({"cloud/Dockerfile": WEBSITE_IMAGE,
+                                         "gateway/Dockerfile": GATEWAY_IMAGE.replace("USER app", "USER 0:0")}, 1),
+    "another image with no user of its own": ({"cloud/Dockerfile": WEBSITE_IMAGE, "gateway/Dockerfile": GATEWAY_IMAGE,
+                                               "Dockerfile": PLAIN_IMAGE}, 1),
+    "another image whose user is only in an earlier stage": ({"cloud/Dockerfile": WEBSITE_IMAGE,
+        "gateway/Dockerfile": "FROM python:3.12-slim AS build\nUSER app\n" + PLAIN_IMAGE}, 1),
+    "no website image at all": ({"gateway/Dockerfile": GATEWAY_IMAGE}, 1),
+}
+
+
+def _image_run(tmp_path, files, checks):
+    repo = tmp_path / "repo"
+    for name, text in files.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(text, encoding="utf-8")
+    rd = _own("Incomplete", missing=("tests",), skips=(("tests-pass", True),))
+    rd["categories"].append({"key": "packaging", "checks": checks})
+    p = tmp_path / "readiness.json"
+    p.write_text(json.dumps(rd), encoding="utf-8")
+    return _self_readiness().main(["self_readiness.py", str(p)], root=repo)
+
+
+ROOT_FAILS = [{"id": "pkg-user", "status": "fail", "evidence": "no USER line, so it runs as root"}]
+
+
+@pytest.mark.parametrize("case", sorted(ROOT_IMAGE))
+def test_the_website_image_may_start_as_root_only_while_it_keeps_each_checks_steps_apart(tmp_path, capsys, case):
+    """The owner's answer of 2026-11-20: the website's image starts as root, so that it can run each check's steps
+    as a user of that check's own (only root can switch to another user), and the steps never run as root. Lantern's
+    readiness check of a container (`pkg-user`) fails for such an image, and the self-check fails on any failed check:
+    this one may fail, said every time with its reason, and only while the repository still shows that reason (the
+    image it builds requires the steps apart, and every other image of the project names a user that is not root)."""
+    files, want = ROOT_IMAGE[case]
+    code = _image_run(tmp_path, files, ROOT_FAILS)
+    out = capsys.readouterr().out
+    assert code == want, out
+    assert "pkg-user" in out, out
+    if want == 0:
+        assert "allowed fail" in out and "2026-11-20" in out and out.splitlines()[-1] == "PASS", out
+    else:
+        assert "allowed only while" in out and out.splitlines()[-1].startswith("FAIL"), out
+
+
+def test_beside_it_any_other_failed_check_stops_ci_as_before(tmp_path, capsys):
+    files = ROOT_IMAGE["as the repository has it"][0]
+    code = _image_run(tmp_path, files, ROOT_FAILS + [{"id": "pkg-slim", "status": "fail", "evidence": "FROM python:3.12"}])
+    out = capsys.readouterr().out
+    assert code == 1 and "pkg-slim" in out and "allowed fail" in out, out
+
+
+def test_an_allowance_no_longer_used_is_said(tmp_path, capsys):
+    """When the website's image names a user again (or the check reads another image), the list says it can go."""
+    files = ROOT_IMAGE["as the repository has it"][0]
+    code = _image_run(tmp_path, files, [{"id": "pkg-user", "status": "pass", "evidence": "USER app"}])
+    out = capsys.readouterr().out
+    assert code == 0 and "pkg-user passed here" in out, out
+
+
+def test_lanterns_own_repository_shows_why_its_website_image_starts_as_root():
+    """The repository as it is: what CI's step will find. When the image stops keeping the steps apart, or another
+    image loses its user, this fails here first and names the reason."""
+    mod = _self_readiness()
+    assert set(mod.ALLOWED_FAIL) == {"pkg-user"}
+    for cid, (_why, holds) in mod.ALLOWED_FAIL.items():
+        assert holds(Path(__file__).parents[1]) is None, (cid, holds(Path(__file__).parents[1]))
+
+
 # --- the held-out benchmark reads the decision (bench/heldout/run_heldout.py) ------------------------------------
 
 def _heldout():
