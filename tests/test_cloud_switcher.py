@@ -708,21 +708,64 @@ def _start_cmd(python: str, pkgs: Path) -> list[str]:
     return [python, "-I", "-c", START.format(pkgs=str(pkgs), cloud=str(pkgs / "cloud"))]
 
 
+def _root_may_run(python: str, pkgs: Path) -> str | None:
+    """None when the switcher's own look at what root runs passes for `python`, else what it said, with the owner
+    and the mode of the place it names."""
+    code = (f"import sys; sys.path[:0] = [{str(pkgs)!r}, {str(pkgs / 'cloud')!r}]\n"
+            f"from lantern_cloud.switcher import unchangeable\nprint(unchangeable({SERVICE}, {SERVICE}))")
+    r = subprocess.run([python, "-I", "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=120)
+    if r.returncode == 0 and r.stdout.strip() == "None":
+        return None
+    said = (r.stdout + r.stderr).strip()
+    try:
+        st = os.lstat(r.stdout.strip())
+        said += f" (owner {st.st_uid}, group {st.st_gid}, {stat.filemode(st.st_mode)})"
+    except (OSError, ValueError):
+        pass
+    return said[-300:]
+
+
+def _made_python(base: str, where: Path) -> tuple[str | None, str]:
+    """A Python root makes from `base` that leaves the computer's installed libraries off its path (a virtual
+    environment with none of them), so only the base's own library and Lantern's packages are what root runs, as in
+    the image. Every folder of it may be entered by the check's users, who start it too. (path or None, what failed)"""
+    r = subprocess.run([base, "-I", "-m", "venv", "--without-pip", str(where)], capture_output=True, text=True,
+                       encoding="utf-8", timeout=180)
+    made = where / "bin" / "python"
+    if r.returncode != 0 or not os.path.lexists(made):
+        return None, (r.stdout + r.stderr).strip()[-300:] or f"{made} was not made"
+    for p in [where, *where.rglob("*")]:
+        if not p.is_symlink():
+            os.chmod(p, 0o755 if p.is_dir() or os.stat(p).st_mode & 0o111 else 0o644)
+    return str(made), ""
+
+
 @pytest.fixture(scope="module")
 def python(pkgs):
-    """A Python the switcher may run as root: one the service's user could not change. This computer's own if the
-    one running the tests is not (a runner's tool folders may be open to everyone); none is a failure, never a skip."""
-    said = {}
-    for cand in dict.fromkeys([sys.executable, "/usr/bin/python3"]):
-        if not os.path.exists(cand):
-            continue
-        code = (f"import sys; sys.path[:0] = [{str(pkgs)!r}, {str(pkgs / 'cloud')!r}]\n"
-                f"from lantern_cloud.switcher import unchangeable\nprint(unchangeable({SERVICE}, {SERVICE}))")
-        r = subprocess.run([cand, "-I", "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=120)
-        said[cand] = (r.stdout + r.stderr).strip()[-300:]
-        if r.returncode == 0 and r.stdout.strip() == "None":
-            return cand
-    pytest.fail(f"no Python here that the service's user could not change: {said}")
+    """A Python the switcher may run as root: one the service's user could not change, as the image's is. The one
+    running the tests or this computer's own where one passes the switcher's look; else one root makes from either
+    that leaves the computer's installed libraries off its path (`_made_python`). On GitHub's machines neither passed
+    as it is (2026-11-20): the switcher named a folder of the runner's own Python and a folder the system's libraries
+    link to as ones the service's user could change. None is a failure, never a skip."""
+    said: dict[str, str | None] = {}
+    bases = [p for p in dict.fromkeys([sys.executable, "/usr/bin/python3"]) if os.path.exists(p)]
+    for cand in bases:
+        said[cand] = _root_may_run(cand, pkgs)
+        if said[cand] is None:
+            yield cand
+            return
+    made = Path(tempfile.mkdtemp(prefix="lantern-switcher-python-", dir="/tmp"))
+    os.chmod(made, 0o755)
+    try:
+        for n, base in enumerate(bases):
+            cand, failed = _made_python(base, made / str(n))
+            said[f"made from {base}"] = failed or _root_may_run(cand, pkgs)
+            if said[f"made from {base}"] is None:
+                yield cand
+                return
+        pytest.fail(f"no Python here that the service's user could not change: {said}")
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
 
 
 @pytest.fixture
@@ -1077,6 +1120,35 @@ def test_the_switcher_starts_nothing_while_the_service_could_change_its_code(pyt
     assert rc == 2 and "could change" in out and str(mod) in out and "SERVICE-RAN" not in out, out
     rc, out = _refused_at_start(python, pkgs, data)
     assert rc == 0 and "SERVICE-RAN" in out, out
+
+
+@AS_ROOT
+def test_a_python_whose_settings_the_service_could_write_is_not_run_as_root(python, pkgs):
+    """A virtual environment's settings file names the library its Python loads before anything else: where the
+    service's user may change it, or make one beside the program (in a folder anyone may add to, sticky or not), the
+    switcher's look names the place. The twins: the same Python as root made it, and again once put back."""
+    made = Path(tempfile.mkdtemp(prefix="lantern-switcher-venv-", dir="/tmp"))
+    os.chmod(made, 0o755)
+    try:
+        env = made / "env"
+        cand, failed = _made_python(python, env)
+        assert cand and not failed, failed
+        assert _root_may_run(cand, pkgs) is None
+        os.chown(env / "pyvenv.cfg", SERVICE, SERVICE)
+        try:
+            said = _root_may_run(cand, pkgs)
+        finally:
+            os.chown(env / "pyvenv.cfg", 0, 0)
+        assert said and said.startswith(str(env / "pyvenv.cfg")), said
+        os.chmod(env / "bin", 0o1777)     # the program's own link stays (sticky), but a settings file may be added
+        try:
+            said = _root_may_run(cand, pkgs)
+        finally:
+            os.chmod(env / "bin", 0o755)
+        assert said and said.startswith(str(env / "bin")) and "pyvenv" not in said, said
+        assert _root_may_run(cand, pkgs) is None
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------- as root: a whole check under the switcher

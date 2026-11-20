@@ -492,12 +492,22 @@ def _code_places() -> list[Path]:
     return kept
 
 
+def _venv_settings() -> list[str]:
+    """Where Python looks for a virtual environment's settings before anything else (`pyvenv.cfg` beside the program
+    it was started as, or one folder up): that file names the library Python then loads, so whoever may change one,
+    or make one where there is none, chooses what root runs at the switcher's next start."""
+    program = Path(os.path.abspath(sys.executable))
+    return [str(program.parent / "pyvenv.cfg"), str(program.parent.parent / "pyvenv.cfg")]
+
+
 def unchangeable(app: int, gid: int, places: list[Path] | None = None) -> str | None:
     """None when the service's user can change nothing the switcher runs as root: every folder Python looks for code
     in (`_code_places`; `places` in their stead, for a test), each folder and file in them, every folder above each of
     them, where each link in them leads (and, for a folder, all that is in it), the file of every module the switcher
-    loaded so far, and the program it runs as (the name it was started by and where that leads). Else the first place
-    that user could change: the switcher then does not start, as root would run what the service may write."""
+    loaded so far, the program it runs as (the name it was started by and where that leads) and the two places of a
+    virtual environment's settings file (`_venv_settings`; where there is none, the folder it would be in). Else the
+    first place that user could change: the switcher then does not start, as root would run what the service may
+    write."""
     todo, walked = (_code_places() if places is None else [Path(os.path.abspath(x)) for x in places]), set()
     while todo:
         top = todo.pop()
@@ -515,6 +525,10 @@ def unchangeable(app: int, gid: int, places: list[Path] | None = None) -> str | 
             bad = _above(Path(os.path.abspath(f)), app, gid)
             if bad:
                 return bad
+    for f in _venv_settings():      # there or not: whoever may make one there chooses the library as well
+        bad = _above(_nearest(Path(f)), app, gid)
+        if bad:
+            return bad
     return None
 
 

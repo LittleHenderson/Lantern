@@ -297,8 +297,10 @@ the service as root, as nobody or as a check's user, with a service folder that 
 somebody else's, or with a place of the service (`LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK`,
 `LANTERN_CLOUD_UPLOADS`, `LANTERN_HOME`) outside that folder; and it starts nothing as root while the service's user
 could change any code Python would load for it (every folder Python loads code from, each file and folder in them and
-every folder above them; a link is judged by where it leads). When the service ends, the switcher ends every step
-with everything it started and ends itself with the service's result, so Fly restarts both.
+every folder above them; a link is judged by where it leads), or the settings file that names that code where Python
+runs from a virtual environment (`pyvenv.cfg` beside the program or one folder up, or the folder one could be made
+in). When the service ends, the switcher ends every step with everything it started and ends itself with the service's
+result, so Fly restarts both.
 
 The health page says which user the service runs as, under `"service_user"`: `own` (the switcher started it as its
 ordinary user) or `root` (an image whose first program is not the switcher). The uptime check fails on `root`.
