@@ -390,12 +390,7 @@ jobs:
           echo "LANTERN_TYPESCRIPT=$at/typescript" >> "$GITHUB_ENV"
           echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
           echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
-      - name: The sealed box's tests for Windows first, so what the box lets a project's tests do here is known minutes in
-        # The whole suite below runs them again, and it runs whatever this step gave.
-        run: python -m pytest -q -rs tests/test_sandbox_windows.py
-        timeout-minutes: 10
       - run: python -m pytest -q -rs
-        if: ${{ !cancelled() }}
         timeout-minutes: 100
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
@@ -410,6 +405,25 @@ jobs:
           subprocess.run([*isolated, "lantern", "analyze", "tests/fixtures/nextapp", "--out", out], check=True)
           rules = {f["rule"] for f in json.load(open(os.path.join(out, "security.json"), encoding="utf-8"))["findings"]}
           assert "LW-AUTH-MISSING" in rules, rules
+
+  windows-box:
+    # The sealed box's tests for Windows alone, so that what the box lets a project's tests do here is known minutes in:
+    # GitHub hands out a job's log only once the job has ended, and the Windows job above takes about 50 minutes. That
+    # job runs these tests again with the whole suite.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[scan,dev]"
+      - run: python -m pytest -q -rs tests/test_sandbox_windows.py
+        timeout-minutes: 10
 
   macos:
     # macOS runs no other test of Lantern's. These are the ones whose answer the system itself gives: a name handed

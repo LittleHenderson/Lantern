@@ -422,8 +422,9 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     tests: until then the real checkers were started only on the computer the pass was written on. Since 2026-11-18
     a fourth pass runs the website's tests of each check under a user of its own a second time, as root (only root
     can run a step as another user, so the first pass names them as skipped), through sudo like the second, and no
-    test may be skipped there either. Since 2026-11-20 the Windows job runs the sealed box's tests for Windows
-    first, so that what the box does there is known minutes in, and the whole suite after them whatever they gave."""
+    test may be skipped there either. Since 2026-11-20 a Windows job of its own runs the sealed box's tests for
+    Windows alone, so that what the box does there is known minutes in (GitHub hands out a job's log only once the
+    job has ended), and the Windows job runs them again with the whole suite."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
