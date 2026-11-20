@@ -635,20 +635,51 @@ def _self_readiness():
     return mod
 
 
+SWITCHER_CMD = ('CMD ["python", "-I", "-m", "lantern_cloud.switcher", "--", \\\n'
+                '     "uvicorn", "lantern_cloud.app:create_app", "--factory"]\n')
 WEBSITE_IMAGE = ('FROM golang:1.26 AS tools\nRUN go install example.com/tool@v1\n'
-                 'FROM python:3.12-slim\nRUN pip install .\n# the service starts as root (a comment)\n'
-                 'ENV LANTERN_CLOUD_DB=/home/app/data/db \\\n    LANTERN_CLOUD_STEPS_APART=required \\\n'
-                 '    PYTHONUNBUFFERED=1\nCMD ["uvicorn", "lantern_cloud.app:create_app"]\n')
+                 'FROM python:3.12-slim\nRUN pip install .\n# the image starts as root for its switcher (a comment)\n'
+                 'RUN useradd --uid 1000 app\n'
+                 'ENV LANTERN_CLOUD_DB=/home/app/data/db \\\n    LANTERN_CLOUD_DATA=/home/app/data \\\n'
+                 '    LANTERN_CLOUD_SERVICE_USER=app \\\n    LANTERN_CLOUD_STEPS_APART=required \\\n'
+                 '    PYTHONUNBUFFERED=1\n' + SWITCHER_CMD)
 GATEWAY_IMAGE = 'FROM python:3.12-slim\nRUN useradd app\nUSER app\nCMD ["uvicorn", "gateway.app:create_app"]\n'
 PLAIN_IMAGE = 'FROM python:3.12-slim\nCMD ["python", "-m", "http.server"]\n'
 
+
+def _website(cmd: str = SWITCHER_CMD, **env: str) -> dict:
+    """The website's image with another command, or with settings changed (None: the line taken out)."""
+    text = WEBSITE_IMAGE.replace(SWITCHER_CMD, cmd)
+    for name, value in env.items():
+        line = next(x for x in text.splitlines(keepends=True) if f"LANTERN_CLOUD_{name}=" in x)
+        text = text.replace(line, "" if value is None else line.replace(line.split("=", 1)[1].split()[0], value))
+    return {"cloud/Dockerfile": text, "gateway/Dockerfile": GATEWAY_IMAGE}
+
+
 ROOT_IMAGE = {
     "as the repository has it": ({"cloud/Dockerfile": WEBSITE_IMAGE, "gateway/Dockerfile": GATEWAY_IMAGE}, 0),
-    "the setting in the older form": ({"cloud/Dockerfile": PLAIN_IMAGE.replace(
-        "CMD", "ENV LANTERN_CLOUD_STEPS_APART required\nCMD"), "gateway/Dockerfile": GATEWAY_IMAGE}, 0),
+    "the setting in the older form": (_website(SWITCHER_CMD.replace("CMD", "ENV LANTERN_CLOUD_STEPS_APART required\nCMD"),
+                                               STEPS_APART=None), 0),
     "an image in the tests' own folders": ({"cloud/Dockerfile": WEBSITE_IMAGE, "gateway/Dockerfile": GATEWAY_IMAGE,
                                             "tests/fixtures/app/Dockerfile": PLAIN_IMAGE}, 0),
+    "Python named by its full path": (_website(SWITCHER_CMD.replace('"python"', '"/usr/local/bin/python3"')), 0),
     # ... and where the reason no longer holds, the failure stops CI as any other does
+    "the service started directly, not by its switcher": (_website('CMD ["uvicorn", "lantern_cloud.app:create_app"]\n'),
+                                                          1),
+    "the switcher only in a comment": (_website("# " + SWITCHER_CMD.replace(" \\\n    ", " ")
+                                                + 'CMD ["uvicorn", "lantern_cloud.app:create_app"]\n'), 1),
+    "the switcher started by a shell": (_website("CMD python -I -m lantern_cloud.switcher -- uvicorn x:app\n"), 1),
+    "the switcher behind an entry point": (_website('ENTRYPOINT ["/bin/sh", "-c"]\n' + SWITCHER_CMD), 1),
+    "a program of the image's own run before it": (_website(
+        'CMD ["python", "-I", "start.py", "-m", "lantern_cloud.switcher", "--", "uvicorn", "x:app"]\n'), 1),
+    "the switcher with no command for the service": (_website(
+        'CMD ["python", "-I", "-m", "lantern_cloud.switcher", "--"]\n'), 1),
+    "the service's user is root": (_website(SERVICE_USER="root"), 1),
+    "the service's user is root by number": (_website(SERVICE_USER="0"), 1),
+    "the service's user is nobody": (_website(SERVICE_USER="nobody"), 1),
+    "no user named for the service": (_website(SERVICE_USER=None), 1),
+    "no folder of the service's own": (_website(DATA=None), 1),
+    "a folder of the service's own named by a relative path": (_website(DATA="data"), 1),
     "the image no longer keeps each check's steps apart": ({"cloud/Dockerfile": WEBSITE_IMAGE.replace(
         "STEPS_APART=required", "STEPS_APART=off"), "gateway/Dockerfile": GATEWAY_IMAGE}, 1),
     "the setting only in a comment": ({"cloud/Dockerfile": PLAIN_IMAGE.replace(
@@ -664,6 +695,19 @@ ROOT_IMAGE = {
     "another image whose user is only in an earlier stage": ({"cloud/Dockerfile": WEBSITE_IMAGE,
         "gateway/Dockerfile": "FROM python:3.12-slim AS build\nUSER app\n" + PLAIN_IMAGE}, 1),
     "no website image at all": ({"gateway/Dockerfile": GATEWAY_IMAGE}, 1),
+}
+
+
+# Why each case where the switcher is not first, or the service's user or folder is not named, is refused
+NOT_FIRST, NO_USER, NO_FOLDER = "does not start its switcher first", "names no ordinary user", "names no folder"
+ROOT_IMAGE_WHY = {
+    "the service started directly, not by its switcher": NOT_FIRST, "the switcher only in a comment": NOT_FIRST,
+    "the switcher started by a shell": NOT_FIRST, "the switcher behind an entry point": NOT_FIRST,
+    "a program of the image's own run before it": NOT_FIRST, "the switcher with no command for the service": NOT_FIRST,
+    "the service's user is root": NO_USER, "the service's user is root by number": NO_USER,
+    "the service's user is nobody": NO_USER, "no user named for the service": NO_USER,
+    "no folder of the service's own": NO_FOLDER, "a folder of the service's own named by a relative path": NO_FOLDER,
+    "the image no longer keeps each check's steps apart": "LANTERN_CLOUD_STEPS_APART=required",
 }
 
 
@@ -685,10 +729,12 @@ ROOT_FAILS = [{"id": "pkg-user", "status": "fail", "evidence": "no USER line, so
 @pytest.mark.parametrize("case", sorted(ROOT_IMAGE))
 def test_the_website_image_may_start_as_root_only_while_it_keeps_each_checks_steps_apart(tmp_path, capsys, case):
     """The owner's answer of 2026-11-20: the website's image starts as root, so that it can run each check's steps
-    as a user of that check's own (only root can switch to another user), and the steps never run as root. Lantern's
-    readiness check of a container (`pkg-user`) fails for such an image, and the self-check fails on any failed check:
-    this one may fail, said every time with its reason, and only while the repository still shows that reason (the
-    image it builds requires the steps apart, and every other image of the project names a user that is not root)."""
+    as a user of that check's own (only root can switch to another user), and root is narrowed to the small part
+    that starts the steps (its switcher, the image's first program, which starts the service as an ordinary user it
+    names). Lantern's readiness check of a container (`pkg-user`) fails for such an image, and the self-check fails
+    on any failed check: this one may fail, said every time with its reason, and only while the repository still
+    shows that reason (the image starts its switcher first, with an ordinary user and a folder of the service's own
+    named, requires the steps apart, and every other image of the project names a user that is not root)."""
     files, want = ROOT_IMAGE[case]
     code = _image_run(tmp_path, files, ROOT_FAILS)
     out = capsys.readouterr().out
@@ -698,6 +744,7 @@ def test_the_website_image_may_start_as_root_only_while_it_keeps_each_checks_ste
         assert "allowed fail" in out and "2026-11-20" in out and out.splitlines()[-1] == "PASS", out
     else:
         assert "allowed only while" in out and out.splitlines()[-1].startswith("FAIL"), out
+        assert ROOT_IMAGE_WHY.get(case, "") in out, out
 
 
 def test_beside_it_any_other_failed_check_stops_ci_as_before(tmp_path, capsys):

@@ -43,7 +43,7 @@ import httpx
 
 from lantern import _jail, gitfacts, learn, programs, remote, removal, sandbox
 
-from . import apart
+from . import apart, switcher
 from .cleanup import Cleanup
 from .ghapp import NoAccess
 from .settings import Settings
@@ -75,6 +75,10 @@ SHUT_DOWN = "Lantern was shut down while this run was going. Start it again."
 SHUT_DOWN_EXPLAIN = "Lantern was shut down while writing these. Click Explain again."
 UPLOAD_EXPLAIN = ("An uploaded app is deleted when its check ends, so Lantern cannot read its code again to explain it. "
                   "Explanations work for apps checked from a link, or in the Lantern app on your computer.")
+
+
+STEP_NOT_STARTED = ("Lantern's server could not start the next step of this check, so it stopped it. Please try "
+                    "again in a minute.")
 
 
 class RunFailed(Exception):
@@ -247,10 +251,11 @@ class Worker:
         # Before any step can run: the service's own files closed to others, and what the user the website's image
         # ran the service as until 2026-11-18 made in them taken over, so the clean-up may remove it (`apart.py`).
         apart.close_up(settings.db_path, str(self.results), str(self.uploads), str(self.work), _lantern_home())
-        # Each check's steps run as a user of its own where the service is root (`apart.StepUsers`); the health
-        # page's `steps` says what the last proof showed ("apart", "open"), "unchecked" before the first, "shared"
-        # where the service is not root and its steps run as its own user.
-        self.users = apart.StepUsers()
+        # Each check's steps run as a user of its own where the service is root (`apart.StepUsers`), or where the
+        # switcher started it (`apart.SwitchedUsers`: the website's image, where only the switcher stays root); the
+        # health page's `steps` says what the last proof showed ("apart", "open"), "unchecked" before the first,
+        # "shared" where neither is so and the steps run as the service's own user.
+        self.users = apart.users()
         self.steps = "unchecked" if self.users.on else "shared"
         self.pool = ThreadPoolExecutor(max_workers=max(1, settings.concurrent_jobs), thread_name_prefix="lantern-run")
         self.stopping = threading.Event()   # shutdown(): the steps that are running end, with all they started
@@ -589,7 +594,8 @@ class Worker:
         not go on, and nothing was shown of the service either way."""
         uid = self.users.of(root)
         args = apart.probes(os.path.abspath(self.s.db_path), os.path.abspath(self.results),
-                            os.path.abspath(self.uploads), os.path.abspath(self.work), _lantern_home(), os.getpid())
+                            os.path.abspath(self.uploads), os.path.abspath(self.work), _lantern_home(), os.getpid(),
+                            getattr(self.users, "switcher", None))
         _rc, output, _timed_out = self._jailed(key, root, [sys.executable, "-I", "-S", "-c", apart.PROOF, *args],
                                                cwd=root / "tmp", net=False, log=lambda m: None, timeout=60)
         read = apart.what_was_read(output, uid, len(args) // 3) if uid is not None else ["user"]
@@ -667,14 +673,30 @@ class Worker:
         if net:
             env.update({k: os.environ[k] for k in PROXY_VARS if k in os.environ})
         env.update(extra or {})
-        if user is not None:
+        if user is not None and not self.users.switched:
             # The check's temp folder, what the service made in it for this step and its copy of the code become
             # its user's, and no other user may enter them; nothing a link names is handed over (`apart.hand_over`).
             # Until 2026-11-18 the steps of every check ran as one user: `nobody` where the service was root, and
             # the service's own user where it was not, as in the website's image then.
             apart.hand_over(root, user)
-            if not net:   # where root's files are made owner-only (umask 077) the step ran with no guard, unsaid
-                sandbox._others_may_read(hook)
+        if user is not None and not net:   # where files are made owner-only (umask 077) the step ran with no guard, unsaid
+            sandbox._others_may_read(hook)
+        if user is not None and self.users.switched:
+            # The switcher hands the check's folders to its user, starts the step as that user (the launcher's
+            # policy is the switcher's own), stops it with all it started, ends what its user left and hands the
+            # folders back (`switcher.py`). A step always runs in the check's temp folder.
+            if Path(cwd) != tmp:
+                raise RuntimeError("a step the switcher starts runs in its check's temp folder")
+            client = self.users.client
+            try:
+                rc, output, timed_out = sandbox._stream(cmd, cwd, env, timeout, log, cancel=self.stopping,
+                                                        ask=_jail.ASK, start=lambda: client.step(root.name, cmd, env, net))
+            except (switcher.Refused, switcher.SwitcherGone) as e:
+                _log.warning("the switcher did not start a check's step (%s)", e)
+                raise RunFailed(STEP_NOT_STARTED) from None
+            if rc is None and not timed_out:
+                raise ShutDown()
+            return rc, output, timed_out
         if os.name == "posix":
             # no "must": these steps read a project and never run it, so where the kernel has no Landlock, or
             # refuses it, they say so in the log and carry on (lantern/_jail.py). "parent": a launcher whose service

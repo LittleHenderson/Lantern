@@ -25,7 +25,9 @@ Here, where the service is root:
   either way: that check is not started either (`UNPROVEN`), and nothing is said of the service.
 
 Where the service is not root (a person's own computer), steps run as the service's own user, as before; the health
-page says "shared".
+page says "shared". Where the switcher started it (`switcher.py`, the website's image since 2026-11-20: only that
+small part stays root, and the service runs as an ordinary user of its own), `SwitchedUsers` asks the switcher for
+each check's user, the hand-over and each step, and the checks are kept apart all the same (`users()`).
 """
 
 from __future__ import annotations
@@ -55,11 +57,26 @@ def as_root() -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
+def can_keep_apart() -> bool:
+    """Whether this service can run each check's steps as a user of its own: it is root, or the switcher started it."""
+    from . import switcher
+    return as_root() or switcher.connected()
+
+
+def users():
+    """The users each check's steps run as: the switcher's where it started this service, else `StepUsers`."""
+    from . import switcher
+    client = switcher.connect()
+    return SwitchedUsers(client) if client is not None else StepUsers()
+
+
 class StepUsers:
     """The users each check's steps run as: one per check (`key`: the check's folder). `on` is False where the
     service is not root; `take` then gives None and the steps run as the service's own user. Numbers are taken in
     turn from a place chosen at random when the service starts, so a number comes round again only after 500,000
     checks, and never while a program of that user still runs."""
+
+    switched = False                          # the steps are started here, not by the switcher
 
     def __init__(self, on: bool | None = None, first: int | None = None):
         self.on = as_root() if on is None else bool(on)
@@ -97,6 +114,45 @@ class StepUsers:
         with self._lock:
             self._given.pop(k, None)
         return left
+
+
+class SwitchedUsers:
+    """The users each check's steps run as, where the switcher started this service (`switcher.Client`): it gives a
+    check its user, hands the check's folders over before each step and back after it, and starts and stops each
+    step (`Worker._jailed`). `key`: the check's folder, which is in the work folder."""
+
+    switched = True
+    on = True
+
+    def __init__(self, client):
+        self.client = client
+        self.switcher = client.pid             # its program, which the proof tries to read too (`probes`)
+        self._lock = threading.Lock()
+        self._given: dict[str, int] = {}
+
+    def take(self, key) -> int:
+        k = os.fspath(key)
+        uid = self.client.take(Path(k).name)
+        with self._lock:
+            self._given[k] = uid
+        return uid
+
+    def of(self, key) -> int | None:
+        with self._lock:
+            return self._given.get(os.fspath(key))
+
+    def give_back(self, key) -> int:
+        """The check is over: the switcher ends whatever still runs as its user and gives its folders back. Returns
+        how many could not be ended."""
+        k = os.fspath(key)
+        with self._lock:
+            if k not in self._given:
+                return 0
+        try:
+            return self.client.give_back(Path(k).name)
+        finally:
+            with self._lock:
+                self._given.pop(k, None)
 
 
 # ---------------------------------------------------------------------------- a check's folders
@@ -243,15 +299,19 @@ for i in range(0, len(a) - 2, 3):
 """
 
 
-def probes(db: str, results: str, uploads: str, work: str, home: str | None, pid: int) -> list[str]:
+def probes(db: str, results: str, uploads: str, work: str, home: str | None, pid: int,
+           switcher: int | None = None) -> list[str]:
     """What a step of a check tries to read, three words each: what it is, the place, and how (`file`: read it,
-    `list`: list it, `enter`: pass through it to a name inside)."""
+    `list`: list it, `enter`: pass through it to a name inside). `switcher`: the program that started the service
+    and starts each step, when one did."""
     out = []
     for x in ("", "-wal", "-shm", "-journal"):
         out += ["database", db + x, "file"]
     for kind, place in (("results", results), ("uploads", uploads), *((("lantern-folder", home),) if home else ())):
         out += [kind, place, "list", kind, place, "enter"]
     out += ["work-folder", work, "list", "service", f"/proc/{pid}/environ", "file", "service", f"/proc/{pid}/fd", "list"]
+    if switcher:
+        out += ["switcher", f"/proc/{switcher}/environ", "file", "switcher", f"/proc/{switcher}/fd", "list"]
     return out
 
 

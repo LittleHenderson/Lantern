@@ -141,10 +141,12 @@ jobs:
           if [ -n "$was" ]; then sudo sysctl -w "$rule=$was"; fi
           [ "$status" -eq 0 ] || exit "$status"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/own-network.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
-      - name: The website's tests of each check under a user of its own, a second time as root (the pass above skips them)
-        timeout-minutes: 20
+      - name: The website's tests of each check under a user of its own and of its switcher, a second time as root (the pass above skips them)
+        timeout-minutes: 25
         # The cloud service runs each check's steps as a user of that check's own (cloud/lantern_cloud/apart.py,
-        # 2026-11-18), which only root can do, so the tests of it need root and the pass above names them as skipped.
+        # 2026-11-18), which only root can do, so the tests of it need root and the pass above names them as skipped;
+        # so do the tests of the switcher, the one part of the website's image that stays root, which starts the
+        # service as an ordinary user and each check's steps as the check's user (cloud/lantern_cloud/switcher.py).
         # Here the file runs as root, and no test may be skipped. A check's user is none of this machine's users, and
         # the twins run Lantern's own analysis as that user, which reads Lantern's code from this checkout as it
         # reads it from the website's image: the folders above the checkout are opened for passing through (not for
@@ -156,7 +158,7 @@ jobs:
           d="$GITHUB_WORKSPACE"
           while [ "$d" != "/" ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
           sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" PYTHONDONTWRITEBYTECODE=1 \
-            python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py | tee "$RUNNER_TEMP/step-user.log"
+            python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py tests/test_cloud_switcher.py | tee "$RUNNER_TEMP/step-user.log"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/step-user.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
@@ -208,9 +210,11 @@ jobs:
           PY
 
   cloud-image:
-    # Cloud mode's server image (cloud/Dockerfile, built from the repository root) builds, starts as root, keeps each
-    # check's steps apart (its health page says "apart" once a step of a check's user could read none of the
-    # service's own files: cloud/lantern_cloud/apart.py), and answers its health check with the engine inside.
+    # Cloud mode's server image (cloud/Dockerfile, built from the repository root) builds, starts as root only in its
+    # switcher, which starts the service as an ordinary user of its own and each check's steps as a user of that
+    # check's own (cloud/lantern_cloud/switcher.py), keeps each check's steps apart (its health page says "apart" once
+    # a step of a check's user could read none of the service's own files: cloud/lantern_cloud/apart.py), and answers
+    # its health check with the engine inside.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -220,10 +224,36 @@ jobs:
       - run: docker build -f cloud/Dockerfile -t lantern-cloud .
       - name: start it and read /v1/health
         run: |
-          docker run -d --name lc -p 8090:8080 -e LANTERN_CLOUD_DB=/tmp/c.db -e LANTERN_CLOUD_RESULTS=/tmp/r lantern-cloud
-          curl -fsS --retry 10 --retry-delay 2 --retry-all-errors --max-time 10 http://127.0.0.1:8090/v1/health | tee health.json
+          docker run -d --name lc -p 8090:8080 lantern-cloud   # its own places, as on the live machine (one disk)
+          curl -fsS --retry 10 --retry-delay 2 --retry-all-errors --max-time 10 http://127.0.0.1:8090/v1/health | tee health.json \
+            || { docker logs lc; exit 1; }
           echo
-          test "$(docker exec lc id -u)" = "0"   # root, so that each check's steps run as a user of their own
+          # Who runs what, from the system's own table: the first program is the switcher, as root (only root can start
+          # a step as a check's user); the service is not root, not nobody and none of the checks' users.
+          docker exec -i lc python3 -I - <<'PY'
+          import os
+          rows = {}
+          for pid in os.listdir("/proc"):
+              if not pid.isdigit():
+                  continue
+              try:
+                  with open(f"/proc/{pid}/status", encoding="utf-8") as f:
+                      uids = [int(x) for x in next(l for l in f if l.startswith("Uid:")).split()[1:]]
+                  with open(f"/proc/{pid}/cmdline", "rb") as f:
+                      words = f.read().split(b"\0")
+              except (OSError, StopIteration, ValueError):
+                  continue
+              rows[int(pid)] = (uids, [w.decode("utf-8", "replace") for w in words if w])
+          for pid, (uids, words) in sorted(rows.items()):
+              print(pid, uids, " ".join(words)[:200])
+          first_uids, first = rows[1]
+          assert first_uids == [0, 0, 0, 0] and first[first.index("-m") + 1] == "lantern_cloud.switcher", rows[1]
+          service = [(uids, words) for pid, (uids, words) in rows.items() if pid != 1 and any("uvicorn" in w for w in words)]
+          assert service, rows
+          for uids, words in service:
+              assert not {0, 65534} & set(uids) and not any(300_000 <= u < 800_000 for u in uids), (uids, words)
+          print("the switcher is root; the service runs as", sorted({u for uids, _ in service for u in uids}))
+          PY
           for i in $(seq 1 30); do   # the service proves it at start-up, in the background
             curl -fsS --max-time 10 http://127.0.0.1:8090/v1/health -o health.json
             grep -q '"steps":"unchecked"' health.json || break
@@ -239,6 +269,7 @@ jobs:
           want = re.search(r'^version = "([^"]+)"', open("pyproject.toml").read(), re.M).group(1)
           assert d["ok"] is True and d["service"] == "lantern-cloud" and d["engine"] == want, d
           assert d["steps"] == "apart", d
+          assert d["service_user"] == "own", d
           PY
       - name: the website is served, built from the app's own stylesheet, with a nonce policy
         run: |

@@ -93,6 +93,14 @@ def main(argv: list[str] | None = None) -> int:
             rows.append(("lantern-cloud checks kept apart", url, word.upper() if word in ("open", "shared") else "UNKNOWN",
                          why))
             bad.append(f"lantern-cloud checks kept apart: {why}")
+        if name == "lantern-cloud" and ok and body.get("service_user") not in (None, "own"):
+            # None: a service from before the field was written (it began with the switcher, 2026-11-20)
+            word = str(body.get("service_user"))[:40]
+            why = ("the website's service runs as root: only the small part that starts each check's steps (its "
+                   "switcher) should, and the service as an ordinary user of its own (docs/deploy.md)" if word == "root"
+                   else f"the service could not say which user it runs as (it said {word!r}); look at its logs")
+            rows.append(("lantern-cloud service user", url, "ROOT" if word == "root" else "UNKNOWN", why))
+            bad.append(f"lantern-cloud service user: {why}")
     md = "| service | url | status | detail |\n|---|---|---|---|\n" + "\n".join(f"| {n} | {u} | {s} | {w} |" for n, u, s, w in rows)
     print(md)
     if a.summary:

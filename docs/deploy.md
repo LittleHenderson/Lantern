@@ -256,19 +256,56 @@ repository's files.
 | The first request after a quiet spell takes a few seconds | The service was asleep (normal, it saves money) | nothing |
 | A large repository's run ends with an error about memory | 1 GB is not enough for it | `fly scale memory 2048 -a lantern-cloud` (doubles the running cost) |
 | The uptime mail says `lantern-cloud clean-up` is `OWED` | Files the service should have removed (a deleted run's results, a run's temp folder) have been waiting for more than a day, or runs past the retention time are still there | "Clean-up" below: read the reason in the owner's statistics first |
-| The website says it cannot keep checks apart right now, and starts no check; the uptime mail says `lantern-cloud checks kept apart` is `OPEN` or `SHARED` | A check's user could read something of the service's, or the service does not run as root | "Each check as a user of its own" below |
+| The website says it cannot keep checks apart right now, and starts no check; the uptime mail says `lantern-cloud checks kept apart` is `OPEN` or `SHARED` | A check's user could read something of the service's, or the service was started neither by its switcher nor as root | "Each check as a user of its own" below |
+| The uptime mail says `lantern-cloud service user` is `ROOT` | The website's service runs as root: an image whose first program is not the switcher | Deploy the image from `cloud/Dockerfile` as it is ("The switcher" below) |
+| The machine stops right after it starts; `fly logs -a lantern-cloud` has a line that begins `lantern-cloud switcher:` | The switcher refused to start the service: the line says why (code Python would load that the service's user could change, with the file; a service user that is root; a service folder or a place of the service it refuses) | Deploy the image from `cloud/Dockerfile` as it is, and leave `LANTERN_CLOUD_SERVICE_USER`, `LANTERN_CLOUD_DATA` and the places in it as the image sets them |
 | A check says Lantern's server could not finish making sure that it is kept apart from the others | That check's first step, which makes sure of it, did not finish (most often the machine was too busy for it): the check was not started, and nothing was shown either way | Try the check again; if every check says it, `fly logs -a lantern-cloud` ("did not answer") and restart the machine |
 | After deleting a run the website says "Deleted, with one thing still to do" | The run is gone for everyone, but the server could not remove its files from its disk yet. It has written that down and tries again at every start and every hour | Nothing, unless the uptime mail above arrives a day later |
 
 ### Each check as a user of its own
 
-Since 2026-11-18 the website's image starts the service as root (`cloud/Dockerfile` has no `USER` line), so that it
-can run each check's steps (unpacking an upload, the dependency audit, the analysis, the explanations) as a user of
-that check's own: a number from 300,000 to 799,999 that no other check has while it runs, and never root. That user
-may read its own check's folder and what every user of the machine may read (the installed program), and nothing of
-the service's: the database, the results, the uploads waiting for their checks, Lantern's own folder and the
-service's running program are closed to it, and so are the folders of every other check. When the check ends,
-whatever still runs as its user is ended. Until that day every check's steps ran as one user, the service's own.
+Each check's steps (unpacking an upload, the dependency audit, the analysis, the explanations) run as a user of that
+check's own: a number from 300,000 to 799,999 that no other check has while it runs, and never root. That user may
+read its own check's folder and what every user of the machine may read (the installed program), and nothing of the
+service's: the database, the results, the uploads waiting for their checks, Lantern's own folder, the service's
+running program and the switcher's are closed to it, and so are the folders of every other check. When the check
+ends, whatever still runs as its user is ended. Only root can start a program as another user: from 2026-11-18 to
+2026-11-20 the whole service ran as root for that, and before 2026-11-18 every check's steps ran as one user, the
+service's own.
+
+#### The switcher: the one part that stays root
+
+Since 2026-11-20 the image starts as root for one small program alone, the switcher (`cloud/lantern_cloud/switcher.py`,
+the image's `CMD`). It starts the website's service as an ordinary user of its own (`app`, number 1000, named by
+`LANTERN_CLOUD_SERVICE_USER`; the image's user had that number before 2026-11-18, so what is on the volume from those
+days stays the service's) with no other group and its home the service's folder (`LANTERN_CLOUD_DATA`), and stays
+beside it. The service asks it, over a socket only the service holds, for four things, and the switcher does nothing
+else as root:
+
+| Asked | What the switcher does |
+|---|---|
+| A user for a check | Gives the check a number of its own (it refuses a check folder that is not the service's own folder in the work folder, or a link) |
+| Before a step | Hands the check's temporary folder and its copy of the code to the check's user (owner only); the check's own folder stays the service's, and others may only pass through it |
+| A step | Starts it as the check's user, in a network of its own where the step needs no network, with no way to gain rights; streams its lines to the service; stops it with everything it started when the service asks or the step ends |
+| After a step, and when the check is over | Hands what the step left back to the service, which may then read, change and remove it; ends whatever the check's user still runs |
+
+While it hands things over and back it follows no link, changes no file that has a second name, opens no pipe or
+device, never goes onto another disk and stops at a depth it says. When it starts, it makes what is on the volume and
+is root's, nobody's or a check's user's the service's (what the days the service ran as root left), and leaves
+somebody else's, a file of root's with a second name and the disk's own `lost+found` as they are. It refuses to start
+the service as root, as nobody or as a check's user, with a service folder that is not a folder (a link, a file) or is
+somebody else's, or with a place of the service (`LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK`,
+`LANTERN_CLOUD_UPLOADS`, `LANTERN_HOME`) outside that folder; and it starts nothing as root while the service's user
+could change any code Python would load for it (every folder Python loads code from, each file and folder in them and
+every folder above them; a link is judged by where it leads). When the service ends, the switcher ends every step
+with everything it started and ends itself with the service's result, so Fly restarts both.
+
+The health page says which user the service runs as, under `"service_user"`: `own` (the switcher started it as its
+ordinary user) or `root` (an image whose first program is not the switcher). The uptime check fails on `root`.
+Lantern's own readiness check refuses an image that starts as root unless its first program is this switcher,
+started with an ordinary service user, a service folder named and `LANTERN_CLOUD_STEPS_APART=required`, and CI starts
+the image and reads the system's own table: the first program must be the switcher as root, and the service must not
+be root, nobody or a check's user.
 
 `LANTERN_CLOUD_STEPS_APART=required` (set in the image) makes the service start no check that it cannot keep apart:
 before anything of a check is copied, a step of that check's user tries to read each of those places, and the check
@@ -282,15 +319,14 @@ health page says how it went, under `"steps"`:
 | `apart` | The last proof (when the service started, or before a check) found that the check's user could read nothing of the service's | Nothing |
 | `unchecked` | Not asked yet: the service asks a moment after it starts | Nothing; it changes by itself |
 | `open` | A check's user could read something of the service's, so no check starts | Below |
-| `shared` | The service does not run as root, so its checks cannot be given users of their own, and no check starts | Deploy the image from `cloud/Dockerfile` as it is (no `USER` line) |
+| `shared` | Neither the switcher nor root started the service, so its checks cannot be given users of their own, and no check starts | Deploy the image from `cloud/Dockerfile` as it is (its first program is the switcher; no `USER` line) |
 
 The uptime check fails on `open` and `shared`, which mails you. A check's user must be able to pass through every
 folder on the way to its own: `/home/app` (the image makes it `0711`), the volume (Fly gives its top folder to the
-image's user when it mounts it, which is root since this change) and the work folder (the service makes it `0711`
-itself). The service closes the database, the results, the uploads and Lantern's own folder to others whenever it
-starts, and on the first start after this change it makes what the service's former user (`app`) left on the volume
-its own, so the clean-up can still remove it. `open` most often means a folder on that way does not let other users
-pass, or something on the volume was opened to others by hand:
+image's user, root, when it mounts it; the switcher gives it to the service's user, `0711`) and the work folder (the
+service makes it `0711` itself). The service closes the database, the results, the uploads and Lantern's own folder to
+others whenever it starts. `open` most often means a folder on that way does not let other users pass, or something
+on the volume was opened to others by hand:
 `fly ssh console -a lantern-cloud -C "ls -ld /home/app /home/app/data /home/app/data/work"` shows the folders (each
 needs the last `x`, as in `drwx--x--x` or `drwxr-xr-x`), and a restart (`fly machine restart -a lantern-cloud`)
 closes the service's own places again.
@@ -300,7 +336,7 @@ closes the service's own places again.
 `.github/workflows/uptime.yml` asks both services for `/v1/health` every 30 minutes (`tools/uptime.py`). A run fails,
 and GitHub emails the repository owner, when either service is down, answers without `"ok": true`, takes more than
 5 seconds, when lantern-cloud's engine version is older than the latest GitHub release (the live service is behind;
-redeploy, below), when lantern-cloud's health page says its clean-up is behind ("Clean-up" below), or when it says its checks are not kept apart (`"steps"` is `open` or `shared`: "Each check as a user of its own" above). The health pages are public and show versions and limits only, so the check needs no secret.
+redeploy, below), when lantern-cloud's health page says its clean-up is behind ("Clean-up" below), or when it says its checks are not kept apart (`"steps"` is `open` or `shared`: "Each check as a user of its own" above), or that its service runs as root (`"service_user"` is `root`: "The switcher" above). The health pages are public and show versions and limits only, so the check needs no secret.
 `python tools/uptime.py --cloud https://lantern-cloud.fly.dev --gateway https://lantern-gateway.fly.dev` runs the same
 check by hand. Fly's own status page is https://status.flyio.net/. To get the mails, keep "Actions: send notifications
 for failed workflows" on in your GitHub notification settings (it is on by default for the repository owner).
