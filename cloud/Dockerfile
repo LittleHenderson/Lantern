@@ -8,7 +8,7 @@ RUN GOBIN=/out GOTOOLCHAIN=auto CGO_ENABLED=0 go install -ldflags "-X github.com
       github.com/zricethezav/gitleaks/v8@v8.30.1 \
  && test "$(/out/gitleaks version)" = "8.30.1"
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 # git clones the repositories people link; npm reads package-lock.json for the dependency audit (lock files only,
 # never `npm install`). Nothing from an analysed repository is ever built or run. Tesseract reads the text in
 # screenshots dropped into Ask Lantern (through a pipe; images are never written to disk).
