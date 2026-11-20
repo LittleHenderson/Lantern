@@ -16,7 +16,6 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git nodejs npm tesseract-ocr \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=gitleaks /out/gitleaks /usr/local/bin/gitleaks
-RUN useradd --create-home app
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
 COPY lantern ./lantern
@@ -29,14 +28,21 @@ RUN case "$LANTERN_COMMIT" in \
         [ ${#LANTERN_COMMIT} -eq 40 ] && printf 'COMMIT = "%s"\n' "$LANTERN_COMMIT" >> lantern/_build.py ;; \
     esac; true
 RUN pip install --no-cache-dir ".[scan,ocr]" ./cloud && rm -rf /src
+# The service runs as root, so that it can run each check's steps (unpacking, the dependency audit, the analysis,
+# the explanations) as a user of that check's own, a number nobody else has; the steps never run as root
+# (cloud/lantern_cloud/apart.py). When it starts it closes its own files to every other user, and with
+# LANTERN_CLOUD_STEPS_APART=required it starts no check that it cannot keep apart from the others and from its own
+# files. A step's user passes through /home/app to the folder of its own check, and may not list it (the folders on
+# that way must let others pass: docs/deploy.md). Until 2026-11-18 the service ran as a user of its own, and every
+# check's steps ran as that user.
+RUN mkdir -p /home/app/data && chmod 0711 /home/app
 WORKDIR /home/app
-USER app
 ENV LANTERN_CLOUD_DB=/home/app/data/lantern_cloud.db \
     LANTERN_CLOUD_RESULTS=/home/app/data/results \
     LANTERN_CLOUD_WORK=/home/app/data/work \
     LANTERN_HOME=/home/app/data/lantern \
     LANTERN_CLONE_MAX_MB=500 \
+    LANTERN_CLOUD_STEPS_APART=required \
     PYTHONUNBUFFERED=1
-RUN mkdir -p /home/app/data
 EXPOSE 8080
 CMD ["uvicorn", "lantern_cloud.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]

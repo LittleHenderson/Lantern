@@ -53,6 +53,10 @@ class Settings:
     uploads_dir: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_UPLOADS", ""))
     # Dependency audits (pip-audit, npm audit on lock files) need the network; off only in tests.
     audits: bool = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_AUDITS", "1") not in ("0", "false", "no"))
+    # "required" (the website's image): a service that cannot run each check's steps as a user of its own, or whose
+    # check's user could read its own files, starts no check (`apart.py`). Empty: where the service is root each
+    # check still gets a user of its own; where it is not (a person's own computer), steps run as the service's user.
+    steps_apart: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_STEPS_APART", "").strip().lower())
     # Runs one person may have queued or running at once.
     per_user_active: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_ACTIVE_PER_USER", 1))
     # 0 = keep results until the person deletes them (the owner's choice). A positive number deletes runs that old.

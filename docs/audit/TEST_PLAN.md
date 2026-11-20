@@ -363,4 +363,5 @@ make a run say what they like, here as in any program that reads its own setting
 * Section 4.6: analysis of a 100k-line repo finishes in under 60 s and under 2 GB.
 * Every claim in `CLAIMS.md` is held or its text is corrected.
 * `python tools/self_readiness.py` on Lantern's own results: grade A, a release decision that is not Blocked and is
-  Incomplete only for the tests that step does not run, and no required check skipped beyond the ones it names.
+  Incomplete only for the tests that step does not run, no required check skipped beyond the ones it names, and no
+  failed check but `pkg-user` for the website's image, while that image keeps each check's steps apart (`ALLOWED_FAIL`).

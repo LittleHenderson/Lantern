@@ -456,5 +456,7 @@ once: send a test report through the button to see the mail arrive.
 **Lantern grades others on what it skips itself.** Lantern's Readiness score checks other apps for monitoring,
 backups and accessibility. Lantern should pass its own Readiness checks, the way it already must pass its own security
 audit (principle 4). ✅ `tools/self_readiness.py` runs in CI and fails unless Lantern grades A on itself with no failed
-check (getting there improved the checks themselves: routes reached through a test client and pages opened by tests now
-count as tested, and a program's own output is not "print debugging").
+check but one: the website's image starts as root so that each check's steps run as a user of their own (the owner's
+answer of 2026-11-20), and its `pkg-user` may fail only while that image keeps the steps apart and every other image
+names a user (`ALLOWED_FAIL`). Getting there improved the checks themselves: routes reached through a test client
+and pages opened by tests now count as tested, and a program's own output is not "print debugging".

@@ -174,6 +174,7 @@ OWN_FILES = {
     ("typecheck.py", "_stub_name"): "a stub file pyright itself brings, beneath pyright's own folder by its real place, outside the project",
     ("_jail.py", "_holds"): "/proc: the memory a process of the run holds",
     ("_jail.py", "_share"): "/proc: a process's own share of the memory it holds",
+    ("_jail.py", "_uids"): "/proc: the user numbers of a process, to find and end what still runs as a check's user",
     ("removal.py", "_by_folder"): "a folder handle", ("removal.py", "_empty"): "a folder handle",
     ("removal.py", "_open_dir"): "a folder handle", ("removal.py", "_give_rights"): "a folder handle",
     ("removal.py", "_read"): "LANTERN_HOME", ("usage.py", "_read"): "LANTERN_HOME", ("usage.py", "install_id"): "LANTERN_HOME",

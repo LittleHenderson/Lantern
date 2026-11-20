@@ -369,9 +369,12 @@ def test_a_run_names_the_rules_it_ran_under_and_ci_looks_for_them(tmp_path):
     the rule in the run's own words afterwards, so a rule that did not arrive is a red run."""
     gates = _rules_gates()
     assert [where for _, where in gates] == ["pytest.log", '"$RUNNER_TEMP/second-pass.log"',
-                                             '"$RUNNER_TEMP/own-network.log"'], gates
-    first, second, third = (re.compile(what, re.M) for what, _ in gates)    # nothing in them that grep and Python read apart
-    assert third.pattern == second.pattern          # the third pass (a run's own network) is held to the second's rule
+                                             '"$RUNNER_TEMP/own-network.log"', '"$RUNNER_TEMP/step-user.log"'], gates
+    # nothing in them that grep and Python read apart
+    first, second, third, fourth = (re.compile(what, re.M) for what, _ in gates)
+    # the third pass (a run's own network) and the fourth (since 2026-11-18: the website's checks, each under a user
+    # of its own, as root) are held to the second's rule
+    assert third.pattern == second.pattern and fourth.pattern == second.pattern
     code, out = _missing_library_run(tmp_path / "required", "", complete=True)
     assert code == 0 and "\nrules of this run: LANTERN_TESTS_COMPLETE=required (" in out, out[-3000:]
     assert not first.search(out) and not second.search(out), out[-3000:]       # one rule is not both; nor the other one
@@ -416,7 +419,10 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     the Linux, Windows and macOS jobs install the two type checkers the type-aware pass asks (TypeScript and pyright,
     one fixed version each, from npm with install scripts off, outside the checkout and off PATH) and run
     tests/test_typecheck.py under LANTERN_TESTS_TYPECHECK=required, where a checker that is not found fails its
-    tests: until then the real checkers were started only on the computer the pass was written on."""
+    tests: until then the real checkers were started only on the computer the pass was written on. Since 2026-11-18
+    a fourth pass runs the website's tests of each check under a user of its own a second time, as root (only root
+    can run a step as another user, so the first pass names them as skipped), through sudo like the second, and no
+    test may be skipped there either."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -426,7 +432,7 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
         assert all(" -rs" in line for line in mine), (path.name, mine)
         assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
         runs += [(path.name, line) for line in mine]
-    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 6, runs
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 7, runs
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
     first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network
@@ -439,7 +445,13 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert own == ['python -m pytest -q -rs -p no:cacheprovider tests/test_sandbox_own_network.py | tee '
                    '"$RUNNER_TEMP/own-network.log" || status=$?'], own
     third = ci[ci.index(again[0]): ci.index(own[0])]               # after the second pass, in the third pass's own step
-    assert ci.count("LANTERN_TESTS_COMPLETE: no-skips") == 2 and "LANTERN_TESTS_COMPLETE: no-skips" in between
+    users = [line for name, line in runs if name == "ci.yml" and "tests/test_cloud_step_user.py" in line]
+    assert users == ['python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py | tee '
+                     '"$RUNNER_TEMP/step-user.log"'], users
+    fourth = ci[ci.index(own[0]): ci.index(users[0])]               # after the third pass, in the fourth pass's own step
+    fourth = fourth[fourth.index("LANTERN_TESTS_COMPLETE: no-skips"):]
+    assert "set -o pipefail" in fourth and "LANTERN_TESTS_NETLESS" not in fourth, fourth
+    assert ci.count("LANTERN_TESTS_COMPLETE: no-skips") == 3 and "LANTERN_TESTS_COMPLETE: no-skips" in between
     assert "LANTERN_TESTS_COMPLETE: no-skips" in third and "LANTERN_TESTS_NETLESS" not in third
     third = third[third.index("LANTERN_TESTS_COMPLETE: no-skips"):]
     # The third pass is the ordinary user's (that is its point: root makes a network of its own without a user
@@ -460,14 +472,17 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     # (test_a_run_names_the_rules_it_ran_under_and_ci_looks_for_them).
     through_sudo = [line.strip() for line in ci.replace("\\\n", " ").splitlines()
                     if re.search(r"^\s*sudo\b.*\bpython\b", line)]
-    assert len(through_sudo) == 2 and not any(re.search(r"\bsudo\s+-E\b", line) for line in through_sudo), through_sudo
+    assert len(through_sudo) == 3 and not any(re.search(r"\bsudo\s+-E\b", line) for line in through_sudo), through_sudo
     handed = [line[: line.index(" python ")] for line in through_sudo]
     assert all('"LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE"' in words for words in handed), handed
     assert '"LANTERN_TESTS_NETLESS=$LANTERN_TESTS_NETLESS"' in handed[0] and "netless.py" in through_sudo[0], through_sudo
-    assert "LANTERN_TESTS_NETLESS" not in handed[1] and "netless.py" not in through_sudo[1], through_sudo
+    assert not any("LANTERN_TESTS_NETLESS" in words for words in handed[1:]), through_sudo
+    assert not any("netless.py" in line for line in through_sudo[1:]), through_sudo
+    assert "tests/test_netguard.py" in through_sudo[1] and "tests/test_cloud_step_user.py" in through_sudo[2], through_sudo
     # The gitleaks built for the scanner's tests reaches the first pass the same way, and the step then looks for
     # it in the run's own words; every job that builds it checks the version it built before it names it.
-    assert '"LANTERN_TESTS_GITLEAKS=$LANTERN_TESTS_GITLEAKS"' in handed[0] and "LANTERN_TESTS_GITLEAKS" not in handed[1]
+    assert '"LANTERN_TESTS_GITLEAKS=$LANTERN_TESTS_GITLEAKS"' in handed[0]
+    assert not any("LANTERN_TESTS_GITLEAKS" in words for words in handed[1:]), handed
     assert "grep -q '^programs these tests started: .*gitleaks 8\\.30\\.1 (linked)' pytest.log ||" in ci
     built = ci.count('echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"')
     assert built == 3 and ci.count('test "$("$program" version)" = "8.30.1"') == built
@@ -489,13 +504,14 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
                  'echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"'):
         assert ci.count(line) == 3, line
     for name in ("LANTERN_TESTS_TYPECHECK", "LANTERN_TYPESCRIPT", "LANTERN_PYRIGHT"):
-        assert f'"{name}=${name}"' in handed[0] and name not in handed[1], (name, handed)
+        assert f'"{name}=${name}"' in handed[0] and not any(name in words for words in handed[1:]), (name, handed)
     assert ("grep -q '^programs these tests started: .*pyright 1\\.1\\.414 (node at .*typescript 6\\.0\\.2 (node at ' "
             "pytest.log ||") in ci
     assert "tests/test_typecheck.py" in its[0] and " or test_typecheck" in its[0], its[0]      # macOS: the whole file
     assert [what for what, _ in _rules_gates()] == [
         "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required"
         ".*LANTERN_TESTS_TYPECHECK=required",
+        "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips",
         "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips",
         "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips"]
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
