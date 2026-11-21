@@ -333,6 +333,22 @@ on the volume was opened to others by hand:
 needs the last `x`, as in `drwx--x--x` or `drwxr-xr-x`), and a restart (`fly machine restart -a lantern-cloud`)
 closes the service's own places again.
 
+### The test machine (not live yet)
+
+A check's tests will run on a machine of their own, made from Lantern's runner image for that one check and removed
+after it (a firm pass or fail, stage 3). The website does not use it yet: the next steps make and remove the machines,
+fetch the libraries on the website's side, try it all on a practice copy and, on the owner's word, go live. The image
+is `cloud/runner/Dockerfile`, built from the repository root:
+
+    docker build -f cloud/runner/Dockerfile --build-arg LANTERN_COMMIT=$(git rev-parse HEAD) -t lantern-runner .
+    python tools/runner_image.py lantern-runner      # 8 cases, each on a machine of its own (CI does this on every push)
+
+It holds Python 3.12 and Node 22, from the pinned images the sandbox names (`lantern/sandbox.py` `IMAGES`), and
+Lantern's own code: no pip, nothing of anyone's project, no key. Its program (`lantern/runner.py`) answers only the key
+made for its check (the machine is given the key's fingerprint, `LANTERN_RUNNER_KEY_SHA256`), takes the project and
+its libraries as one archive, runs the tests with Lantern's sandbox as an ordinary user in a network of their own,
+and keeps the result until the website takes it (`docs/api.md`, "The test machine's program").
+
 ### Watching the live services (uptime, and "is the live version behind?")
 
 `.github/workflows/uptime.yml` asks both services for `/v1/health` every 30 minutes (`tools/uptime.py`). A run fails,

@@ -1465,6 +1465,49 @@ deleted), default_privacy: "structure"}`.
 Gateway side: `GET <gateway>/v1/whoami` (Bearer = the person's token) → `{account, label}`; 401 for an unknown or
 disabled token. A hand-minted token has `account: "token:<16 hex>"`. Never returns an email.
 
+### The test machine's program (`lantern/runner.py`, `cloud/runner/Dockerfile`)
+
+A firm pass or fail, stage 3, step 4 (2026-11-21). Not used by the website yet: steps 5 to 8 make one machine per
+check from this image, hand it the check, and remove it. The machine starts `python -I -m lantern.runner serve --host
+0.0.0.0 --port 8080` as root. The website makes a key for the one check and gives the machine only its SHA-256
+fingerprint (`LANTERN_RUNNER_KEY_SHA256`, 64 lowercase hex, taken out of the program's environment when it starts).
+Every request carries `Authorization: Bearer <key>` (letters, digits, `-` and `_`, 512 at most). Without it, or with
+any other key, every path and method is answered `401 {"error": "not allowed"}`; an unknown path (404) or method (405)
+is told apart only behind the key. Answers are JSON with `Connection: close` and `Cache-Control: no-store`.
+
+| Route | Answer |
+|---|---|
+| `PUT /v1/check` | The check's archive as the body (`Content-Length` or `chunked`, not both; neither 411; over 8 GiB 413; more than the disk holds 507; empty 400), once (a second 409). 202 when it was taken whole. A body cut off or too slow (each read waits 60 s at most, and the whole archive must come at 1 MiB a second, in 120 s at least) is answered 408 or 400, and the program waits for the archive again |
+| `GET /v1/check?from=N` | `{state, steps, lines, next, result, missed?}`: `state` waiting → taking → unpacking → running → `done`, `refused`, `unable` or `stopped`; `steps` `[{at, step, said}]`; `lines` the run's log from line N (5,000 at most per answer; the program keeps the last 20,000 and `missed` counts those no longer kept); `result` once the check has ended |
+| `POST /v1/stop` | 202; the tests are stopped with everything they started (`stopped`) |
+| `POST /v1/end` | 202, then the program ends with 0 and the machine stops |
+
+The program also ends by itself, with 1: when no archive came within 10 minutes, when nobody took the result within 10
+minutes of its end, 10 minutes after it was taken when the website did not end the machine, and 4.5 hours after it
+started (the longest check, 240 minutes, and 30 more).
+
+The archive is a zip of `check.json`, `project/` and, where the website fetched the project's libraries,
+`libraries/` as the fetch laid them out. `check.json` = `{version: 1, command, minutes, memory, libraries, cwd?,
+fetched_with?}`: `command` a test command `sandbox.check_command` takes, of Python or JavaScript (npm) only; `minutes`
+1 to 240; `memory` in MB as the sandbox takes it; `libraries` the fetch's record (`{state: "none" | "fetched",
+language, packages…}`); `cwd` a folder inside the project; `fetched_with` the Python the libraries were fetched for. A
+setting this version does not know, a name written twice or a value of another type is refused, and nothing runs. It
+is unpacked by the website's own rules (`lantern/archive.py`): no name that leaves its folder, no link but those npm
+makes in the libraries' `.bin` folders, a file's run bit kept, at most 400,000 entries, sizes counted while writing,
+and at most half of the disk that is free. `python -m lantern.runner pack PROJECT OUT [--libraries DIR --record FILE]
+-- COMMAND` writes one (a link of the project is left out and listed; the folders the sandbox's copy leaves out are
+left out).
+
+`result` = `{version: 1, state, why_not, runner, taken, check, tests?}`. `runner` = `{lantern, commit, python, system,
+walls, reach}`, with `walls` four rows `{wall, stands, why}`: the tests' own network, a doorman for every connection,
+the memory watch, an ordinary user for the tests. Where one does not stand the state is `unable`, `why_not` names it
+and no test is run. `taken` = `{files, bytes, links}`; `check` = `{command, cwd, minutes, memory, language}`; `tests`
+is what `sandbox.run` returned (the run's own Python on exactly the libraries handed in, as user 65534, with the
+network off), the project's own files named from the project's top. `refused`: the archive or its settings were not
+taken (`why_not` says why; nothing ran). `unable`: the machine could not run the tests. `stopped`: the website stopped
+them. `python -m lantern.runner run ARCHIVE --out FILE` runs one check with no door (0 when it ended `done`, else 3).
+Tests: `tests/test_runner.py`; the built image: `tools/runner_image.py` (CI job `runner-image`).
+
 ## Acceptance checklist per screen
 
 * **Projects**: add by folder and by GitHub link; job log streams while analyzing; score, grade and counts update

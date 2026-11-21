@@ -57,7 +57,7 @@ import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import _builder, _stores, depaudit, manifest, programs, results
+from . import _builder, _stores, manifest, programs, results
 
 FETCH_SECONDS = 600                     # the time a fetch gets
 DOOR_PORT = 8118                        # where the doorkeeper listens in a network of the fetch's own
@@ -174,10 +174,32 @@ class Plan:
         self.groups: list[str] = []
         self.optional_why = ""
         self.record: dict = {"state": "none", "language": language}
+        # libraries another place fetched for this run before it began (`given`): the folder they are in, and the
+        # full path of the Python that fetched them (the first line of the programs they bring names it)
+        self.given: Path | None = None
+        self.fetched_with = ""
 
     @property
     def fetch(self) -> bool:
         return self.state == "fetch"
+
+
+def given(folder: Path | None, record: dict, language: str, fetched_with: str = "") -> Plan:
+    """A plan whose fetch was made before the run, somewhere else: the website fetches a project's libraries as a
+    step of the check's own and hands them to the test machine with the project, which fetches nothing
+    (`lantern.runner`). `folder` holds them as a fetch lays them out (Python: what `pip --target` wrote; JavaScript:
+    what npm put in `node_modules`), or is None when nothing was fetched; `record` is that fetch's record, kept as it
+    is (`sandbox.run` hands it back as the result's `libraries`); `fetched_with` the full path of the Python that
+    fetched them, which the first line of the programs they bring names. The caller has taken all three by shape.
+    `sandbox.run(given=...)` puts the folder where a fetch of the run's own puts its libraries, and the tests then run
+    on exactly those."""
+    found = Plan(language)
+    found.record = record
+    if folder is not None:
+        found.state = "fetch"
+        found.given = Path(folder)
+        found.fetched_with = fetched_with
+    return found
 
 
 # ---------------------------------------------------------------------------- what a Python project asks for
@@ -883,7 +905,9 @@ def plan(repo: Path, language: str, words: list[str], cwd_rel: str = "", offline
     from .sandbox import NoLibraries as Unavailable
     found = Plan(language)
     reader = None
-    offline = depaudit.offline() if offline is None else offline
+    if offline is None:
+        from .depaudit import offline as _offline
+        offline = _offline()
     if language == "python":
         reader = _python(repo, found, words, offline)
     elif language == "node":
@@ -1895,7 +1919,8 @@ def _fetch_node(job: _Fetch, repo: Path, app: Path, cwd_rel: str):
             raise sandbox.NoLibraries(f"the project's libraries could not be fetched: {found.lock.name} {ELSEWHERE} "
                                       f"({_elsewhere(lock, store)} of its packages), so the tests were not run on "
                                       "other libraries than the project's")
-        where, left = depaudit._npm_stage(found.lock, repo, stage)
+        from .depaudit import _npm_stage
+        where, left = _npm_stage(found.lock, repo, stage)
         if where is None:
             job.stop(_plain(left[0] if left else "npm's lock file cannot be used", 300))
         verb = "ci"

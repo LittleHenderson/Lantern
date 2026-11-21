@@ -9,6 +9,19 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The test machine's program and image (a firm pass or fail, stage 3, step 4): `lantern/runner.py` is what will run
+  a website check's tests on a machine made for that one check. It opens one door that answers only to the key made
+  for the check (the machine is given its fingerprint alone; anything else is told "not allowed"), takes the project
+  and the libraries the website fetched for it as one archive, unpacks it with the website's own rules
+  (`lantern/archive.py` now keeps a file's run bit and the links npm makes in `.bin` folders, and no other link), runs
+  the tests with Lantern's sandbox as an ordinary user, in a network of their own, on exactly the libraries handed in
+  (`sandbox.run(given=)`, `libraries.given`), says how it is going, keeps the result for the website, and ends by
+  itself when nobody comes. Where one of the four walls the design counts on does not stand on the machine (the
+  tests' own network, a doorman for every connection, the memory watch, an ordinary user for the tests), no test runs
+  and the result says which. The image (`cloud/runner/Dockerfile`) holds Python 3.12 and Node 22 from the pinned images
+  the sandbox names, and Lantern; no pip. The website does not use it yet. Tests: `tests/test_runner.py` (31; the 6
+  that start the program as its machine does run in CI's second pass as root), `tools/runner_image.py` (8 cases
+  against the built image, each on a machine of its own, in CI's new `runner-image` job).
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
   inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
   the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own

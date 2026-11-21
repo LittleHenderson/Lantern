@@ -3382,7 +3382,7 @@ def _map_pairs(data: dict, inner_root: str, repo: Path) -> dict:
 
 
 def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, backend: str | None = None,
-        cwd_rel: str = "", cancel=None, memory=None, offline: bool | None = None) -> Result:
+        cwd_rel: str = "", cancel=None, memory=None, offline: bool | None = None, given=None) -> Result:
     """Run the test command `words` for `repo` in the sandbox. Returns trace data for `trace.merge_trace` (`pairs`)
     plus `backend`, `language`, `traced`, `returncode`, `timed_out`, `over_memory` (the tests were stopped because
     they, with what they started, used more memory than `memory_limit`, the megabytes they had), `cancelled`,
@@ -3402,13 +3402,21 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
     are fetched first, in a step of their own, and the tests then run on exactly those (`off_network` says whether
     with the network off; `state: "fetched"`, every library with its version and fingerprint); offline (`offline`, else
     LANTERN_OFFLINE) nothing is fetched and the tests run on what this computer has (`"installed"`) or, when a
-    library the project names is not there, are not run (`Unavailable`); `"none"` for a project that names none."""
+    library the project names is not there, are not run (`Unavailable`); `"none"` for a project that names none.
+
+    `given`: the libraries another place fetched for this run before it began (`libraries.given`, the test machine's
+    program, `lantern.runner`): nothing is read of the project's own files about its libraries and nothing is
+    fetched; the tests run on exactly those, put where a fetch of the run's own puts them, and the result's
+    `libraries` is the record they came with. Not for a tests' container (ValueError)."""
     from . import libraries
     repo = Path(repo).resolve()
     language = check_command(words)
     backend = backend or backend_for(language)
     memory = memory_limit(memory)
-    found = libraries.plan(repo, language, words, cwd_rel, offline)   # `Unavailable`: the tests are not started
+    if given is not None and (backend == "docker" or given.language != language):
+        raise ValueError("libraries fetched before the run go to the restricted process, for tests of their language")
+    # `Unavailable`: the tests are not started
+    found = given if given is not None else libraries.plan(repo, language, words, cwd_rel, offline)
     me = _Going(cancel)
     with _LIVE_LOCK:
         _GOING.add(me)
@@ -3517,6 +3525,8 @@ def _fetched(plan, repo, app, root, cwd_rel, log, cancel, memory):
     None when the plan names none to fetch, None or the result of a run that was stopped while they were fetched)."""
     if plan is None or not plan.fetch:
         return None, None
+    if plan.given is not None:
+        return _given(plan, app, root, cwd_rel, log), None
     from . import libraries
     where = libraries.fetch(plan, repo, app, root, cwd_rel, log, cancel, memory)
     if where is not None:
@@ -3524,6 +3534,34 @@ def _fetched(plan, repo, app, root, cwd_rel, log, cancel, memory):
     log(_stopped("because it was asked to", plan.left, "every process the fetch started was ended"))
     return None, Result(pairs=[], returncode=None, timed_out=False, over_memory=False, output_tail="", _full="",
                         not_ended=list(plan.left), own_network=False)
+
+
+def _given(plan, app: Path, root: Path, cwd_rel: str, log) -> Path:
+    """The libraries another place fetched for this run (`libraries.given`), put where a fetch of the run's own puts
+    them: Python's in the run's folder (`libs`), JavaScript's as the copy's `node_modules`, in place of one the
+    project brought. Moved, and copied (links as links) only where they lie on another disk; handed to the tests'
+    user where Lantern is root, as what a fetch of the run's own writes is theirs. Returns the folder; raises
+    `NoLibraries` where they cannot be put there, and the tests are not run."""
+    target = root / "libs" if plan.language == "python" else (app / cwd_rel if cwd_rel else app) / "node_modules"
+    try:
+        if os.path.lexists(target) and not _rm(target):
+            raise NoLibraries("the copy's own node_modules folder could not be replaced")
+        try:
+            os.rename(plan.given, target)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            shutil.copytree(plan.given, target, symlinks=True)
+            _rm(plan.given)
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            _hand_over(target, 65534, 65534)
+    except OSError as e:
+        raise NoLibraries("the libraries fetched for this run could not be put beside the copy "
+                          f"({e.strerror or type(e).__name__})") from e
+    packages = plan.record.get("packages") if isinstance(plan.record.get("packages"), list) else []
+    log(f"sandbox: the tests run on the {len(packages)} librar{'y' if len(packages) == 1 else 'ies'} fetched for this "
+        "run before it began, each with its fingerprint in the record; nothing is fetched here")
+    return target
 
 
 def _tracer(hook: Path) -> Path:
@@ -3537,7 +3575,7 @@ def _tracer(hook: Path) -> Path:
 OWN_PYTHON = "py"       # the folder of a run's own Python, in the run's temp folder
 
 
-def _own_python(root: Path, libs: Path, app: Path, log) -> tuple[str, Path, Path] | None:
+def _own_python(root: Path, libs: Path, app: Path, log, was: str | None = None) -> tuple[str, Path, Path] | None:
     """A Python of the run's own, for tests that run on fetched libraries: (the program, its folder, the folder
     its installed libraries would be in), or None where it could not be made.
 
@@ -3588,7 +3626,7 @@ def _own_python(root: Path, libs: Path, app: Path, log) -> tuple[str, Path, Path
             "through their environment, so a Python they start and hand another environment would not find them")
         _rm(home)
         return None
-    _programs_run_by(libs, str(exe))
+    _programs_run_by(libs, str(exe), was)
     return str(exe), home, site
 
 
@@ -3671,14 +3709,15 @@ def _whole_python(home: Path, named: list[str], timeout: float = 120) -> str:
     return str(exe)
 
 
-def _runs_own_python(root: Path, libs: Path, app: Path, log,
-                     whole: bool = False) -> tuple[str, list[str], str | None] | None:
+def _runs_own_python(root: Path, libs: Path, app: Path, log, whole: bool = False,
+                     was: str | None = None) -> tuple[str, list[str], str | None] | None:
     """The Python of the run's own for tests on fetched libraries: (its program, the files it is made of that say
     where its libraries are, the folder of the environment it is or None for a whole Python), or None where none
     could be made (the guard then keeps to the fetched libraries for every Python handed the tests' environment).
     On Windows a whole Python (`_whole_python`), and where that cannot be made the older one (`_own_python`), whose
     line says what the bare name `python` then starts (`_own_python_words`). `whole`: a whole Python or none (the
-    tests are to run inside a wall of Windows' own, which can read no other)."""
+    tests are to run inside a wall of Windows' own, which can read no other). `was`: the Python that fetched the
+    libraries, where that is not the one that runs Lantern (`_programs_run_by`)."""
     if sys.platform == "win32":
         home = root / OWN_PYTHON
         src = app / "src"
@@ -3692,20 +3731,21 @@ def _runs_own_python(root: Path, libs: Path, app: Path, log,
             return exe, [exe, str(home / "Lib" / "site-packages" / "lantern.pth")], None
     if whole:
         return None
-    own = _own_python(root, libs, app, log)
+    own = _own_python(root, libs, app, log, was)
     if own is None:
         return None
     return own[0], [str(own[1] / "pyvenv.cfg"), str(own[2] / "lantern.pth")], str(own[1])
 
 
-def _programs_run_by(libs: Path, python: str) -> int:
+def _programs_run_by(libs: Path, python: str, was: str | None = None) -> int:
     """The command-line programs the fetched libraries brought (`libs/bin`) name, in their first line, the Python
     that fetched them, as pip writes it: the full path of the Python that runs Lantern. Have them name `python`
     (the run's own) instead, so that such a program runs on the fetched libraries whatever environment the test
     that starts it hands over. Only a plain file whose first line is exactly that line is rewritten, in place and
     never through a link; anything else is left as it is. Returns how many were rewritten. (Windows: a program is
-    an .exe that holds the path, and is left.)"""
-    was = b"#!" + os.fsencode(sys.executable) + b"\n"
+    an .exe that holds the path, and is left.) `was`: the Python that fetched them, where that is not the one that
+    runs Lantern (libraries fetched before the run, on another computer: `libraries.given`)."""
+    was = b"#!" + os.fsencode(was or sys.executable) + b"\n"
     if os.name != "posix" or any(c in python for c in "\n\r") or " " in python or len(python) > 120:
         return 0
     done = 0
@@ -3812,7 +3852,8 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         # Windows: every program of these tests inside a wall of Windows' own made for this run (`_walled`), on a
         # whole Python of the run's own, which the wall can read
         walled = theirs and _walled(language, True)
-        python, own = sys.executable, _runs_own_python(root, libs, app, log, whole=walled)
+        python, own = sys.executable, _runs_own_python(root, libs, app, log, whole=walled,
+                                                       was=getattr(plan, "fetched_with", "") or None)
         if walled and (own is None or own[2] is not None):
             raise Unavailable(NO_WALL_PYTHON)
         if own is not None:     # a Python of the run's own, where the only libraries are the fetched
