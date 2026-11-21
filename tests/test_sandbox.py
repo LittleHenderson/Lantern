@@ -32,6 +32,7 @@ def _docker_reason() -> str | None:
 
 
 DOCKER_SKIP = _docker_reason()
+WINDOWS = sys.platform == "win32"
 BACKENDS = ["subprocess", pytest.param("docker", marks=pytest.mark.skipif(DOCKER_SKIP is not None, reason=DOCKER_SKIP or ""))]
 
 PLANTED = '''
@@ -285,9 +286,13 @@ THE_WINDOWS_WAY = "import socket\nsocket.socketpair = socket._fallback_socketpai
 
 
 @pytest.mark.skipif(not hasattr(socket, "_fallback_socketpair"), reason="this Python has no such function to borrow")
-def test_an_event_loop_whose_socket_pair_is_made_the_windows_way_does_not_start_which_is_known_and_not_fixed(tmp_path):
+def test_an_event_loop_whose_socket_pair_is_made_the_windows_way_starts_on_windows_and_nowhere_else(tmp_path):
     """The defect of the test above, on every system: the pair is a listener on this computer and a connection to
-    it, the guard refuses the listener, and the loop never starts."""
+    it. Until stage 4 of a firm pass or fail the guard refused the listener everywhere and the loop never started.
+    On Windows, the one system where Python makes the pair that way, the guard now lets a listener of the program's
+    own through, at this computer's address and a port the system picks, and a connection to a port that only the
+    run's own programs hold, as Windows itself says; so the loop starts there. Elsewhere Python makes a real pair,
+    which is no listener, and a listener stays refused where the run has no network of its own."""
     r = _guard_alone(tmp_path, '''
         import asyncio, sys
         assert sys.lantern_sandbox_guard == "on"
@@ -295,13 +300,20 @@ def test_an_event_loop_whose_socket_pair_is_made_the_windows_way_does_not_start_
             return "ran"
         print(asyncio.run(main()))
     ''', first=THE_WINDOWS_WAY)
-    assert r.returncode != 0 and "ran" not in r.stdout, r.stdout
-    assert "PermissionError" in r.stderr and sandbox.MARK + " network bind" in r.stderr, r.stderr[-2000:]
+    if WINDOWS:
+        assert r.returncode == 0 and r.stdout.splitlines() == ["ran"], r.stdout + r.stderr[-2000:]
+        assert sandbox.MARK not in r.stderr, r.stderr[-2000:]
+    else:
+        assert r.returncode != 0 and "ran" not in r.stdout, r.stdout
+        assert "PermissionError" in r.stderr and sandbox.MARK + " network bind" in r.stderr, r.stderr[-2000:]
 
 
 def test_the_guard_refuses_every_listener_and_every_connection_on_this_computer_too(tmp_path):
     """Nothing on this computer is let through either: another program's listener, a listener of the program's own
-    (at a port the system picks or one it picked, at one address or at all of them), and sending without connecting."""
+    (at a port the system picks or one it picked, at one address or at all of them), and sending without connecting.
+    On Windows (stage 4 of a firm pass or fail) a listener of the program's own at this computer's address and a port
+    the system picks is let through, which is what Python's event loop is made of there; everything else stays
+    refused there too (`tests/test_sandbox_windows.py`: what such a listener may and may not be reached by)."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as somebody_else:
         somebody_else.bind(("127.0.0.1", 0))
         somebody_else.listen()
@@ -315,7 +327,7 @@ def test_the_guard_refuses_every_listener_and_every_connection_on_this_computer_
                 except PermissionError as e:
                     print("refused:", what)
                 else:
-                    print("ALLOWED:", what)
+                    print("let through:", what)
             def connect(to):
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(5)
@@ -335,8 +347,9 @@ def test_the_guard_refuses_every_listener_and_every_connection_on_this_computer_
         ''', str(somebody_else.getsockname()[1]))
         with pytest.raises(BlockingIOError):
             somebody_else.accept()                      # nobody came
+    own = "let through" if WINDOWS else "refused"
     assert r.stdout.splitlines() == [
-        "refused: another program's listener", "refused: a listener of its own", "refused: a port it picked",
+        "refused: another program's listener", own + ": a listener of its own", "refused: a port it picked",
         "refused: every address at once", "refused: every address at once, unnamed",
         "refused: sending without connecting"], r.stdout + r.stderr[-2000:]
 

@@ -26,6 +26,7 @@ from test_sandbox import BACKENDS, _guard_alone, _tiny
 from lantern import _jail, sandbox
 
 PYTEST = ["python", "-m", "pytest", "-q", "-s", "-p", "no:randomly"]
+WINDOWS = sys.platform == "win32"
 def QUIET(line):
     """A log nobody reads."""
 
@@ -173,6 +174,15 @@ def test_tests_that_start_a_server_on_their_own_computer_run(backend, tmp_path):
     lines = []
     r = sandbox.run(_tiny(tmp_path / "tiny", SERVER), PYTEST, log=lines.append, backend=backend, timeout=180)
     out = r["output_tail"]
+    if not _own(backend) and WINDOWS:
+        # Windows makes no network of the run's own. Since stage 4 of a firm pass or fail a listener of the run's
+        # own at this computer's address and a port the system picks is let through there, and so is a connection
+        # to a port that only the run's programs hold, as Windows itself says (`tests/test_sandbox_windows.py`); a
+        # listener at every address of the computer stays refused, and is written down
+        assert r["own_network"] is False and r["returncode"] == 1, out
+        assert _failed(out) == {"test_a_server_on_every_address_of_this_computer_answers"}, out
+        assert r["blocked"] == [{"kind": "network", "what": "network bind ('', 0)"}], r["blocked"]
+        return
     if not _own(backend):
         # nothing changed here: every one of them is refused, and the reasons are written down
         assert r["own_network"] is False and r["returncode"] == 1, out
@@ -218,13 +228,14 @@ def test_the_twin_that_reaches_outside_is_still_refused_and_written_down(backend
     r = sandbox.run(_tiny(tmp_path / "tiny", TWIN), PYTEST, log=QUIET, backend=backend, timeout=180)
     out = r["output_tail"]
     assert r["returncode"] == 1, out
-    assert _failed(out) == OUTSIDE | (set() if _own(backend) else {"test_it_talks_to_itself"}), out
+    talks = _own(backend) or WINDOWS     # on Windows by the run's own sockets (stage 4 of a firm pass or fail)
+    assert _failed(out) == OUTSIDE | (set() if talks else {"test_it_talks_to_itself"}), out
     assert {b["kind"] for b in r["blocked"]} == {"network"}, r["blocked"]
     what = [b["what"] for b in r["blocked"]]
     datagram = _datagram_line(backend)
     for tried in ("network connect ('192.0.2.1', 80)", datagram, "network lookup 'example.invalid'"):
         assert tried is None or tried in what, what
-    if _own(backend):                # and nothing else was refused: the test that talks to itself left no line
+    if talks:                        # and nothing else was refused: the test that talks to itself left no line
         assert len(what) == (2 if datagram is None else 3), what
 
 
@@ -532,10 +543,13 @@ LISTEN_AND_CALL = '''
 
 def test_the_guard_lets_this_computer_through_only_in_a_network_the_launcher_made(tmp_path):
     """The launcher names the network it made (its number in the kernel) and the guard looks for itself: a name
-    that is not this process's network changes nothing, and neither does a word without a number, or no word."""
+    that is not this process's network changes nothing, and neither does a word without a number, or no word.
+    Windows makes no such network: there a listener of the program's own and a call to it are let through
+    whatever is said (stage 4 of a firm pass or fail), and a computer outside stays refused."""
+    own = "allowed" if WINDOWS else "refused"
     for said in (None, "", "own", "own:1", "own:" + _inode() + "0", "yes", "container:" + _inode()):
         r = _guard_alone(tmp_path, LISTEN_AND_CALL, net=said)
-        assert r.stdout.splitlines() == ["refused: a listener of its own", "refused: a computer outside"], (said, r.stdout, r.stderr[-800:])
+        assert r.stdout.splitlines() == [own + ": a listener of its own", "refused: a computer outside"], (said, r.stdout, r.stderr[-800:])
 
 
 ADDRESSES = '''

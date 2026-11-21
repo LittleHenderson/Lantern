@@ -595,6 +595,38 @@ def test_the_networks_shares_are_out_of_reach_and_named(tmp_path):
     assert any("localhost" in what for what in named), r["blocked"]
 
 
+# More ways a program reaches a share: a library loaded from it, the current folder moved there, how much room its
+# disk has, and whether a file is there, which only answers yes or no: the box answers no, and says what was asked.
+SHARES_MORE = TRIES + '''
+import ctypes, os, shutil
+
+def answered(what, answer):
+    say(what, "refused" if answer is False else "done")
+
+def test_more_ways_a_program_reaches_for_a_share():
+    share = OUT["share"]
+    tried("a library loaded from a share", lambda: ctypes.CDLL(share + "\\\\lib.dll"))
+    tried("the current folder moved to a share", lambda: os.chdir(share + "\\\\in"))
+    tried("the room on a share's disk", lambda: shutil.disk_usage(share + "\\\\disk"))
+    answered("whether a file is on a share", os.path.exists(share + "\\\\there.txt"))
+    answered("whether a folder is on a share", os.path.isdir(share + "\\\\folder"))
+'''
+SHARE_MORE = ("a library loaded from a share", "the current folder moved to a share", "the room on a share's disk",
+              "whether a file is on a share", "whether a folder is on a share")
+
+
+@ONLY_WINDOWS
+def test_more_ways_to_the_networks_shares_are_out_of_reach_and_named(tmp_path):
+    with _Outside() as outside:
+        r, lines = _box(_project(tmp_path / "shares", SHARES_MORE, outside.where()))
+    said = _said(lines)
+    assert sorted(said) == sorted(SHARE_MORE), (said, r["output_tail"])
+    assert {said[what] for what in SHARE_MORE} == {"refused"}, said
+    named = _named(r)
+    for part in ("lib.dll", "in", "disk", "there.txt", "folder"):
+        assert any(what.split(" (", 1)[0].endswith("\\" + part) for what in named), (part, r["blocked"])
+
+
 def test_a_file_is_not_handed_to_another_program_to_open(tmp_path):
     """`os.startfile` hands a file or an address to whatever program this computer opens it with, a browser for an
     address, and that program is none of the run's. Python tells its hooks before it hands anything over; the event
@@ -603,7 +635,8 @@ def test_a_file_is_not_handed_to_another_program_to_open(tmp_path):
         import sys
         assert sys.lantern_sandbox_guard == "on"
         for event, args in (("os.startfile", ("https://192.0.2.1/", None)),
-                            ("os.startfile/2", ("https://192.0.2.1/", None, None, None, 1))):
+                            ("os.startfile/2", ("https://192.0.2.1/", None, None, None, 1)),
+                            ("webbrowser.open", ("https://192.0.2.1/page",))):
             try:
                 sys.audit(event, *args)
             except PermissionError:
@@ -611,8 +644,234 @@ def test_a_file_is_not_handed_to_another_program_to_open(tmp_path):
             else:
                 print("let through:", event)
     ''')
-    assert r.stdout.splitlines() == ["refused: os.startfile", "refused: os.startfile/2"], r.stdout + r.stderr[-2000:]
+    assert r.stdout.splitlines() == ["refused: os.startfile", "refused: os.startfile/2", "refused: webbrowser.open"], \
+        r.stdout + r.stderr[-2000:]
     assert sandbox.MARK + " network" in r.stderr and "192.0.2.1" in r.stderr, r.stderr[-2000:]
+    assert sandbox.MARK + " network browser 'https://192.0.2.1/page'" in r.stderr, r.stderr[-2000:]
+
+
+def test_the_settings_of_another_computer_are_not_asked_for(tmp_path):
+    """`winreg.ConnectRegistry` asks another computer for its settings over the network; this computer's own (no
+    computer named) are the run's to read. The event is raised by hand, so that nothing is asked of any computer."""
+    r = _guard_alone(tmp_path, '''
+        import sys
+        HKEY_LOCAL_MACHINE = 0x80000002
+        for what, computer in (("another computer's", "\\\\\\\\192.0.2.1"), ("this computer's own", None),
+                               ("this computer's own, named by nothing", "")):
+            try:
+                sys.audit("winreg.ConnectRegistry", computer, HKEY_LOCAL_MACHINE)
+            except PermissionError:
+                print("refused:", what)
+            else:
+                print("let through:", what)
+    ''')
+    assert r.stdout.splitlines() == ["refused: another computer's", "let through: this computer's own",
+                                     "let through: this computer's own, named by nothing"], r.stdout + r.stderr[-2000:]
+    assert r.stderr.count(sandbox.MARK) == 1 and "network registry of" in r.stderr, r.stderr[-2000:]
+
+
+# ------------------------------------------------------------------------------- the guard's reading of a name
+def test_a_name_of_a_class_of_its_own_is_read_as_the_system_reads_it(tmp_path):
+    """A name the system is handed is read through a plain copy (2026-11-20): a text of a class of its own can
+    answer anything for itself (a part of it, where it starts, what it equals), and the system reads the letters it
+    holds. Until then the guard asked the name itself how to read it, so a name that answered as a file of the
+    program's own room while its letters named a file outside was written where its letters said, wherever no wall
+    of the kernel stands behind the guard (macOS, Windows, a Linux without Landlock)."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    r = _guard_alone(tmp_path, '''
+        import os, sys
+        room, far = os.getcwd(), sys.argv[1]
+        inside = os.path.join(room, "mine.txt")
+        def as_inside(method):
+            return lambda self, *a, **k: getattr(str, method)(inside, *a, **k)
+        # every answer it gives about itself is about a file of the room; its letters are another file's
+        Liar = type("Liar", (str,), {m: as_inside(m) for m in (
+            "__getitem__", "__eq__", "__ne__", "__hash__", "__len__", "__iter__", "__contains__", "__str__",
+            "partition", "rpartition", "split", "rsplit", "startswith", "endswith", "upper", "lower", "casefold",
+            "strip", "lstrip", "rstrip", "replace", "find", "rfind", "index", "rindex", "count", "encode",
+            "removeprefix", "removesuffix", "isascii", "title")})
+        class Plain(str):
+            pass
+        def tried(what, do):
+            try:
+                do()
+            except PermissionError:
+                print("refused:", what)
+            else:
+                print("written:", what)
+        def write(name):
+            with open(name, "w", encoding="utf-8") as f:
+                f.write("x")
+        tried("a name of a class of its own that answers for a file of its room", lambda: write(Liar(far)))
+        tried("a name of a class of its own that answers for itself, in its room", lambda: write(Plain(inside)))
+    ''', str(outside / "theirs.txt"))
+    assert r.stdout.splitlines() == ["refused: a name of a class of its own that answers for a file of its room",
+                                     "written: a name of a class of its own that answers for itself, in its room"], \
+        r.stdout + r.stderr[-2000:]
+    assert not (outside / "theirs.txt").exists()
+    assert (tmp_path / "room" / "mine.txt").read_text(encoding="utf-8") == "x"
+
+
+def test_a_database_named_as_an_address_is_read_as_the_database_reads_it(tmp_path):
+    """A database name written as an address (`file:...`, which SQLite reads as one where it is told to) is read
+    the way SQLite reads it (2026-11-20): each %HH as the letter it stands for, and a database in memory only where
+    every `mode` it gives says so. Until then it was read by its text: `%2E%2E` as a folder of that name inside the
+    program's room, where SQLite goes one folder up, and `xmode=memory` as a database in memory, where SQLite does
+    not know the word and opens the file. Twins: a file of its own written with %HH, and a database in memory."""
+    import sqlite3
+    theirs = tmp_path / "theirs.db"
+    with sqlite3.connect(theirs) as conn:
+        conn.execute("CREATE TABLE notes (text)")
+        conn.execute("INSERT INTO notes VALUES ('kept')")
+    conn.close()
+    r = _guard_alone(tmp_path, '''
+        import sqlite3
+        def tried(what, name):
+            try:
+                conn = sqlite3.connect(name, uri=True)
+                conn.execute("CREATE TABLE IF NOT EXISTS t (x)")
+                conn.commit()
+                conn.close()
+            except PermissionError:
+                print("refused:", what)
+            else:
+                print("opened:", what)
+        tried("one folder up, written with %HH", "file:%2E%2E/theirs.db")
+        tried("one folder up, with a word that only looks like the memory's", "file:%2E%2E/theirs.db?xmode=memory")
+        tried("one folder up, a word for the memory written with %HH", "file:%2E%2E/theirs.db?mode=%6Demory&mode=rw")
+        tried("its own, written with %HH", "file:mine%2Edb")
+        tried("one in memory", "file:scratch?mode=memory&cache=shared")
+        tried("one in memory, the word written with %HH", "file:scratch2?mode=%6Demory")
+    ''')
+    assert r.stdout.splitlines() == [
+        "refused: one folder up, written with %HH", "refused: one folder up, with a word that only looks like the memory's",
+        "refused: one folder up, a word for the memory written with %HH", "opened: its own, written with %HH",
+        "opened: one in memory", "opened: one in memory, the word written with %HH"], r.stdout + r.stderr[-2000:]
+    with sqlite3.connect(theirs) as conn:
+        assert conn.execute("SELECT name FROM sqlite_master").fetchall() == [("notes",)]
+    conn.close()
+    assert (tmp_path / "room" / "mine.db").exists()
+
+
+def test_a_copy_is_made_only_where_the_program_may_write(tmp_path):
+    """A copy is a write of the place it is made at, however it is made. On Windows `shutil.copy2` hands the copy
+    to the system (`_winapi.CopyFile2`, Python 3.12), and `open` is not told of it: until 2026-11-20 the guard did
+    not judge that call, and a copy was made outside the program's room. Twin: a copy in its own room."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    r = _guard_alone(tmp_path, '''
+        import os, shutil, sys
+        far = sys.argv[1]
+        with open("mine.txt", "w", encoding="utf-8") as f:
+            f.write("mine")
+        def tried(what, do):
+            try:
+                do()
+            except PermissionError:
+                print("refused:", what)
+            else:
+                print("made:", what)
+        tried("a copy outside", lambda: shutil.copy2("mine.txt", os.path.join(far, "copy.txt")))
+        tried("a copy into a folder outside", lambda: shutil.copy2("mine.txt", far))
+        tried("a copy of its own", lambda: shutil.copy2("mine.txt", "copy.txt"))
+    ''', str(outside))
+    assert r.stdout.splitlines() == ["refused: a copy outside", "refused: a copy into a folder outside",
+                                     "made: a copy of its own"], r.stdout + r.stderr[-2000:]
+    assert list(outside.iterdir()) == []
+    assert (tmp_path / "room" / "copy.txt").read_text(encoding="utf-8") == "mine"
+
+
+@ONLY_WINDOWS
+def test_a_junction_is_made_only_where_the_program_may_write_and_never_to_another_computer(tmp_path):
+    """A junction is a folder's second name, which Windows lets any program make. One made outside the program's
+    room is a write there; one that names a share would lead a later open of a file of the room to that computer.
+    Twin: a junction of its own room to a folder of its own."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    r = _guard_alone(tmp_path, '''
+        import os, sys, _winapi
+        far, share = sys.argv[1], sys.argv[2]
+        os.mkdir("inside")
+        here = os.path.abspath("inside")
+        def tried(what, do):
+            try:
+                do()
+            except PermissionError:
+                print("refused:", what)
+            else:
+                print("made:", what)
+        tried("a junction outside", lambda: _winapi.CreateJunction(here, os.path.join(far, "j")))
+        tried("a junction to another computer", lambda: _winapi.CreateJunction(share, os.path.abspath("j2")))
+        tried("a junction of its own", lambda: _winapi.CreateJunction(here, os.path.abspath("j3")))
+    ''', str(outside), SHARE)
+    assert r.stdout.splitlines() == ["refused: a junction outside", "refused: a junction to another computer",
+                                     "made: a junction of its own"], r.stdout + r.stderr[-2000:]
+    assert list(outside.iterdir()) == [] and not (tmp_path / "room" / "j2").exists()
+    assert (tmp_path / "room" / "j3").is_junction()
+
+
+@ONLY_WINDOWS
+def test_a_drive_letter_windows_gave_another_computer_is_that_computer(tmp_path):
+    """A share can be given a drive letter (`net use Q: \\\\computer\\share`); a file on that drive is then the
+    other computer's, and Windows reaches it over the network. Windows says which drives are another computer's
+    without asking the network, and the guard asks it. Its answer is stood in for here, so that no share is needed:
+    the guard asks the same question either way. Twin: a file of this computer's own disk, with Windows' own answer."""
+    r = _guard_alone(tmp_path, '''
+        import os, sys
+        import sitecustomize as guard
+        real = guard._LIB
+        assert real is not None and real[5](os.path.splitdrive(sys.executable)[0] + "\\\\") == 3   # DRIVE_FIXED
+        def tried(what, do):
+            try:
+                do()
+            except PermissionError:
+                print("refused:", what)
+            except OSError:
+                print("let through:", what)
+            else:
+                print("let through:", what)
+        guard._LIB = real[:5] + (lambda root: 4 if root[:1].upper() == "Q" else real[5](root),)
+        tried("a file on another computer's drive", lambda: open("Q:\\\\x.txt", "rb"))
+        tried("the same, the long way", lambda: open("\\\\\\\\?\\\\q:\\\\x.txt", "rb"))
+        tried("a folder on it, listed", lambda: os.listdir("Q:\\\\"))
+        tried("a file of this computer's own disk", lambda: open(sys.executable, "rb").close())
+        guard._LIB = real
+    ''')
+    assert r.stdout.splitlines() == ["refused: a file on another computer's drive", "refused: the same, the long way",
+                                     "refused: a folder on it, listed", "let through: a file of this computer's own disk"], \
+        r.stdout + r.stderr[-2000:]
+    assert "network share Q:" in r.stderr, r.stderr[-2000:]
+
+
+def test_another_computers_folders_are_left_off_the_tests_search_path_for_programs():
+    """On Windows a program named by its bare name is looked for in every folder of PATH, and for a folder of
+    another computer Windows asks that computer over the network, below anything the guard sees: such folders are
+    left off the tests' PATH. Read from the text and Windows' own word about a drive (stood in for here)."""
+    path = ";".join([r"C:\Python312", r"\\192.0.2.1\tools", "//192.0.2.1/more", r"\\?\UNC\192.0.2.1\s",
+                     r"Q:\bin", "", "bin", r"\\?\C:\Long", r"\\.\pipe\p"])
+    kept, left = sandbox._path_here(path, remote=lambda letter: letter.upper() == "Q", sep=";")
+    assert kept.split(";") == [r"C:\Python312", "", "bin", r"\\?\C:\Long"]
+    assert left == [r"\\192.0.2.1\tools", "//192.0.2.1/more", r"\\?\UNC\192.0.2.1\s", r"Q:\bin", r"\\.\pipe\p"]
+
+
+@ONLY_WINDOWS
+def test_a_link_of_the_project_to_another_computer_is_not_in_the_tests_copy(tmp_path):
+    """A test that opens a link of its project goes where the link leads, and the guard sees only the link's own
+    name, a file of the copy. A link that names another computer's place is therefore not copied, and the run's
+    log says so. Twin: a link to a file of the project stays a link."""
+    repo = tmp_path / "linked"
+    (repo / "data").mkdir(parents=True)
+    (repo / "data" / "mine.txt").write_text("mine", encoding="utf-8")
+    try:
+        os.symlink(SHARE + "\\x.txt", repo / "data" / "far.txt")
+        os.symlink("mine.txt", repo / "data" / "near.txt")
+    except OSError as e:          # a Windows that gives this user no right to make links (GitHub's machines do)
+        pytest.skip(f"this Windows lets this user make no link ({e})")
+    copy = tmp_path / "copy"
+    assert sandbox._copy(repo, copy) == [os.path.join("data", "far.txt")]
+    assert sorted(os.listdir(copy / "data")) == ["mine.txt", "near.txt"]
+    assert os.path.islink(copy / "data" / "near.txt") and (copy / "data" / "near.txt").read_text(encoding="utf-8") == "mine"
 
 
 # ---------------------------------------------------------------------------------------------- an app started

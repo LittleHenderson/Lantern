@@ -407,9 +407,10 @@ jobs:
           assert "LW-AUTH-MISSING" in rules, rules
 
   windows-box:
-    # The sealed box's tests for Windows alone, so that what the box lets a project's tests do here is known minutes in:
-    # GitHub hands out a job's log only once the job has ended, and the Windows job above takes about 50 minutes. That
-    # job runs these tests again with the whole suite.
+    # The sealed box's tests for Windows alone, and the older tests of what it lets a test do on this computer, so
+    # that what the box lets a project's tests do here is known minutes in: GitHub hands out a job's log only once
+    # the job has ended, and the Windows job above takes about 50 minutes. That job runs these tests again with the
+    # whole suite.
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -422,7 +423,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[scan,dev]"
-      - run: python -m pytest -q -rs tests/test_sandbox_windows.py
+      - run: >-
+          python -m pytest -q -rs tests/test_sandbox_windows.py
+          tests/test_sandbox.py::test_tests_that_use_an_event_loop_run
+          tests/test_sandbox.py::test_an_event_loop_whose_socket_pair_is_made_the_windows_way_starts_on_windows_and_nowhere_else
+          tests/test_sandbox.py::test_the_guard_refuses_every_listener_and_every_connection_on_this_computer_too
+          tests/test_sandbox_own_network.py::test_tests_that_start_a_server_on_their_own_computer_run
+          tests/test_sandbox_own_network.py::test_the_twin_that_reaches_outside_is_still_refused_and_written_down
+          tests/test_sandbox_own_network.py::test_the_guard_lets_this_computer_through_only_in_a_network_the_launcher_made
         timeout-minutes: 10
 
   macos:
