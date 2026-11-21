@@ -837,6 +837,42 @@ def _paid(g: Graph, routes: list[_Route], adj: dict) -> dict:
     return out
 
 
+def _first_app(code: _Code, notes: list) -> tuple[dict, dict, bool] | None:
+    """The app a first plan starts, and what it is started with: (where it is made, the plan's `app` and `state`,
+    whether a setting names the database's place), or None when no FastAPI app is made in the code."""
+    apps = _apps(code)
+    if not apps:
+        return None
+    app = apps[0]
+    cwd, module = _module(code, app["file"])
+    plan: dict = {"app": {"asgi": f"{module}:{app['name']}"}}
+    if app["factory"]:
+        plan["app"]["factory"] = True
+    if cwd:
+        plan["app"]["cwd"] = cwd
+    if len(apps) > 1:
+        notes.append(f"More than one app is made in the code. The plan starts the one in {app['file']} (line "
+                     f"{app['line']}); the others: " + ", ".join(f"{a['file']}:{a['line']}" for a in apps[1:6]) + ".")
+    env, state, have_db = _env(code, notes)
+    if env:
+        plan["app"]["env"] = env
+    if state:
+        plan["state"] = state
+    return app, plan, have_db
+
+
+def app_of(g: Graph) -> dict | None:
+    """The app of the project whose map is `g`, as `lantern behave` starts it and a first plan names it: {"file",
+    "line", "app": the plan's `app` (`asgi`, `factory`, `cwd`, `env`), "notes"}, or None when Lantern reads no
+    FastAPI app made in the code. Read like `draft`: nothing of the project is run."""
+    notes: list = []
+    found = _first_app(_Code(g), notes)
+    if found is None:
+        return None
+    app, plan, _ = found
+    return {"file": app["file"], "line": app["line"], "app": plan["app"], "notes": notes}
+
+
 def draft(repo, g: Graph | None = None) -> dict:
     """A first plan for the project at `repo`, from its map and its code. The answer holds `plan` (None when none
     can be written, with `why_not`), `review` (the cases a person should look at first, each with the reason),
@@ -849,28 +885,14 @@ def draft(repo, g: Graph | None = None) -> dict:
     if g is None:
         g = engine.build_graph(repo)
     code = _Code(g)
-    apps = _apps(code)
-    if not apps:
+    notes = out["notes"]
+    found = _first_app(code, notes)
+    if found is None:
         out["why_not"] = ("Lantern writes a first plan for a FastAPI app (the kind `lantern behave` starts), and found "
                           "none made in this project's code. For another kind of app the plan is written by hand: "
                           "docs/behaviour.md")
         return out
-    app = apps[0]
-    cwd, module = _module(code, app["file"])
-    plan: dict = {"app": {"asgi": f"{module}:{app['name']}"}}
-    if app["factory"]:
-        plan["app"]["factory"] = True
-    if cwd:
-        plan["app"]["cwd"] = cwd
-    notes = out["notes"]
-    if len(apps) > 1:
-        notes.append(f"More than one app is made in the code. The plan starts the one in {app['file']} (line "
-                     f"{app['line']}); the others: " + ", ".join(f"{a['file']}:{a['line']}" for a in apps[1:6]) + ".")
-    env, state, have_db = _env(code, notes)
-    if env:
-        plan["app"]["env"] = env
-    if state:
-        plan["state"] = state
+    app, plan, have_db = found
     if not have_db:
         at = _written_database(code)
         if at:

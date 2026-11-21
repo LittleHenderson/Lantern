@@ -2,8 +2,9 @@
 
 **Status (2026-11-21, a firm pass or fail, stage 5):** this page was written before the checks were built, as the
 contract they are built to. Each check below has a broken example and a safe twin in `tests/browse_sites.py`, and
-`tests/test_browse.py` holds the checks to this page. Until they are built every check comes out `not-run` with the
-reason `not-built`, and nothing else in Lantern reads the record.
+`tests/test_browse.py` holds the checks to this page. The checks are built for Linux; on the other systems every check
+comes out `not-run` with the reason `not-built` until the browser is driven there too, and nothing else in Lantern
+reads the record yet.
 
 `lantern analyze` reads the code. The browser checks open the project's own site in a real browser and say what
 happened there: pages that do not open, errors in the page's own script, links and buttons that lead nowhere, forms
@@ -24,10 +25,12 @@ browser could be used.
 * An app is started in the sealed box, the way `lantern behave` starts one: on a copy of the project, with no
   network, and its data is thrown away with the run. Plain pages are served from the project's folder by Lantern's own
   code, which hands out the project's own files only (a link that leads out of the project is not followed).
-* The browser's one way out is a door of Lantern's own on this computer. It answers the site's address from the site,
-  refuses everything else and writes down what each page asked for. No program listens at the site's address: it is
-  `http://localhost:<port>`, which a browser treats as a secure place, so the pages work as they do when the
-  developer opens them.
+* Every request a page makes is stopped inside the browser before it leaves. One for the site's address is answered
+  by Lantern from the site, through the pipe below; any other is refused there and written down with the page that
+  made it. No program listens at the site's address: it is `http://localhost:<port>`, which a browser treats as a
+  secure place, so the pages work as they do when the developer opens them.
+* The browser's one way out is a door of Lantern's own on this computer that forwards nothing: what reaches it (what
+  the browser asks for itself, not its pages) is refused and written down too.
 * The browser gets a profile of the run's own, empty, removed afterwards: none of the person's own sign-ins, cookies
   or history is in it.
 * The browser keeps its own sandbox. Lantern never starts it with that sandbox switched off; where the browser cannot
@@ -153,9 +156,10 @@ Codes: `no-name`, `no-label`, `not-reached`, `no-focus-ring`, `trapped`.
   for, the answer's status) and how the page was reached.
 * `inconclusive`: what was seen may come from something the run itself refused (only `script`).
 * `nothing-to-check`: the site has nothing of this kind (no form, no page that asks for a sign-in), with why.
-* `not-run`, with the reason: `not-built`, `no-browser` (no browser Lantern can drive was found), `no-browser-sandbox`,
-  `no-site` (nothing to open), `not-started` (the app could not be started in the sealed box), `no-sandbox` (the sealed
-  box cannot be set up here), `hosting-unknown` (only `protections`).
+* `not-run`, with the reason: `not-built` (not built for this system yet), `no-browser` (no browser Lantern can drive
+  was found), `no-browser-sandbox`, `browser-failed` (the browser stopped, or did not answer, before the pages were
+  looked at), `no-site` (nothing to open), `not-started` (the app could not be started in the sealed box), `no-sandbox`
+  (the sealed box cannot be set up here), `hosting-unknown` (only `protections`).
 
 Only `held` counts as held.
 
