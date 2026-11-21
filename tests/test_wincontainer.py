@@ -768,6 +768,21 @@ if __name__ == "__main__":
         facts["node_copy_datagram"] = program([node, "-e", NODE_DATAGRAM, str(given["udp_node"])], word=True)
         if given.get("npm_cli"):
             facts["npm_version"] = program([node, given["npm_cli"], "--version"], seconds=90, codes=True)
+            # npm as the sandbox starts it: its home, settings, cache and temp folder inside the run (`_env_base`),
+            # and the copy of Node first on PATH, so that the shell npm runs a script with finds it
+            home = os.path.join(given["tmp"], "home")
+            os.makedirs(home, exist_ok=True)
+            env = dict(os.environ, HOME=home, USERPROFILE=home, APPDATA=home, LOCALAPPDATA=home, TEMP=given["tmp"],
+                       TMP=given["tmp"], npm_config_cache=os.path.join(given["tmp"], "npm"),
+                       npm_config_update_notifier="false",
+                       PATH=os.path.dirname(node) + os.pathsep + os.environ.get("PATH", ""))
+            facts["npm_version_home"] = program([node, given["npm_cli"], "--version"], seconds=90, codes=True, env=env)
+            js = os.path.join(given["tmp"], "js")
+            os.makedirs(js, exist_ok=True)
+            with open(os.path.join(js, "package.json"), "w", encoding="utf-8") as f:
+                json.dump({"name": "probe", "version": "1.0.0", "scripts": {"test": "node -e \"console.log('t')\""}}, f)
+            facts["npm_test_home"] = program([node, given["npm_cli"], "test", "--silent"], seconds=90, word=True,
+                                             codes=True, env=env, cwd=js)
     # the pipes: Windows' answer to each kind of name, then what multiprocessing and the event loop do once every
     # name is put under the container's own part (as a guard inside it would put them)
     facts["pipe_plain"] = bounded(lambda: pipe_pair(PLAIN), 15)
@@ -803,7 +818,10 @@ REFUSED_PROGRAMS = {"curl_outside": None, "curl_file": None, "curl_other_listene
                     "node_copy_write": None}
 # Datagrams sent from the container to a socket of another program of this computer (`other_datagram`,
 # `own_address_datagram`, `node_copy_datagram`) are counted in `costs["reached"]` and written out with the rest.
-HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "npm_version")
+# npm with a home the run may not read (`npm_version`) is written out only: the sandbox gives the tests a home of
+# their own inside the run (`sandbox._env_base`)
+HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "npm_version_home", "npm_test_home")
+SAYS = {"node_copy_own_server": "ok", "npm_test_home": "t"}      # the one word each prints when it worked
 
 
 def _own_address() -> str:
@@ -1109,3 +1127,4 @@ def test_a_program_that_is_not_python_does_its_honest_work_in_the_container(trie
     if name not in facts:
         pytest.skip("Node is not installed on this computer" if name.startswith("node") else "Node came without npm")
     assert facts[name].get("ok"), facts[name]
+    assert facts[name].get("word") == SAYS[name] if name in SAYS else True, facts[name]
