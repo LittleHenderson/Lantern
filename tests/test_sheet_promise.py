@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from test_libraries import _online, _py_project, pystore  # noqa: F401  (pystore is a fixture)
 from test_sandbox_second_look import ABOVE, NO_DOORMAN, WHY, _system
 from test_server import call, srv, wait  # noqa: F401  (srv is a fixture)
 
@@ -38,6 +39,9 @@ SYSTEMS = {
 OTHER = SYSTEMS["macOS, Windows"][0]
 OWN = SYSTEMS["a network of the run's own"][0]
 OLDER = SYSTEMS["a kernel before that rule"][0]
+# Windows where it makes a wall of its own around a project's Python tests on the libraries fetched for them
+# (a firm pass or fail, stage 4, step 5: `sandbox.wall_here`, `sandbox.WALL_LINE`)
+WALLED = {"linux": False, "windows": True, "wall": True}
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -239,3 +243,66 @@ def test_the_command_line_says_what_its_sandbox_keeps_only_where_it_does(capsys)
     said = " ".join(capsys.readouterr().out.split())
     assert "--sandbox" in said and "no way out to the internet" not in said
     assert "where this system's sandbox holds them" in said, said
+
+
+# ---------------------------------------------------------------------------- Windows, where it makes a wall of its own
+def test_where_windows_makes_a_wall_the_sheet_asks_only_for_what_the_wall_does_not_hold(monkeypatch):
+    """A project's own Python tests on the libraries fetched for them run inside a wall of Windows' own made for
+    the run: every program they start is kept from the person's files and from connections to the internet by
+    Windows itself, so only what the wall does not close is asked about, in the wall's own words (`WALL_ASK`). Tests on this
+    computer's Python and tests that are not Python are not put inside it, and are asked about as before."""
+    _system(monkeypatch, **WALLED)
+    r = sandbox.reach("python", fetched=True)
+    assert (r["network"], r["files"]) == (PYTHON_ONLY, HELD), r
+    assert r["ask"] == sandbox.WALL_ASK and r["words"].endswith(r["ask"]), r
+    assert "Python code in the tests has no way out" in r["words"] and "Nothing leaves" not in r["words"], r
+    assert "read and change the files" not in r["ask"] and "not every way" in r["ask"], r
+    for language, fetched in (("python", False), ("node", True), ("go", True)):
+        other = sandbox.reach(language, fetched=fetched)
+        assert "wall" not in other["ask"] and "read and change the files" in other["ask"], (language, other)
+    _system(monkeypatch, **{**WALLED, "wall": False})       # the twin: the same Windows where no wall is made
+    r = sandbox.reach("python", fetched=True)
+    assert (r["network"], r["files"]) == (PYTHON_ONLY, PYTHON_ONLY) and "read and change the files" in r["ask"], r
+
+
+def test_where_windows_makes_a_wall_the_list_says_so_for_those_tests_alone(tmp_path, monkeypatch,
+                                                                          pystore):  # noqa: F811
+    _online(monkeypatch, python=pystore)
+    py = _py_project(tmp_path / "fetching")
+    js, _ = _projects(tmp_path)
+    _system(monkeypatch, **WALLED)
+    listed = sandbox.describe(py, "python")["details"]
+    assert sandbox.WALL_LINE in listed and sandbox.WALL_BESIDE in listed, listed
+    assert not any("is not kept from the network by this run" in line for line in listed), listed
+    for repo, language in ((js, "node"), (_projects_plain(tmp_path), "python")):
+        listed = sandbox.describe(repo, language)["details"]
+        assert sandbox.WALL_LINE not in listed and sandbox.WALL_BESIDE not in listed, (language, listed)
+
+
+def _projects_plain(tmp_path) -> Path:
+    """A Python project that names no library: its tests run on this computer's Python, outside the wall."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "test_it.py").write_text("def test_it():\n    pass\n", encoding="utf-8")
+    return plain
+
+
+def test_where_windows_makes_a_wall_the_app_asks_for_the_walls_sentence_before_such_tests(srv, tmp_path,  # noqa: F811
+                                                                                         monkeypatch, started,
+                                                                                         pystore):  # noqa: F811
+    """The sheet, the route and the terminal decide alike whether the libraries are fetched (`server.fetches`),
+    so the sentence the person agrees to is the one the run keeps."""
+    base, store = srv
+    _online(monkeypatch, python=pystore)
+    py = _py_project(tmp_path / "fetching")
+    pid = _added(base, py)
+    _system(monkeypatch, **WALLED)
+    code, d = call(base, f"/api/projects/{pid}/testcmd")
+    walled = sandbox.reach("python", fetched=True)
+    assert code == 200 and d["reach"]["ask"] == sandbox.WALL_ASK and d["leaves"] == walled["words"], d
+    trace = f"/api/projects/{pid}/trace"
+    for said in (sandbox.reach("python")["ask"], True):           # the sentence of a run outside the wall is none
+        code, e = call(base, trace, "POST", {"command": d["command"], "confirm": True, "reach": said})
+        assert code == 409 and sandbox.WALL_ASK in e["error"] and not started, e
+    code, j = call(base, trace, "POST", {"command": d["command"], "confirm": True, "reach": sandbox.WALL_ASK})
+    assert code == 202 and wait(base, j["id"])["status"] == "done" and len(started) == 1, j

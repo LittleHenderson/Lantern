@@ -9,7 +9,9 @@ read "tests failed" (found 2026-11-13 by running three such tests there: 3 of 3 
 Now a run on Linux has a `/dev/shm` of its own, empty, limited in size and gone with the run (a mount of its own,
 `lantern._jail._own_memory`), and its own names for the older kind of shared memory (System V), which outlives the
 program that made it. The dangerous twins: what another program of this computer keeps in the shared folder, or
-under such a name, is not there for the tests, and nothing the tests make is there afterwards."""
+under such a name, is not there for the tests, and nothing the tests make is there afterwards. On Windows, which
+keeps such memory by name and in no folder, the honest tests run under the guard too (since 2026-11-20; until then
+they were skipped there); the twins are Linux's."""
 import ctypes
 import json
 import os
@@ -23,7 +25,6 @@ import pytest
 from lantern import _jail, sandbox
 
 LINUX = sys.platform.startswith("linux")
-only_posix = pytest.mark.skipif(os.name != "posix", reason="process pools under the guard on Windows: stage 4 of this work")
 needs_shm = pytest.mark.skipif(not (LINUX and os.path.isdir("/dev/shm")), reason="needs Linux's /dev/shm")
 UNITTEST = ["python", "-m", "unittest", "-v"]
 
@@ -90,7 +91,6 @@ POOLS = '''
 '''
 
 
-@only_posix
 @pytest.mark.parametrize("can", [True, False], ids=["a memory folder of the run's own", "a system that makes none"])
 def test_tests_that_use_process_locks_pools_and_queues_run(tmp_path, monkeypatch, can):
     """The honest project: what passes at home passes in the sandbox, and nothing is said to have been refused.

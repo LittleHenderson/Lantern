@@ -43,17 +43,20 @@ needs_root = pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0,
 # ---------------------------------------------------------------------------- a stand-in for kernel32
 class Kernel32:
     """What `winjob` calls, answering as Windows does. `fail` names a call that fails (`code` is then what
-    GetLastError says); `threads` are (thread, owner process, suspend count) rows of the snapshot."""
+    GetLastError says); `threads` are (thread, owner process, suspend count) rows of the snapshot; `messages` are
+    what the job's port holds, in order (the numbers Windows hands as "bytes transferred")."""
 
-    def __init__(self, fail: str = "", code: int = 5, threads=((7001, 4242, 1), (7002, 9999, 0)), not_inside=False):
+    def __init__(self, fail: str = "", code: int = 5, threads=((7001, 4242, 1), (7002, 9999, 0)), not_inside=False,
+                 messages=()):
         self.fail, self.code, self.not_inside = fail, code, not_inside
         self.threads = [list(t) for t in threads]
+        self.messages = list(messages)
         self.calls: list[str] = []
         self.open: set[int] = set()
         self.closed: list[int] = []
         self.resumed: list[int] = []
         self.in_job: set[int] = set()
-        self.limits = None
+        self.limits: dict = {}
         self.active = 2
         self._next, self._at, self._error = 100, 0, 0
 
@@ -74,8 +77,34 @@ class Kernel32:
         return self._said("CreateJobObjectW", self._handle() if self.fail != "CreateJobObjectW" else 0)
 
     def SetInformationJobObject(self, job, kind, info, size):
-        self.limits = (kind, info._obj.Basic.LimitFlags, info._obj.ProcessMemoryLimit, size)
+        got = info._obj
+        assert size == ctypes.sizeof(got)
+        if kind == winjob.ASSOCIATE_PORT:
+            self.limits[kind] = got.CompletionPort
+        elif kind == winjob.EXTENDED_LIMIT:
+            self.limits[kind] = (got.Basic.LimitFlags, got.ProcessMemoryLimit, got.JobMemoryLimit)
+        elif kind == winjob.NOTIFICATION_LIMIT:
+            self.limits[kind] = (got.LimitFlags, got.JobMemoryLimit, got.RateControlTolerance,
+                                 got.RateControlToleranceInterval)
+        else:
+            raise AssertionError(f"a kind of job information winjob does not set: {kind}")
         return self._said("SetInformationJobObject", 1)
+
+    def CreateIoCompletionPort(self, file, existing, key, threads):
+        assert file == winjob.INVALID_HANDLE and existing is None
+        return self._said("CreateIoCompletionPort", self._handle() if self.fail != "CreateIoCompletionPort" else 0)
+
+    def GetQueuedCompletionStatus(self, port, what, key, where, wait):
+        assert wait == 0 and port in self.open                 # never waits, and only on the job's own port
+        self.calls.append("GetQueuedCompletionStatus")
+        if self.fail == "GetQueuedCompletionStatus":
+            self._error = self.code
+            return 0
+        if not self.messages:
+            where._obj.value, self._error = None, winjob.WAIT_TIMEOUT
+            return 0
+        what._obj.value, self._error = self.messages.pop(0), 0
+        return 1
 
     def OpenProcess(self, rights, inherit, pid):
         self.rights = rights
@@ -146,28 +175,36 @@ class Kernel32:
 def test_windows_job_makes_every_call_in_order_and_gives_every_handle_back():
     k = Kernel32()
     job = winjob.Job(k32=k)
-    assert k.limits == (winjob.EXTENDED_LIMIT, winjob.KILL_ON_JOB_CLOSE | winjob.PROCESS_MEMORY, 2 << 30,
-                        ctypes.sizeof(winjob.ExtendedLimits))
+    port = k.limits[winjob.ASSOCIATE_PORT]
+    assert port in k.open                                        # the job tells its own port, made for it
+    # the tests and everything they start, counted together: Windows tells the port above 2 GB and refuses above 4 GB
+    assert k.limits[winjob.EXTENDED_LIMIT] == (winjob.KILL_ON_JOB_CLOSE | winjob.JOB_MEMORY, 0, 4 << 30)
+    assert k.limits[winjob.NOTIFICATION_LIMIT] == (winjob.JOB_MEMORY, 2 << 30, winjob.TOLERANCE_LOW, winjob.TOLERANCE_LOW)
     job.take(4242)
     assert job.release(4242) == 1 and k.resumed == [7001]      # the process's own thread, not another program's
     assert job.count() == 2
+    assert job.over_memory() is False
     job.stop()
     assert job.count() == 0
     job.close()
     job.close()                                                  # a second close gives nothing back twice
-    assert k.calls == ["CreateJobObjectW", "SetInformationJobObject",
+    assert k.calls == ["CreateJobObjectW", "CreateIoCompletionPort", "SetInformationJobObject",
+                       "SetInformationJobObject", "SetInformationJobObject",
                        "OpenProcess", "AssignProcessToJobObject", "IsProcessInJob", "CloseHandle",
                        "CreateToolhelp32Snapshot", "Thread32First", "OpenThread", "ResumeThread", "CloseHandle",
                        "Thread32Next", "Thread32Next", "CloseHandle",
-                       "QueryInformationJobObject", "TerminateJobObject", "QueryInformationJobObject", "CloseHandle"]
-    assert k.open == set() and len(k.closed) == len(set(k.closed)) == 4   # process, thread, snapshot, job: once each
+                       "QueryInformationJobObject", "GetQueuedCompletionStatus", "TerminateJobObject",
+                       "QueryInformationJobObject", "GetQueuedCompletionStatus", "CloseHandle", "CloseHandle"]
+    # process, thread, snapshot, port, job: once each
+    assert k.open == set() and len(k.closed) == len(set(k.closed)) == 5 and port in k.closed
     assert k.rights == winjob.PROCESS_RIGHTS != 0x1F0FFF          # only what the calls need, not every right
 
 
-@pytest.mark.parametrize("call", ["CreateJobObjectW", "SetInformationJobObject", "OpenProcess",
-                                  "AssignProcessToJobObject", "IsProcessInJob", "CreateToolhelp32Snapshot",
-                                  "Thread32First", "OpenThread", "ResumeThread", "Thread32Next",
-                                  "TerminateJobObject", "QueryInformationJobObject"])
+@pytest.mark.parametrize("call", ["CreateJobObjectW", "CreateIoCompletionPort", "SetInformationJobObject",
+                                  "OpenProcess", "AssignProcessToJobObject", "IsProcessInJob",
+                                  "CreateToolhelp32Snapshot", "Thread32First", "OpenThread", "ResumeThread",
+                                  "Thread32Next", "GetQueuedCompletionStatus", "TerminateJobObject",
+                                  "QueryInformationJobObject"])
 def test_windows_job_a_call_that_fails_is_named_with_its_number_and_no_handle_is_left(call):
     k = Kernel32(fail=call, code=1314)
     job = None
@@ -175,12 +212,14 @@ def test_windows_job_a_call_that_fails_is_named_with_its_number_and_no_handle_is
         job = winjob.Job(k32=k)
         job.take(4242)
         job.release(4242)
+        job.over_memory()
         job.stop()
         job.count()
     assert e.value.call == call and e.value.code == 1314 and call in str(e.value) and "1314" in str(e.value)
     assert isinstance(e.value, OSError)
-    if call in ("CreateJobObjectW", "SetInformationJobObject", "OpenProcess", "AssignProcessToJobObject",
-                "IsProcessInJob", "CreateToolhelp32Snapshot", "Thread32First", "OpenThread"):
+    if call in ("CreateJobObjectW", "CreateIoCompletionPort", "SetInformationJobObject", "OpenProcess",
+                "AssignProcessToJobObject", "IsProcessInJob", "CreateToolhelp32Snapshot", "Thread32First",
+                "OpenThread"):
         assert k.resumed == []                                   # the process was never let run
     if job is not None:
         job.close()
@@ -216,8 +255,55 @@ def test_windows_structures_have_the_sizes_windows_gives_them():
     assert ctypes.sizeof(winjob.ExtendedLimits) == (144 if wide else 112)   # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
     assert ctypes.sizeof(winjob.Accounting) == 48                           # JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
     assert ctypes.sizeof(winjob.ThreadEntry) == 28                          # THREADENTRY32
+    assert ctypes.sizeof(winjob.NotificationLimits) == 48                   # JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION
+    assert ctypes.sizeof(winjob.PortLink) == (16 if wide else 8)            # JOBOBJECT_ASSOCIATE_COMPLETION_PORT
     assert winjob.ExtendedLimits.ProcessMemoryLimit.offset == (112 if wide else 96)
-    assert {name: kind for name, kind, _ in winjob._Kernel32.CALLS}["CreateJobObjectW"] is ctypes.c_void_p   # a whole handle
+    assert winjob.ExtendedLimits.JobMemoryLimit.offset == (120 if wide else 100)
+    assert winjob.NotificationLimits.JobMemoryLimit.offset == 24 and winjob.NotificationLimits.LimitFlags.offset == 40
+    calls = {name: kind for name, kind, _ in winjob._Kernel32.CALLS}
+    assert calls["CreateJobObjectW"] is calls["CreateIoCompletionPort"] is ctypes.c_void_p   # a whole handle
+
+
+def test_windows_job_the_wall_stands_well_above_the_limit():
+    """A program that asks for much at once is let have it up to the wall, so that Windows' message for the limit,
+    which it promises, is what stops the run, and not a refusal at the wall, whose message it does not promise."""
+    mb = 1 << 20
+    assert winjob.wall(128 * mb) == (128 + 1024) * mb and winjob.wall(256 * mb) == (256 + 1024) * mb
+    assert winjob.wall(1024 * mb) == 2048 * mb and winjob.wall(2 << 30) == 4 << 30 and winjob.wall(8 << 30) == 16 << 30
+
+
+@pytest.mark.parametrize("messages, over", [
+    ((), False),                                                     # the port holds nothing
+    ((6, 7, 6, 7, 4), False),                                        # programs that started and ended, none left
+    ((6, winjob.MSG_NOTIFICATION_LIMIT, 7), True),                   # over the limit: the message Windows promises
+    ((6, winjob.MSG_JOB_MEMORY_LIMIT), True),                        # refused at the wall
+    ((winjob.MSG_PROCESS_MEMORY_LIMIT,), True),
+    ((8, 1, 2, 3, 12, 13), False),                                   # other messages a job's port may be told
+])
+def test_windows_job_says_whether_windows_told_it_the_programs_went_over_their_memory(messages, over):
+    k = Kernel32(messages=messages)
+    job = winjob.Job(256 << 20, k32=k)
+    assert job.over_memory() is over and job.refused is over
+    if over:
+        assert job.over_memory() is True                           # once said, it stays said
+    else:
+        assert k.messages == []                                    # every message was read and taken off the port
+    job.close()
+    assert k.open == set()
+
+
+def test_windows_job_what_the_port_still_holds_when_the_job_is_closed_is_read():
+    """Windows may tell the port of the memory as the run ends by itself; the job is closed after that."""
+    k = Kernel32()
+    job = winjob.Job(k32=k)
+    assert job.over_memory() is False
+    k.messages = [7, winjob.MSG_NOTIFICATION_LIMIT]
+    job.close()
+    assert job.refused is True and k.open == set()
+    k = Kernel32(fail="GetQueuedCompletionStatus", code=6)
+    job = winjob.Job(k32=k)
+    job.close()                                                    # the handles go back whatever the port says
+    assert job.refused is False and k.open == set()
 
 
 # ---------------------------------------------------------------------------- a job that cannot hold the process
@@ -250,6 +336,30 @@ class HeldBy:
         self.did.append("close")
 
 
+class HeldOver(HeldBy):
+    """A job that says its programs went over their memory `after` seconds into the run (never, with None), or
+    that cannot say (`unread`), and `late` when it says so only as it is closed."""
+
+    def __init__(self, after: float | None = None, unread: bool = False, late: bool = False):
+        super().__init__()
+        self.after, self.unread, self.late, self.refused, self.began = after, unread, late, False, None
+
+    def release(self, pid):
+        super().release(pid)
+        self.began = time.monotonic()
+
+    def over_memory(self):
+        if self.unread:
+            raise winjob.JobError("GetQueuedCompletionStatus", 6)
+        if self.after is not None and time.monotonic() - self.began >= self.after:
+            self.refused = True
+        return self.refused
+
+    def close(self):
+        super().close()
+        self.refused = self.refused or self.late
+
+
 SLEEPER = [sys.executable, "-c", "import time; print('RAN', flush=True); time.sleep(60)"]
 
 
@@ -273,6 +383,44 @@ def test_a_job_that_holds_the_process_is_stopped_and_closed_once_when_the_comman
                                          lines.append, job=lambda: held)
     assert (rc, timed_out) == (0, False) and "RAN" in out          # the safe twin: a job that works runs the command
     assert held.did == ["take", "release", "stop", "close"]
+
+
+@stand_in_job
+def test_a_run_whose_job_says_it_went_over_its_memory_is_stopped_and_ends_with_the_launchers_number(tmp_path):
+    """As Linux's launcher stops such a run and ends with OVER_MEMORY; the twin is the same run under a job that
+    says nothing, which runs to its end, and the job that says it only as it is closed."""
+    held, lines = HeldOver(after=0.5), []
+    began = time.monotonic()
+    rc, out, timed_out = sandbox._stream(SLEEPER, tmp_path, dict(os.environ), 60, lines.append, job=lambda: held)
+    assert rc == _jail.OVER_MEMORY and timed_out is False and time.monotonic() - began < 30, (rc, lines)
+    assert "RAN" in out and held.did[-2:] == ["stop", "close"] and not _alive(held.pid)
+    held = HeldOver()
+    rc, out, timed_out = sandbox._stream([sys.executable, "-c", "print('RAN')"], tmp_path, dict(os.environ), 30,
+                                         lines.append, job=lambda: held)
+    assert (rc, timed_out) == (0, False) and "RAN" in out
+    held = HeldOver(late=True)
+    rc, out, timed_out = sandbox._stream([sys.executable, "-c", "print('RAN')"], tmp_path, dict(os.environ), 30,
+                                         lines.append, job=lambda: held)
+    assert (rc, timed_out) == (_jail.OVER_MEMORY, False)
+    # stopped at the wall clock first: the clock is why, said once, whatever the job says as it is closed
+    held = HeldOver(late=True)
+    rc, out, timed_out = sandbox._stream(SLEEPER, tmp_path, dict(os.environ), 1, lines.append, job=lambda: held)
+    assert (rc, timed_out) == (None, True) and held.refused is True
+    # a command that ends with that number by itself, under a job that says nothing, keeps its own number
+    held = HeldOver()
+    rc, out, timed_out = sandbox._stream([sys.executable, "-c", f"raise SystemExit({_jail.OVER_MEMORY})"], tmp_path,
+                                         dict(os.environ), 30, lines.append, job=lambda: held)
+    assert rc == _jail.OVER_MEMORY and held.refused is False
+
+
+@stand_in_job
+def test_a_run_whose_job_cannot_say_whether_it_stayed_within_its_memory_is_stopped_and_not_counted(tmp_path):
+    held, lines = HeldOver(unread=True), []
+    with pytest.raises(sandbox.Unavailable) as e:
+        sandbox._stream(SLEEPER, tmp_path, dict(os.environ), 60, lines.append, job=lambda: held)
+    assert "whether the tests stayed within their memory" in str(e.value) and "not counted" in str(e.value)
+    assert "GetQueuedCompletionStatus" in str(e.value) and held.did[-2:] == ["stop", "close"]
+    assert not _alive(held.pid) and not sandbox._LIVE
 
 
 @stand_in_job
@@ -1506,8 +1654,10 @@ def test_windows_no_test_runs_when_the_process_cannot_be_put_in_the_job(tmp_path
 
 @only_windows
 def test_windows_the_tests_run_inside_a_job_with_the_memory_limit(tmp_path):
-    """Asked of Windows from inside the tests: is this process in a job, what is the job's limit for each process,
-    and is 3 GB (more than the 2 GB a process there may have) refused."""
+    """Asked of Windows from inside the tests: is this process in a job, and what are the job's limits: the memory
+    of the tests and everything they start, counted together, of which Windows tells the job (its notification
+    limit: 2 GB), the wall well above it (4 GB), and no limit for each process alone. Nothing large is asked for:
+    a test over its limit is stopped (tests/test_sandbox_memory.py)."""
     repo = _project(tmp_path, '''
 import ctypes
 from ctypes import wintypes
@@ -1521,31 +1671,37 @@ class BASIC(ctypes.Structure):
                 ("g", wintypes.DWORD), ("h", wintypes.DWORD)]
 
 class EXT(ctypes.Structure):
-    _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t), ("j", ctypes.c_size_t),
-                ("k", ctypes.c_size_t), ("l", ctypes.c_size_t)]
+    _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t), ("k", ctypes.c_size_t), ("l", ctypes.c_size_t)]
+
+class TOLD(ctypes.Structure):
+    _fields_ = [("a", ctypes.c_uint64), ("b", ctypes.c_uint64), ("c", ctypes.c_int64),
+                ("JobMemoryLimit", ctypes.c_uint64), ("d", ctypes.c_int32), ("e", ctypes.c_int32),
+                ("LimitFlags", wintypes.DWORD)]
 
 def test_in_a_job():
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.GetCurrentProcess.restype = wintypes.HANDLE
     k32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
-    k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
+    k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                              ctypes.c_void_p]
     inside = wintypes.BOOL(0)
     assert k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(inside))
-    info = EXT()
+    info, told = EXT(), TOLD()
     assert k32.QueryInformationJobObject(None, 9, ctypes.byref(info), ctypes.sizeof(info), None), ctypes.get_last_error()
-    try:
-        big = bytearray(3 << 30)
-        took = "given" if len(big) else "empty"
-    except MemoryError:
-        took = "refused"
-    print("IN-JOB", inside.value, hex(info.Basic.LimitFlags), info.ProcessMemoryLimit, took, flush=True)
+    assert k32.QueryInformationJobObject(None, 12, ctypes.byref(told), ctypes.sizeof(told), None), ctypes.get_last_error()
+    print("IN-JOB", inside.value, hex(info.Basic.LimitFlags), info.ProcessMemoryLimit, info.JobMemoryLimit,
+          hex(told.LimitFlags), told.JobMemoryLimit, flush=True)
 ''')
     lines = []
     r = sandbox.run(repo, PYTEST, log=lines.append, backend="subprocess", timeout=120)
     said = next((x.split() for x in lines if x.startswith("IN-JOB")), None)
     assert r["returncode"] == 0 and said, r["output_tail"]
-    assert said[1] == "1" and said[4] == "refused", said
+    assert said[1] == "1", said
     if sys.prefix == sys.base_prefix:
         # the job Windows names from inside is the nearest one: Lantern's, unless this Python is a virtual
         # environment's, whose python.exe puts the real interpreter in a job of its own inside Lantern's
-        assert int(said[2], 16) & 0x2100 == 0x2100 and int(said[3]) == 2 << 30, said
+        flags, each, wall, told, limit = int(said[2], 16), int(said[3]), int(said[4]), int(said[5], 16), int(said[6])
+        assert flags & 0x2200 == 0x2200 and flags & 0x100 == 0 and each == 0, said    # none for each process alone
+        assert wall == winjob.wall(2 << 30) == 4 << 30, said
+        assert told & 0x200 == 0x200 and limit == 2 << 30, said

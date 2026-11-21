@@ -9,6 +9,67 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
+  inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
+  the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own
+  files and not the person's, reaches the tests' own servers and not another program's, and gets no connection to
+  another computer; the wall is granted the run's folders only and is deleted with the run. The guard inside it asks
+  the run's launcher, outside it, whose a port is, through a pipe that only programs of that wall may ask, because
+  Windows shows a program inside such a wall no table of this computer's ports. Where the wall cannot be made for such
+  tests, or no whole Python of the run's own can be, the tests are not started and the run says why. The sheet, the
+  log and the app say before the run what the wall holds and what it does not (not every way such a program could
+  send something out is closed), and such tests start only after the person's word on that; `run.json` says whether
+  the tests were inside it (`windows_wall`). Tests that are not Python, Python tests with no libraries fetched for
+  them, and apps started for the behaviour checks run as before (JavaScript test runners wait for ever inside such a
+  wall: Node makes the pipes through which it reads a program's output under names the wall refuses), and the sheet
+  goes on saying that their network and the person's files are not held there. Tests: `tests/test_sandbox_container.py`
+  (on Windows, each beside a twin it must not stop), `tests/test_wincontainer.py` (the wall, and the launcher's pipe
+  with stand-ins on every system), `tests/test_sheet_promise.py` (a pretend Windows that makes the wall).
+- Completing the guard's coverage on Windows: a Python that a project's tests start by the bare name `python` is the
+  run's own there, as on every other system. The Python of the run's own on Windows is now a whole Python
+  (`sandbox._whole_python`: a copy of this computer's Python without the libraries installed on it, 1,097 files,
+  made in 0.94 to 1.47 seconds in three tries on GitHub's Windows machine), and Windows looks for a program named
+  without its folder beside the program that asks before it looks in PATH, so that name finds the copy. Until then the Python
+  of the run's own there was a small program that starts the computer's Python (found 2026-11-14). Where no whole
+  Python can be made the older one stands, and the log says so and what the bare name then starts. The tests of
+  the six ways a test starts a second Python (`tests/test_libraries_run.py`) now say the same on Windows as
+  elsewhere and run in GitHub's quick Windows job; they failed there before this change. A fetched library's own
+  program on Windows is still the launcher pip wrote, which names the Python that fetched it.
+- What the first Windows run of the tests that make a link showed (2026-11-20): of 16 failures there, 10 tests asked Windows the wrong thing (a link written with `/`, which Windows cannot follow; the text Windows hands back for a link that names a full path; how Windows reads `..` after a link; git's read-only files; what the guard's own rule there lets a test reach), and the tests now make a link as Windows' own tools do (`tests/links_here.py`: `link`, `link_text`). Five were Lantern's, each fixed after its failing test there: the tests' copy of a project Lantern cloned got no links back on Windows; each is now made only where Linux's way of reading a link and Windows' own both keep it inside the project, as a link to a file or to a folder as Windows asks, and a link that goes round in a circle, one whose words Windows reads otherwise than git and every link where the computer lets Lantern make none stay small files, and the log says which and why. Lantern's store of earlier work reads an entry, and dates its own mark, only where nothing but a plain file stands at the name, where the system cannot open a name without going through a link at it. A write of a result file that does not end leaves a link at its place as it was there too. And the sheet and the log there no longer say that tests that start a server and call it fail: they say what the guard's own rule there lets through.
+- The memory a run of a project's tests gets is counted on Windows as on Linux: for the tests and everything they
+  start, together, and tests that use more are stopped and said to be so, which reads as Incomplete, never as failed
+  tests. The run's job (`lantern/winjob.py`) has a notification limit for the memory Windows has given its programs,
+  of which Windows promises to tell the job, and a wall at twice the limit (and at least 1 GB above it) for a program
+  that asks for very much at once. Windows counts memory a program asked for and never wrote, which Linux does not,
+  and the sheet says so. Until then the job's limit was for each process alone: programs over it only together ran
+  on, and a program over it alone was refused memory, so its tests read as failed, and the same project read Blocked
+  on Windows where it read Incomplete on Linux. The tests of the memory a run gets now run on Windows too
+  (`tests/test_sandbox_memory.py`, one more: memory asked for and never written), and the four tests of the real job
+  run in the quick Windows job.
+- Tests that were skipped on Windows, gone through one by one: 613 of the 648 tests skipped in main's last Windows run
+  were skipped there only, for 64 reasons. Tests that make a link now ask the system whether a link can be made
+  (`tests/links_here.py`: `needs_links`, `needs_pipes`, `needs_long_paths`) instead of skipping on every Windows, so
+  GitHub's Windows machines, whose user may make links, run them (16 files); one more test removes links of each kind
+  on every system; process pools and moving a file between a test's own folders are checked in the sandbox there; the
+  test of a push hook starts its line with the shell git uses on Windows. What stays skipped there is skipped for a
+  reason Windows itself gives (no pipe among its files, the Linux launcher and its kernel walls, Docker), listed in
+  `docs/audit/TEST_PLAN.md` ("Tests that do not run on every system").
+- Completing the guard's coverage on Windows: a project's async tests, its tests that start a server of their own and
+  call it, and the app `lantern behave` starts now run in the sandbox there, as at home. Windows gives the run no
+  network of its own, so the guard's own rule decides there: a test may listen at this computer's own address,
+  written as a number, at a port the system picks, and may connect or send only to a port that the run's own
+  programs hold, as Windows' own tables of this computer's sockets and the run's job say; the calls that the event
+  loop Windows uses by default makes, which Python tells no hook about, are judged where the loop makes them. A
+  file's name is read as Windows reads it before anything is opened, looked at or listed: only the run's own pipes,
+  no other computer by its name or by a drive letter, no device but NUL and the console (a refusal of the new kind
+  `device`, "a device of this computer" in the app). The launcher leaves another computer's folders off the tests'
+  PATH and a link of the project to another computer out of their copy. On every system nothing is handed to another
+  program to open, a name is read through a plain copy, and a database name written as an address is read the way
+  SQLite reads it. Until then every listener was refused on Windows, which stopped every event loop there (Python
+  builds a loop's socket pair there from a listener on this computer), and no app was started there
+  (`sandbox.NO_APPS`, now empty). Tests: `tests/test_sandbox_windows.py` (17, each beside twins that must stay
+  refused and be named); the behaviour checks' tests now run on Windows too. GitHub's job `windows-box` runs both
+  first.
 - Completing the separation of the website's steps, second part: only a small program of the website's image stays
   root. The image now starts its switcher (`cloud/lantern_cloud/switcher.py`), which starts the website's service as
   an ordinary user of its own (`app`, number 1000) and stays beside it; when the service asks, it gives a check its

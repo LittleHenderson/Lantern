@@ -25,12 +25,14 @@ import types
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 from test_sandbox_safety import PYTEST, QUIET, _project
 
 from lantern import removal, remote, sandbox
 
 ROOT = Path(sandbox.__file__).resolve().parent.parent
-only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (links, modes, folders held open)")
+POSIX = os.name == "posix"      # modes: a Windows file keeps only whether it is read-only
+only_posix = pytest.mark.skipif(not POSIX, reason="needs a POSIX system (modes, folders held open)")
 RUN = re.compile(r"run-[a-z0-9_]{8}")
 
 
@@ -105,23 +107,48 @@ def test_folders_with_every_right_taken_off_and_links_go_and_nothing_a_link_poin
         _rm_rf(root)
 
 
-@only_posix
+@needs_links
+def test_links_in_a_folder_go_as_links_and_nothing_they_point_at_is_touched(tmp_path):
+    """The test above on every system that lets this user make a link, without modes: on Windows a folder is
+    removed the standard library's way (`removal._by_path`), which that test does not reach."""
+    outside = tmp_path / "outside"
+    (outside / "inner").mkdir(parents=True)
+    (outside / "kept.txt").write_text("kept", encoding="utf-8")
+    (outside / "inner" / "deep.txt").write_text("deep", encoding="utf-8")
+    root = _tree(tmp_path / "made")
+    os.symlink(outside, root / "app" / "link-to-a-folder", target_is_directory=True)
+    os.symlink(outside / "kept.txt", root / "app" / "link-to-a-file")
+    os.symlink(tmp_path / "nothing-here", root / "app" / "link-to-nothing")
+    os.symlink(outside / "inner", root / "app" / "sub" / "link-further-down", target_is_directory=True)
+    if os.name == "nt":                                      # and the folder link every Windows user can make
+        import _winapi
+        _winapi.CreateJunction(str(outside / "inner"), str(root / "app" / "junction"))
+    assert removal.remove(root) is None and not os.path.lexists(root)
+    assert (outside / "kept.txt").read_text(encoding="utf-8") == "kept"
+    assert (outside / "inner" / "deep.txt").read_text(encoding="utf-8") == "deep"
+
+
+@needs_links
 def test_a_link_is_removed_as_a_link(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "kept.txt").write_text("kept", encoding="utf-8")
-    os.chmod(outside, 0o555)
     holder = tmp_path / "holder"
     holder.mkdir()
-    os.chmod(holder, 0o1777)
+    if POSIX:
+        os.chmod(outside, 0o555)
+        os.chmod(holder, 0o1777)
     link = holder / "made"
     os.symlink(outside, link)
     try:
         assert removal.remove(link) is None and not os.path.lexists(link)
-        assert _mode(outside) == 0o555 and (outside / "kept.txt").read_text(encoding="utf-8") == "kept"
-        assert _mode(holder) == 0o1777, "the mode of the folder that held the link was changed"
+        assert (outside / "kept.txt").read_text(encoding="utf-8") == "kept"
+        if POSIX:
+            assert _mode(outside) == 0o555, "the mode of what the link pointed at was changed"
+            assert _mode(holder) == 0o1777, "the mode of the folder that held the link was changed"
     finally:
-        os.chmod(outside, 0o755)
+        if POSIX:
+            os.chmod(outside, 0o755)
 
 
 def test_what_could_not_be_removed_is_said_without_a_name_from_inside(tmp_path, monkeypatch):
@@ -264,7 +291,7 @@ def test_only_a_real_folder_or_file_of_the_right_kind_is_lanterns(tmp_path):
     assert set(removal.WHY) >= {"name", "link", "kind", "owner"}
 
 
-@only_posix
+@needs_links
 def test_a_link_with_the_right_name_is_not_lanterns(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -277,7 +304,8 @@ def test_a_link_with_the_right_name_is_not_lanterns(tmp_path):
     assert removal.ours(tmp_path, "run-link2222", RUN) == "link"
 
 
-@only_posix
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="needs a POSIX system (user numbers; on Windows `ours` asks "
+                    "no owner)")
 def test_what_belongs_to_another_user_is_not_lanterns(tmp_path, monkeypatch):
     d = tmp_path / "run-abcd1234"
     d.mkdir()
@@ -337,7 +365,7 @@ def test_a_noted_place_that_now_holds_another_folder_is_left_alone(tmp_path):
     assert removal.noted() == []                                         # the note was about a folder that is gone from there
 
 
-@only_posix
+@needs_links
 def test_a_noted_place_that_now_holds_a_link_is_left_alone(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -425,18 +453,20 @@ def test_a_failed_copy_into_a_new_or_empty_folder_leaves_nothing(tmp_path):
         assert not dest.exists()
 
 
-@only_posix
+@needs_links
 def test_removing_a_clone_that_is_a_link_changes_nothing_it_points_at(tmp_path):
     shared = tmp_path / "shared"
     kept = shared / "kept"
     kept.mkdir(parents=True)
     (kept / "keep.txt").write_text("keep", encoding="utf-8")
-    os.chmod(kept, 0o755)
-    os.chmod(shared, 0o1777)
+    if POSIX:
+        os.chmod(kept, 0o755)
+        os.chmod(shared, 0o1777)
     link = shared / "clone"
     os.symlink(kept, link)
     assert remote.remove_tree(link) is None and not os.path.lexists(link)
-    assert _mode(kept) == 0o755 and _mode(shared) == 0o1777, "a mode outside the clone was changed"
+    if POSIX:
+        assert _mode(kept) == 0o755 and _mode(shared) == 0o1777, "a mode outside the clone was changed"
     assert (kept / "keep.txt").read_text(encoding="utf-8") == "keep"
 
 

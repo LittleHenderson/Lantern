@@ -406,6 +406,81 @@ jobs:
           rules = {f["rule"] for f in json.load(open(os.path.join(out, "security.json"), encoding="utf-8"))["findings"]}
           assert "LW-AUTH-MISSING" in rules, rules
 
+  windows-box:
+    # The sealed box's tests for Windows alone, the tests of the wall of Windows' own around a project's Python tests
+    # (tests/test_sandbox_container.py), the tests of such a container and of what Windows does in one
+    # (tests/test_wincontainer.py), the older tests of what the box lets a test
+    # do on this computer (its own servers and event loops, process pools, moving its files between its folders, the
+    # memory a run gets, the job that holds a run, the links of a project in the tests' copy), the tests of how
+    # Lantern meets a link where it reads or writes its own files, and the behaviour checks' tests, which start apps
+    # in the box, so that what the box lets a project's tests and apps do here is known minutes in: GitHub hands out
+    # a job's log only once the job has ended, and the Windows job above takes about 50 minutes. That job runs these
+    # tests again with the whole suite.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      PYTHONUTF8: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[scan,dev]"
+      - run: >-
+          python -m pytest -q -rs tests/test_sandbox_container.py tests/test_sandbox_windows.py
+          tests/test_wincontainer.py
+          tests/test_libraries_run.py::test_a_python_the_tests_start_themselves_runs_on_the_fetched_libraries_too
+          tests/test_libraries_run.py::test_where_no_whole_python_can_be_made_on_windows_the_older_one_stands_and_says_what_the_bare_name_starts
+          tests/test_libraries_run.py::test_where_no_python_of_the_runs_own_can_be_made_the_guard_still_keeps_to_the_fetched_libraries
+          tests/test_libraries_run.py::test_the_python_of_the_runs_own_is_not_the_tests_to_change
+          tests/test_sandbox.py::test_tests_that_use_an_event_loop_run
+          tests/test_sandbox.py::test_an_event_loop_whose_socket_pair_is_made_the_windows_way_starts_on_windows_and_nowhere_else
+          tests/test_sandbox.py::test_the_guard_refuses_every_listener_and_every_connection_on_this_computer_too
+          tests/test_sandbox_own_network.py::test_tests_that_start_a_server_on_their_own_computer_run
+          tests/test_sandbox_own_network.py::test_the_twin_that_reaches_outside_is_still_refused_and_written_down
+          tests/test_sandbox_own_network.py::test_the_guard_lets_this_computer_through_only_in_a_network_the_launcher_made
+          tests/test_sandbox_own_network.py::test_where_no_network_of_its_own_can_be_made_the_log_and_the_sheet_say_what_is_let_through
+          tests/test_sandbox_guards.py::test_the_twins_a_number_this_computer_and_what_is_no_name_go_down_as_before
+          tests/test_sandbox_guards.py::test_who_an_address_is_is_a_lookup_and_writing_it_out_is_none
+          tests/test_sandbox_shared_memory.py::test_tests_that_use_process_locks_pools_and_queues_run
+          tests/test_sandbox_second_look.py::test_tests_that_move_a_file_from_one_of_their_folders_to_another_run_as_they_do_at_home
+          tests/test_sandbox_second_look.py::test_the_twin_that_moves_a_file_out_of_its_folders_is_still_refused
+          tests/test_sandbox_second_look.py::test_lanterns_own_install_record_in_the_home_folder_is_not_a_read_the_tests_were_refused
+          tests/test_sandbox_second_look.py::test_the_sheet_does_not_say_the_network_is_closed_to_tests_that_nothing_keeps_from_it
+          tests/test_sandbox_second_look.py::test_on_windows_the_sheet_says_what_the_guards_own_rule_lets_through
+          tests/test_sandbox_second_look.py::test_the_twins_that_are_held_read_as_before
+          tests/test_sandbox_at_home.py
+          tests/test_gitfacts.py::test_a_link_in_place_of_git_data_is_not_followed
+          tests/test_gitfacts.py::test_a_junction_in_place_of_git_data_is_not_followed
+          tests/test_kept.py::test_an_entry_is_never_read_through_a_link
+          tests/test_kept.py::test_the_mark_of_the_last_tidy_up_is_never_made_or_dated_through_a_link
+          tests/test_links_out.py::test_a_notes_file_reached_through_a_folder_link_out_of_the_project_is_not_shown
+          tests/test_links_out.py::test_a_notes_file_of_the_project_is_shown_as_before
+          tests/test_links_out.py::test_the_quick_look_and_the_slow_look_agree
+          tests/test_links_out.py::test_a_clone_is_written_without_links
+          tests/test_links_out.py::test_a_clone_an_earlier_lantern_made_gets_no_new_link_when_it_is_updated
+          tests/test_links_out.py::test_a_cloned_repository_with_a_notes_link_shows_nothing_of_the_file
+          tests/test_project_files.py::test_the_sweeps_six_states
+          tests/test_results_folder.py::test_a_link_is_as_it_was_when_the_write_does_not_end
+          tests/test_sandbox_memory.py::test_the_sheet_says_the_memory_the_tests_will_have
+          tests/test_sandbox_memory.py::test_tests_that_reserve_far_more_space_than_they_use_run_as_they_do_at_home
+          tests/test_sandbox_memory.py::test_tests_that_use_more_memory_than_their_limit_are_stopped_and_it_is_said
+          tests/test_sandbox_memory.py::test_the_same_tests_under_their_limit_pass
+          tests/test_sandbox_memory.py::test_memory_asked_for_and_never_written_counts_on_windows_and_not_on_linux
+          tests/test_sandbox_memory.py::test_what_the_tests_started_counts_with_them
+          tests/test_sandbox_memory.py::test_the_same_programs_with_room_for_all_four_pass
+          tests/test_sandbox_memory.py::test_the_whole_check_on_tests_that_use_too_much_memory_is_incomplete_not_blocked
+          tests/test_sandbox_memory.py::test_tests_over_their_memory_limit_in_either_sandbox
+          tests/test_sandbox_safety.py::test_windows_the_tests_run_inside_a_job_with_the_memory_limit
+          tests/test_sandbox_safety.py::test_windows_the_real_job_ends_a_detached_grandchild_at_the_wall_clock
+          tests/test_sandbox_safety.py::test_windows_a_process_cannot_leave_the_job
+          tests/test_sandbox_safety.py::test_windows_no_test_runs_when_the_process_cannot_be_put_in_the_job
+          tests/test_hook.py::test_the_line_for_a_hook_of_ones_own_runs_this_lantern_too
+          tests/test_behave.py
+        timeout-minutes: 20
+
   macos:
     # macOS runs no other test of Lantern's. These are the ones whose answer the system itself gives: a name handed
     # straight to a socket and the question who an address is, under the sandbox's guard and under the guard of

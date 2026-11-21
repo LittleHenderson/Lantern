@@ -128,10 +128,12 @@ Other recorded misses and failures, kept on purpose:
 
 Full lists: `THREAT_MODEL.md` "Known open risks, ranked" and `CLAUDE.md` "Known gaps". The ones that matter most:
 
-1. **Windows:** in the sandbox no event loop starts under the Python guard, so async tests fail and `lantern behave`
-   starts no app. A program the tests start that is not Python (JavaScript tests included) is kept from nothing by
-   Lantern on Windows and macOS, the network included; the sheet and the log say so. A bare `python` started by a
-   test inside an environment the test made is the computer's own Python, with no guard. Found, not fixed.
+1. **Windows:** a program the tests start that is not Python (JavaScript tests included) is kept from nothing by
+   Lantern on Windows and macOS, the network included; the sheet and the log say so. Since 2026-11-20 a bare `python`
+   started by a test is the run's own there too (a whole Python of the run's own); a fetched library's own program
+   (`flask`) is the launcher pip wrote, which names the Python that fetched it. (Since 2026-11-20 async tests, a
+   test's own servers and the app `lantern behave` starts run in the sandbox there, each beside twins that must stay
+   refused and be named: `tests/test_sandbox_windows.py`.)
 2. **Linux kernels before 5.19:** a program interrupted by its own signals faster than the doorman answers gets its
    connections late or not at all; after 1,000 unanswered requests in a row the run says so and failing tests read
    "missing", fewer than that and they read "failed".

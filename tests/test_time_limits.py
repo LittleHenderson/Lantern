@@ -30,7 +30,7 @@ FAULTHANDLER = 900               # seconds a single test may run before every th
 SETUP = 20                       # minutes a job keeps for the steps without a limit of their own (measured: about 4)
 LATE_END = 60                    # seconds the runner takes, past its grace, to end what is left and write its record
 RUNS_TESTS = re.compile(r"\s-m pytest\b|^\s*(?:\w+=\S*\s+)*pytest\s|tools/audit\.sh", re.M)
-STEPS_THAT_RUN_TESTS = 9         # the four passes and the audit of the Linux jobs, Windows, macOS, the browsers, the wheel
+STEPS_THAT_RUN_TESTS = 10        # the four passes and the audit of the Linux jobs, Windows and its box alone, macOS, the browsers, the wheel
 
 
 def _jobs():

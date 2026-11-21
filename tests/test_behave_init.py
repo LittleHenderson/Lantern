@@ -13,10 +13,9 @@ import pytest
 from test_server import call, srv, wait  # noqa: F401  (srv: the app on 127.0.0.1 with its token)
 
 import lantern
-from lantern import behave, behave_init, cli, learn, sandbox
+from lantern import behave, behave_init, cli, learn
 
 ROOT = Path(__file__).resolve().parents[1]
-starts_an_app = pytest.mark.skipif(bool(sandbox.NO_APPS), reason=f"no app is started here: {sandbox.NO_APPS}")
 
 
 def _project(folder: Path, files: dict) -> Path:
@@ -1014,13 +1013,11 @@ def test_the_plan_for_the_notes_app_holds_one_case_for_each_thing_that_can_go_wr
         assert sorted(c["id"] for c in twin["plan"]["checks"]) == sorted(c["id"] for c in plan["checks"]), said
 
 
-@starts_an_app
 def test_the_plan_lantern_wrote_runs_as_it_is_and_every_case_holds_on_the_right_app(tmp_path):
     pytest.importorskip("fastapi")
     assert _run_as_written(tmp_path / "right", _pinboard()) == {case: ("held", []) for case in CASES}
 
 
-@starts_an_app
 @pytest.mark.parametrize("said", list(WRONG_IN_ONE_PART))
 def test_with_one_part_wrong_the_case_for_that_part_breaks_and_no_other(tmp_path, said):
     pytest.importorskip("fastapi")
@@ -1030,7 +1027,6 @@ def test_with_one_part_wrong_the_case_for_that_part_breaks_and_no_other(tmp_path
 
 
 # ------------------------------------------------------------------------------------------- the sample apps
-@starts_an_app
 @pytest.mark.parametrize("solved", [False, True])
 def test_the_starter_notes_app_gets_a_plan_that_runs_as_it_is(tmp_path, solved):
     pytest.importorskip("fastapi")
@@ -1097,7 +1093,6 @@ def test_a_run_that_differs_from_what_is_written_down_is_said_case_by_case():
         "the plan was not run: the app could not be started"]
 
 
-@starts_an_app
 @pytest.mark.parametrize("version", ["safe", "no-login-list", "refused-but-deleted", "limit-in-memory", "double-spend"])
 def test_the_plan_lantern_writes_for_the_benchmark_app_shows_what_was_written_down_before_its_first_run(tmp_path, version):
     """Five of the 34 versions (`python bench/behaviour/run_behaviour.py WORKDIR --first-plan` runs them all): the
@@ -1146,7 +1141,6 @@ def test_where_the_app_has_a_sign_out_a_change_is_held_half_way_while_it_is_used
     assert all(c["kind"] != "ended-midway" for c in _drafted(tmp_path / "without", {"pinboard.py": _pinboard()})["plan"]["checks"])
 
 
-@starts_an_app
 def test_a_note_added_for_a_sign_in_ended_half_way_breaks_and_one_checked_in_its_write_holds(tmp_path):
     pytest.importorskip("fastapi")
     got = _run_as_written(tmp_path / "before", _pinboard() + SIGN_OUT)

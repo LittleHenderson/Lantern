@@ -422,7 +422,9 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     tests: until then the real checkers were started only on the computer the pass was written on. Since 2026-11-18
     a fourth pass runs the website's tests of each check under a user of its own a second time, as root (only root
     can run a step as another user, so the first pass names them as skipped), through sudo like the second, and no
-    test may be skipped there either."""
+    test may be skipped there either. Since 2026-11-20 a Windows job of its own runs the sealed box's tests for
+    Windows alone, so that what the box does there is known minutes in (GitHub hands out a job's log only once the
+    job has ended), and the Windows job runs them again with the whole suite."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -432,7 +434,7 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
         assert all(" -rs" in line for line in mine), (path.name, mine)
         assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
         runs += [(path.name, line) for line in mine]
-    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 7, runs
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 8, runs
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
     first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network

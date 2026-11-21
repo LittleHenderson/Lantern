@@ -10,7 +10,6 @@ import os
 import pkgutil
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +18,7 @@ from lantern import evidence, remote, workspace
 from lantern.cli import main
 from lantern.engine import build_graph
 from lantern.graph import POSSIBLE, RESOLVED
+from links_here import PIPES, needs_links
 from test_server import call, srv, wait  # noqa: F401  (srv is a fixture)
 
 
@@ -248,7 +248,7 @@ def test_a_folder_of_that_name_that_lantern_did_not_make_is_never_replaced(two, 
     assert not os.path.lexists(workspace.folder_of("kept"))
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="a link needs a right Windows gives few users")
+@needs_links
 def test_a_record_that_is_a_link_is_not_read(two, tmp_path):
     web, api = two
     workspace.make([str(web), str(api)], name="linked")
@@ -264,14 +264,15 @@ def test_a_record_that_is_a_link_is_not_read(two, tmp_path):
 # ---------------------------------------------------------------------------------------- what a copy brings in
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="links and pipes need a POSIX system")
+@needs_links
 def test_a_member_is_copied_without_what_leads_out_of_it(two, tmp_path):
     web, api = two
     outside = _write(tmp_path / "outside", {"secret.txt": "not the project's\n"})
     os.symlink(outside / "secret.txt", web / "src" / "leak.txt")
     os.symlink(outside, web / "src" / "folder-out")
     os.symlink("api.ts", web / "src" / "again.ts")
-    os.mkfifo(web / "src" / "pipe")
+    if PIPES:                                                   # Windows has no pipe among its files
+        os.mkfifo(web / "src" / "pipe")
     _write(web, {".git/config": "[core]\n", ".lantern/security.json": "{}", "node_modules/x/index.js": "x\n"})
     rec = workspace.make([str(web), str(api)], name="copied")
     there = workspace.folder_of("copied") / "web"
@@ -280,7 +281,7 @@ def test_a_member_is_copied_without_what_leads_out_of_it(two, tmp_path):
     for gone in ("src/leak.txt", "src/folder-out", "src/pipe", ".git", ".lantern", "node_modules"):
         assert not os.path.lexists(there / gone), gone
     left = rec["members"][0]["left_out"]
-    assert left["link-out"] == 2 and left["kind"] == 1 and left["folder"] == 3
+    assert left["link-out"] == 2 and left.get("kind", 0) == (1 if PIPES else 0) and left["folder"] == 3
 
 
 def test_names_of_members(tmp_path):

@@ -23,9 +23,9 @@ import pytest
 
 from lantern import depaudit, programs, scanresult
 from lantern.scanresult import ToolRun
+from links_here import needs_links, needs_long_paths, needs_pipes
 
 needs_npm = pytest.mark.skipif(programs.find("npm") is None, reason="npm is not installed")
-only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links, pipes)")
 
 ADVISORY = {"id": 1100001, "url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc", "title": "Stand-in advisory",
             "severity": "high", "vulnerable_versions": "<=1.3.0", "cwe": ["CWE-400"],
@@ -628,8 +628,8 @@ def test_a_package_json_of_the_project_that_asks_for_folders_outside_is_not_copi
                               "so npm was not given it"]
 
 
-@only_posix
-@pytest.mark.parametrize("what", ["a link out of the project", "a pipe"])
+@needs_links
+@pytest.mark.parametrize("what", ["a link out of the project", pytest.param("a pipe", marks=needs_pipes)])
 def test_a_folders_package_json_that_is_not_a_file_of_the_project_is_not_copied(tmp_path, monkeypatch, what):
     npm = Started(monkeypatch)
     repo = project(tmp_path, {**WORKSPACES, "../next-door/package.json": NEXT_DOOR})
@@ -647,7 +647,7 @@ def test_a_folders_package_json_that_is_not_a_file_of_the_project_is_not_copied(
     assert info["errors"][0].endswith("so it was not read")
 
 
-@only_posix
+@needs_links
 def test_a_shrinkwrap_file_that_is_a_link_out_of_the_project_means_npm_is_not_started(tmp_path, monkeypatch):
     """npm would take it before the lock file: without it the copy would be audited for another lock file."""
     npm = Started(monkeypatch)
@@ -904,7 +904,7 @@ def test_a_folder_of_the_project_an_older_lock_file_names_is_copied(tmp_path, mo
     assert info["state"] == "ok" and npm.there("libs/x/package.json") == text(lib), info
 
 
-@pytest.mark.skipif(os.name == "nt", reason="a path this long needs a setting of its own on Windows")
+@needs_long_paths
 @pytest.mark.parametrize("case", ["a place refused", "a file not read", "a folder left out"])
 def test_what_the_record_says_of_a_file_with_a_long_path_keeps_the_reason(tmp_path, monkeypatch, case):
     """Of a long path the end is kept (the file's own name), so the reason is not what gets cut off."""

@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 from test_sandbox import BACKENDS
 
 from lantern import sandbox
@@ -215,7 +216,7 @@ def test_the_link_is_a_link_in_the_copy_too():
 '''
 
 
-@pytest.mark.skipif(os.name != "posix", reason="making a link needs a right of its own on Windows")
+@needs_links
 def test_a_link_out_of_the_project_is_not_followed_when_the_copy_is_handed_over(tmp_path):
     """The copy is handed to the user the tests run as (when Lantern is root) and never marked: neither goes
     through a link the project brought to a file or a folder outside it. (The tests are looked for in the project's

@@ -253,6 +253,7 @@ def _in_the_way(path: Path, kind: str | None, where: str) -> str | None:
 
 
 TRIES = 50 if os.name == "nt" else 1   # Windows refuses to replace a file another program is reading at that moment
+ASIDE = os.name == "nt"     # Windows puts no file in the place of a link to a folder: the link is moved aside first
 
 
 def _replace(tmp, path, tries: int = TRIES) -> None:
@@ -272,8 +273,11 @@ def write(path, text: str, newline: str | None = None, where: str = "the results
     """Write `text` as the file `path`, in one step: into a new file beside it (a name of this call's own, never an
     existing one), then moved into place. So the name itself is never opened: a link there is replaced and what it
     pointed at is left alone, a pipe there cannot hold the write up, and the file is whole or as it was. A folder
-    there is `Refused`, and so is a file this user may not change (marked read-only, or somebody else's). `newline`
-    as for `open` (None writes this system's line ends, as `write_text` did)."""
+    there is `Refused`, and so is a file this user may not change (marked read-only, or somebody else's). On Windows,
+    which puts no file in the place of a link to a folder, a link there is moved aside as itself first and removed
+    once Lantern's file is in its place, so that it is there as it was when the write does not end (`ASIDE`;
+    2026-11-20: until then it was removed first, and a write that failed lost it). `newline` as for `open` (None
+    writes this system's line ends, as `write_text` did)."""
     path = Path(path)
     kind, st = _look(path)
     why = _in_the_way(path, kind, where)
@@ -281,14 +285,16 @@ def write(path, text: str, newline: str | None = None, where: str = "the results
         raise Refused(why)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.part")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    aside = None
     try:
         fd = os.open(tmp, flags, 0o666)          # the mode of any new file of the person (their umask applies)
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
             if kind == "file" and hasattr(os, "fchmod"):
                 os.fchmod(fh.fileno(), st.st_mode & 0o777)   # as open or as closed as the file it takes the place of
             fh.write(text)
-        if kind in ("link", "other") and os.name == "nt":
-            os.unlink(path)                      # Windows does not replace a link to a folder; it goes as itself
+        if kind in ("link", "other") and ASIDE:
+            aside = path.with_name(f".{path.name}.{secrets.token_hex(8)}.aside")
+            os.rename(path, aside)               # as itself: what a link points at is not touched
         try:
             _replace(tmp, path)
         except IsADirectoryError:                # a folder was put there since the look above
@@ -298,7 +304,17 @@ def write(path, text: str, newline: str | None = None, where: str = "the results
             os.unlink(tmp)
         except OSError:
             pass
+        if aside is not None and not os.path.lexists(path):
+            try:
+                os.rename(aside, path)           # the write did not end: what was there is there again
+            except OSError:
+                pass
         raise
+    if aside is not None:
+        try:
+            os.unlink(aside)                     # as itself, a link to a folder too
+        except OSError:
+            pass
     if kind == "link":
         _say(path.parent, f"{path.name} in {where} was a link; Lantern put its own file in its place and left what "
                           "the link pointed at alone")

@@ -12,6 +12,7 @@ import shutil
 import subprocess
 
 import pytest
+from links_here import needs_links
 from test_fixcheck import BASE, COMPUTED, SKIPPED_FOLDER, TEST_CUT, TRUE_FIX, write
 
 from lantern import cli, fixcheck, pipeline, suggest
@@ -316,7 +317,7 @@ def test_the_copy_is_the_project_with_exactly_the_candidates_change(tmp_path):
     assert everything(a) == {**{k: v.encode("utf-8") for k, v in OLD.items()}, "node_modules/lib/index.js": b"module.exports = 1\n"}
 
 
-@pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="needs a link, which Windows may refuse")
+@needs_links
 def test_nothing_is_written_through_a_link_that_came_with_the_project(tmp_path):
     a, b = two_folders(tmp_path, {"app/main.py": "x = 1\n"}, {"app/main.py": "x = 1\n", "linked/new.py": "y = 2\n"})
     outside = tmp_path / "outside"

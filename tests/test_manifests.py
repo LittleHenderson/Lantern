@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from lantern import evidence, pipeline, results, security
+from links_here import needs_links, needs_pipes
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
 import manifests as sweep  # noqa: E402  (bench/manifests.py)
@@ -434,11 +435,10 @@ def test_a_baseline_that_cannot_be_used_stays_until_the_person_starts_a_new_one(
     assert _earlier(_analyze(project)) == []
 
 
-only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links, pipes)")
 KEPT_NAMES = ("baseline.json", "explanations.json")     # the two earlier files `analyze` reads and does not write anew
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("name", KEPT_NAMES)
 def test_a_link_under_a_result_files_name_is_not_read(whole, tmp_path, name):
     """The results folder lies inside the analysed project by default, so a link in it may have come with the project:
@@ -467,7 +467,7 @@ def _into(done: list, project) -> None:
     done.append(_earlier(_analyze(project)))
 
 
-@only_posix
+@needs_pipes
 @pytest.mark.parametrize("name", KEPT_NAMES)
 def test_a_pipe_under_a_result_files_name_does_not_hold_the_run_up(whole, tmp_path, name):
     """Opening a pipe nobody writes to never comes back: a run that tried would wait for good."""

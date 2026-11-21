@@ -84,9 +84,16 @@ with it: tests the kernel had stopped read as failed tests however long Docker w
 as the second source, for a container whose first process did not say it (a "false" is asked again for
 `OOM_WAIT_KILLED` seconds after a kill and `OOM_WAIT` after any other error; a kill that neither names reads
 as failed tests). A test that prints the line and ends with that result says of itself that it was stopped, and
-gains "Incomplete" where it would have had "Blocked", never a pass. On macOS the limit is put on the address
-space as before, and on Windows it is the job's limit for each process: there tests that go over fail in their
-own way, and are reported as failed.
+gains "Incomplete" where it would have had "Blocked", never a pass. On Windows (2026-11-20, a firm pass or fail,
+stage 4) the run's job counts it: the memory Windows has given the tests and everything they started, together,
+which counts memory a program asked for and never wrote (Linux does not count that; a test of each says so).
+Windows tells the job when they go over the limit, a message Windows promises to deliver for such a limit, and
+`_stream` then ends the run, which is said to be over its memory exactly as on Linux; a wall at twice the limit,
+and at least 1 GB above it, keeps a program that asks for very much at once from taking the computer's memory
+before that (`winjob.wall`), and a program refused there is said the same way where Windows tells of it, which it
+does not promise. Until then the job's limit was for each program alone: programs over it together were not
+stopped, a program over it alone was refused memory, and its tests were reported as failed (the same project read
+"Blocked" there and "Incomplete" on Linux). On macOS the limit is put on the address space as before.
 
 What the Python hook does with a project's own ways (2026-11-13; each was found by running Lantern's tests here):
 * **A guard the project brings itself.** Python calls audit hooks in the order they were added and the sandbox's
@@ -162,12 +169,23 @@ beside a twin that does what honest tests do):
   not Python, a TCP connection or a socket name outside it, is therefore decided by the outer run's walls
   alone: nothing leaves the outer sandbox, and the inner run does not claim walls of its own for it.
 
-Known and not fixed (found 2026-11-11): on Windows a test that starts an event loop (an async test, a FastAPI test
-client) fails in the sandbox. Windows has no call that makes a pair of connected sockets, so Python builds the pair
-every event loop wakes itself with from a listener on this computer, and the hook refuses it. The listener is not
-let through, because the event loop Windows uses by default makes its connections with a call the hook is never
-told about (ConnectEx: Python reports no `socket.connect` event for it), so a loop that could start could connect
-with nothing seen. For the same reason `run_inside` starts no app there (`NO_APPS`).
+On Windows (a firm pass or fail, stage 4, 2026-11-20). Until then a test that starts an event loop (an async test, a
+FastAPI test client) failed in the sandbox there (found 2026-11-11): Windows has no call that makes a pair of
+connected sockets, so Python builds the pair every event loop wakes itself with from a listener on this computer,
+and the hook refused every listener, because Windows makes no network of the run's own. Now the hook lets a test
+listen at this computer's own address at a port the system picks, and call or send only to a port where every
+socket is one of the run's own programs, as Windows itself says (its own tables of this computer's sockets, with
+the program of each, and the programs of the run's job, `lantern.winjob`); a datagram socket that sends before it
+is bound is bound to this computer's own address first. Another program's port, a port a test chose, every address
+at once and any other computer stay refused. The event loop Windows uses by default connects with calls Python
+tells no hook about (`_overlapped`), and those are judged where the loop calls them. A file's name can lead to
+another program or another computer there, and is read as Windows reads it before anything is opened, looked at
+or listed: a pipe only of the run's own programs, no share of another computer (by its name, or by a drive letter
+Windows gave it), no device but NUL and the console; nothing is handed to another program to open (on every
+system) and no other computer's settings are asked for. Another computer's folders are left off the tests' PATH,
+and a link of the project to another computer is not copied. What the hook cannot see there is not held: a
+program that is not Python, code that calls the system's own library itself, and links the computer already has to
+another computer's shares. Apps are started there as on Linux (`run_inside`; until 2026-11-20 none was, `NO_APPS`).
 
 Nothing the tests start outlives them (2026-11-10). When the test command ends, at the wall clock, when the caller
 asks (`cancel`, the app's Stop) and when Lantern itself ends, every process it started is ended too: on Linux by the
@@ -221,10 +239,11 @@ MEMORY_VARIABLE = "LANTERN_TEST_MEMORY_MB"   # the limit for a whole installatio
 MARK = "LANTERN-SANDBOX-BLOCKED:"
 JS_NOTE = "Tests run; your map upgrades for Python only for now."
 INSIDE = ("lantern._behave_inside",)      # Lantern's own drivers that `run_inside` may start in the sandbox
-# Where `run_inside` starts nothing, and why (2026-11-11). An app is asked on an event loop, and on Windows the guard
-# cannot let one start without losing sight of what it connects to (this module's opening text).
-NO_APPS = ("on Windows the sandbox cannot yet see and refuse every connection an app's event loop makes"
-           if sys.platform == "win32" else "")
+# Where `run_inside` starts nothing, and why. An app is asked on an event loop, and until 2026-11-20 the guard could
+# not let one start on Windows without losing sight of what it connects to, so no app was started there. Since then
+# it judges the calls of either loop there (this module's opening text) and every system Lantern runs on starts
+# apps; a system that cannot is named here with the reason.
+NO_APPS = ""
 
 # Images pinned by digest (multi-arch index digests, Docker Hub). Bump together with a check that they still pull.
 IMAGES = {
@@ -527,14 +546,18 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
             det.insert(1, "writes allowed only in the copy and its own temp folder"
                           + (", network connections refused" if landlock_abi() >= 4 and held_below_python() else ""))
         if language == "python":
-            det.insert(1, "writing outside the copy and its temp folder and opening network connections are refused")
+            det.insert(1, WINDOWS_PYTHON if _windows_rule() else
+                       "writing outside the copy and its temp folder and opening network connections are refused")
         at = 2 if language == "python" else 1
-        det[at:at] = _no_network_words(no_own, language)
+        det[at:at] = _no_network_words(no_own, language, _walled(language, bool(fetched)))
+    if _walled(language, bool(fetched)):
+        det.insert(1, WALL_LINE)
     if sys.platform == "win32":
-        det.insert(1, f"inside a Windows job: {room} of memory for each process, and nothing it starts can leave the job")
-    if _LINUX:
-        det.append(f"{room} of memory for the tests and everything they start, counted together; tests that use "
-                   "more are stopped, which is neither a pass nor a failure")
+        det.insert(1, "inside a Windows job, which nothing it starts can leave")
+    if _LINUX or sys.platform == "win32":
+        det.append(f"{room} of memory for the tests and everything they start, counted together"
+                   + (" (what Windows has given them, written to or not)" if sys.platform == "win32" else "")
+                   + "; tests that use more are stopped, which is neither a pass nor a failure")
     if fetched:
         det.insert(1, fetched)
     if _LINUX and language in READ_WALL_FOR and landlock_abi() >= 1:
@@ -558,6 +581,14 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
 # ---------------------------------------------------------------------------- a network of the run's own
 NO_OWN_NETWORK = ("{why}, so nothing on this computer is let through either: tests that start a server and call "
                   "it will fail here")
+# On Windows the guard has a rule of its own where the run has no network of its own (`_windows_net`, a firm pass or
+# fail, stage 4, 2026-11-20): until then the two sentences above stood there too, and since that stage they are not
+# true there (found on GitHub's Windows machine while the tests of these words were read there).
+WINDOWS_NET = ("{why}: on Windows the tests may still start a server at this computer's own address, on a port the "
+               "system picks, and call what only their own programs listen at; every other address, on this "
+               "computer or outside it, is refused")
+WINDOWS_PYTHON = ("writing outside the copy and its temp folder is refused, and so is opening a network connection "
+                  "to anything but the tests' own programs")
 # Where nothing below Python holds a program (`held_below_python`), the two sentences above would be true of
 # Python code only. For tests that are not Python, in their place; for Python's tests, beside them.
 NOT_HELD = ("{why}. These tests are not Python, and they are not kept from the network by this run: Lantern's guard "
@@ -614,6 +645,17 @@ def _own_python_words(windows: bool) -> str:
                    "libraries and without Lantern's guard")
 
 
+# Windows, since stage 4 of a firm pass or fail (2026-11-20): the Python of the run's own is a whole Python there
+# (`_whole_python`), so the bare name `python` is that Python too. Where none can be made, the older one stands and
+# `_own_python_words(True)` says what the bare name then starts.
+WHOLE_PYTHON = ("they are started by a whole Python of the run's own (a copy of this computer's Python, without the "
+                "libraries installed on it), in which the fetched libraries are the only ones: a Python the tests "
+                "start themselves finds the same libraries, whatever it is handed, also by the bare name `python`")
+# Said before the older one is tried: what starts the tests then is the next line's to say (`_own_python_words`, or
+# that no Python of the run's own could be made at all), so this one names nothing that may not be there.
+NO_WHOLE_PYTHON = "a whole Python of the run's own could not be made ({why})"
+
+
 def held_below_python() -> bool:
     """In the restricted subprocess: is a program of the tests that is not Python (Node, a compiled program, a
     Python started without the guard) held to this run's own rules for connections by something below Python?
@@ -643,13 +685,23 @@ def not_held_how() -> str:
             "connections that Lantern can set (Linux 6.7 brought one)")
 
 
-def _no_network_words(why: str, language: str) -> list[str]:
+def _windows_rule() -> bool:
+    """Does the guard's own rule for Windows decide what the tests' Python may reach here (`_windows_net`): on
+    Windows, which makes a run no network of its own. Asked by the words, so that a test can ask them of a pretend
+    system."""
+    return sys.platform == "win32" and not _LINUX
+
+
+def _no_network_words(why: str, language: str, walled: bool = False) -> list[str]:
     """What the sheet and the log say about a run with no network of its own: one sentence, and for Python's
-    tests a second where nothing below Python holds the programs they start."""
+    tests a second where nothing below Python holds the programs they start. On Windows the first says what the
+    guard's own rule there lets through (`WINDOWS_NET`), and inside a wall of Windows' own (`walled`) the second
+    says what the wall holds instead (`WALL_BESIDE`)."""
+    first = (WINDOWS_NET if _windows_rule() else NO_OWN_NETWORK).format(why=why)
     if held_below_python():
-        return [NO_OWN_NETWORK.format(why=why)]
+        return [first]
     if language == "python":
-        return [NO_OWN_NETWORK.format(why=why), NOT_HELD_BESIDE.format(how=not_held_how())]
+        return [first, WALL_BESIDE if walled else NOT_HELD_BESIDE.format(how=not_held_how())]
     return [NOT_HELD.format(why=why, how=not_held_how())]
 
 
@@ -663,6 +715,64 @@ def tests_off_the_network(language: str) -> bool:
     """Would the tests of a project in `language` run with the network off in this system's sandbox? For the
     sheet; a run says it of itself (`off_network` in its result)."""
     return _was_off_network(backend_for(language), language, not own_network())
+
+
+# ---------------------------------------------------------------------------- a wall of Windows' own
+# Windows (a firm pass or fail, stage 4, 2026-11-20): a project's own Python tests on the libraries fetched for them
+# run inside an AppContainer made for the run (`lantern.wincontainer`), with which Windows itself keeps every
+# program they start, Python or not, from the person's files and from connections to the internet and to the other
+# programs of this computer (not every way such a program could send something out is closed). They run on a whole Python of the run's own (`_whole_python`), which lies in the run's
+# folder, where the wall may read it; a Python without the fetch is this computer's own, which it may not. Tests
+# that are not Python stay outside it: the programs most of their runners start hang there (Node waits for each
+# through a pipe of a kind Windows lets no program inside make), so their words stay as they were.
+WALL_LINE = ("inside a wall of Windows' own made for this run (an AppContainer, deleted after the run): every "
+             "program the tests start, Python or not, is kept from your files and from connections to the internet "
+             "and to your other programs")
+WALL_BESIDE = ("a program the tests start that is not Python is held there by that wall and not by Lantern's guard, "
+               "and not every way it could send something out is closed")
+WALL_ASK = ("On this system a program the tests start that is not Python is kept by a wall of Windows' own made "
+            "for this run from your files and from connections to the internet and to your other programs, but not "
+            "every way it could send something out is closed: this run does not keep it from that.")
+NO_WALL_PYTHON = ("the tests were to run inside a wall of Windows' own made for this run, which can hold them only "
+                  "on a whole Python of the run's own, and none could be made")
+NO_WALL = "the tests were to run inside a wall of Windows' own made for this run, and Windows did not make it"
+NO_WALL_SHAPE = ("this computer's Python is not of the shape a whole Python of the run's own is copied from, and the "
+                 "wall can hold the tests only on such a Python")
+_WALL_HERE: list[str] = []            # the answer of `wall_here`, asked once
+
+
+def wall_here() -> str:
+    """Can a project's Python tests be put inside a wall of Windows' own here? "" when they can, else why not, in
+    words for a person. Asked once: Windows is asked to make one and delete it again, and this Python must be of the
+    shape a whole Python of the run's own is copied from (`_whole_python`)."""
+    if _WALL_HERE:
+        return _WALL_HERE[0]
+    if sys.platform != "win32":
+        why = "a wall of Windows' own is made on Windows only"
+    else:
+        base = Path(sys.base_prefix)
+        try:
+            embeddable = any(n.lower().endswith("._pth") for n in os.listdir(base))
+        except OSError:
+            embeddable = True
+        if not (base / "python.exe").is_file() or not (base / "Lib" / "os.py").is_file() or embeddable:
+            why = NO_WALL_SHAPE
+        else:
+            from . import wincontainer
+            try:
+                wincontainer.Container().close()
+                why = ""
+            except (wincontainer.ContainerError, OSError) as e:
+                why = f"Windows does not make one for Lantern here (error {getattr(e, 'code', 0) or 0:#x})"
+    _WALL_HERE.append(why)
+    return why
+
+
+def _walled(language: str, fetched: bool) -> bool:
+    """Would a run of a project's tests in `language` be put inside a wall of Windows' own: Python's tests on the
+    libraries fetched for them (`fetched`), in the restricted process, where this system makes one (`wall_here`).
+    `reach` asks it and the run asks it, so the sentence a person agrees to is the one the run keeps."""
+    return language == "python" and fetched and backend_for(language) == "subprocess" and not wall_here()
 
 
 # ---------------------------------------------------------------------------- what a run is kept from, in one line
@@ -683,16 +793,20 @@ def reach(language: str, fetched: bool = False) -> dict:
     "python" (Python code only, by Lantern's guard: a program the tests start that is not Python is not held)
     or "none". `words` is the line. `ask` is the sentence the person has to agree to before such tests are
     started (`server.reach_asked`), "" where every program is held. It reads the answers `describe` reads
-    (`backend_for`, `held_below_python`, `landlock_abi`), so the line cannot promise what the list does not.
-    `fetched`: the project's libraries would be fetched first, so their names do leave this computer."""
+    (`backend_for`, `held_below_python`, `landlock_abi`, `_walled`), so the line cannot promise what the list does
+    not. `fetched`: the project's libraries would be fetched first, so their names do leave this computer, and on
+    Windows its Python tests would run inside a wall of Windows' own (`WALL_ASK`)."""
     python = language == "python"
+    walled = _walled(language, fetched)
     if backend_for(language) == "docker":
         network = files = "all"
     else:
         network = "all" if held_below_python() else "python" if python else "none"
-        files = "all" if _LINUX and landlock_abi() >= 1 else "python" if python else "none"
+        files = "all" if (_LINUX and landlock_abi() >= 1) or walled else "python" if python else "none"
     if network == files == "all":
         return {"network": network, "files": files, "words": NAMES_LEAVE if fetched else NOTHING_LEAVES, "ask": ""}
+    if walled:          # a whole Python of the run's own: the bare name `python` is that one too
+        return {"network": network, "files": files, "words": NO_WAY_OUT[network] + WALL_ASK, "ask": WALL_ASK}
     # as root the tests run as the user nobody: what they can read and change is what every user can
     whose = "every user of this computer" if _LINUX and hasattr(os, "geteuid") and os.geteuid() == 0 else "you"
     can = " and ".join(x for x in (REACH_NETWORK if network != "all" else "",
@@ -1014,6 +1128,18 @@ _W = [_os.path.realpath(p) for p in _os.environ.get("LANTERN_SANDBOX_WRITABLE", 
 _DEV = {_os.devnull, "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
 _NET = {getattr(_socket, "AF_INET", 2), getattr(_socket, "AF_INET6", 10)}
 _UNIX = getattr(_socket, "AF_UNIX", None)
+_WIN = _sys.platform == "win32"
+_STREAM, _DGRAM = getattr(_socket, "SOCK_STREAM", 1), getattr(_socket, "SOCK_DGRAM", 2)
+# Windows, inside a wall of Windows' own around the run (lantern.wincontainer, a firm pass or fail, stage 4,
+# 2026-11-20): the wall's name (its SID), which this program's token must carry (`_in_wall`, below), and the pipe
+# through which the launcher, outside the wall, says whose a port of this computer is (`_asked`), made by the
+# program LANTERN_SANDBOX_BROKER_PID.
+_WALL = _os.environ.get("LANTERN_SANDBOX_CONTAINER", "") if _WIN else ""
+_IN_WALL = False
+_BROKER = _os.environ.get("LANTERN_SANDBOX_BROKER", "") if _WALL else ""
+_BROKER_PIPE = _BROKER[9:].lower() if _BROKER[:9] == "\\\\.\\pipe\\" else ""
+_BROKER_PID = _os.environ.get("LANTERN_SANDBOX_BROKER_PID", "")
+_BROKER_PID = int(_BROKER_PID) if _BROKER_PID.isascii() and _BROKER_PID.isdigit() and len(_BROKER_PID) < 11 else None
 try:
     _SELF = (_socket.gethostname(),)
 except OSError:
@@ -1205,7 +1331,7 @@ def _at(fd):
 def _full(path, fd=None):
     # A name given beside an open folder (os.unlink(name, dir_fd=fd): how shutil.rmtree and TemporaryDirectory
     # remove a tree) is a file of that folder, not of the current one. None: where that folder is cannot be told.
-    p = _os.fsdecode(path)
+    p = _os.fsdecode(_held(_os.fspath(path)))
     if isinstance(fd, int) and fd >= 0 and not _os.path.isabs(p):
         base = _at(fd)
         return None if base is None else _os.path.join(base, p)
@@ -1258,9 +1384,16 @@ def _ok(path, fd=None, follow=True):
     # (removing, renaming, making): the name itself is what changes and a link under it is only a name, judged by
     # the folder it is in. Until 2026-11-13 every name was followed, and a test could not remove a link it had made
     # to anything outside its folders (a virtual environment's link to Python). A name that ends in a slash is
-    # followed whatever is done: the system then goes through a link to a folder.
+    # followed whatever is done: the system then goes through a link to a folder. The name is read as the system
+    # reads it, through a plain copy (a text of a class of its own can answer anything for itself). On Windows a
+    # name of another computer, a device or a pipe is never one of the run's folders, and is not looked at (the
+    # system would reach for it): only NUL and the console are anybody's to write to.
     try:
-        n = _os.fsdecode(path)
+        n = _os.fsdecode(_held(_os.fspath(path)))
+        if _WIN:
+            kind = _winplace(n)[0]
+            if kind != "local":
+                return kind == "quiet"
         if isinstance(fd, int) and fd >= 0 and not _os.path.isabs(n):
             base = _at(fd)
             if base is None:
@@ -1277,7 +1410,7 @@ def _ok(path, fd=None, follow=True):
             p = _os.path.join(_os.path.realpath(head or _os.curdir), tail) if _plain(tail) else _os.path.realpath(n)
     except (TypeError, ValueError):
         return True
-    if p in _DEV or p.upper() == "NUL" or p.startswith("\\\\.\\"):
+    if p in _DEV or (_WIN and _winplace(p)[0] == "quiet"):
         return True
     return any(p == w or p.startswith(w + _os.sep) for w in _W)
 def _block(what):
@@ -1287,6 +1420,409 @@ def _block(what):
     except OSError:
         pass
     raise PermissionError(msg)
+_TOLD = set()
+def _say(what):
+    # the line `_block` writes, for a call that answers "no" where it is refused (whether a file is there), once
+    if what in _TOLD or len(_TOLD) >= 64:
+        return
+    _TOLD.add(what)
+    try:
+        _os.write(2, ("LANTERN-SANDBOX-BLOCKED: " + what + "\n").encode("utf-8", "replace"))
+    except OSError:
+        pass
+def _shown(text):
+    # a name as one line of the run's output
+    return text[:1000].replace("\n", "?").replace("\r", "?")
+def _plain_path(path):
+    # A name as the system is handed it: through its own __fspath__ once, as a plain copy (a text of a class of its
+    # own may answer anything for itself, the system reads what it holds), and as text. (None, None): no name.
+    try:
+        p = _held(_os.fspath(path))
+        if type(p) is bytes:
+            return p, _os.fsdecode(p)
+        if type(p) is str:
+            return p, p
+    except (TypeError, ValueError, UnicodeError):
+        pass
+    return None, None
+# Windows (a firm pass or fail, stage 4, 2026-11-20). There no wall of the kernel's own stands behind this guard, and
+# a file's name can lead to other programs and other computers: a pipe (`\\.\pipe\<name>`) is another program of this
+# computer, a share (`\\<computer>\<share>\...`) is a computer on the network, reached when a program only opens,
+# looks at or lists a name there, and a device (`\\.\<name>`) is a part of this computer that is no file. A name is
+# read here by its text, as Windows reads it, before anything is opened.
+_QUIET = {"NUL", "CON", "CONIN$", "CONOUT$"}          # the devices a test may use: nothing, and its own console
+_RESERVED = _QUIET | {"PRN", "AUX"} | {k + d for k in ("COM", "LPT") for d in "0123456789\u00b9\u00b2\u00b3"}
+def _drive(part):
+    return len(part) == 2 and part[1] == ":" and part[0].isascii() and part[0].isalpha()
+def _remote_drive(letter):
+    # Is this drive letter a share of another computer (`net use Q: \\computer\share`)? Windows keeps that with
+    # the drive letter and says it without asking the network (DRIVE_REMOTE).
+    if _LIB is None:
+        return False
+    try:
+        return _LIB[5](letter + ":\\") == 4
+    except Exception:
+        return False
+def _winplace(name):
+    # ("local", None): a file of this computer's own disks; ("pipe", the pipe's name); ("share", None): a computer
+    # on the network, this one too, also by a drive letter Windows gave it; ("device", None); ("quiet", None): NUL
+    # or the console, by their names alone.
+    n = name.replace("/", "\\")
+    if n[:4] in ("\\\\.\\", "\\\\?\\", "\\??\\"):
+        rest = n[4:]
+        parts = rest.split("\\")
+        first = parts[0].lower()
+        if any(p in (".", "..") for p in parts):
+            return "device", None      # Windows reads these dots from the top of such a name, past a drive
+        if first == "pipe" and len(parts) > 1:
+            return "pipe", rest[5:]
+        if first == "globalroot" and len(parts) > 3 and parts[1].lower() == "device" and parts[2].lower() == "namedpipe":
+            return "pipe", "\\".join(parts[3:])
+        if first == "unc":
+            return "share", None
+        if len(parts) == 1 and parts[0].upper() in _QUIET:
+            return "quiet", None
+        if len(parts) > 1 and _drive(parts[0]):
+            return ("share" if _remote_drive(parts[0][0]) else "local"), None
+        if len(parts) > 1 and first.startswith("volume{") and first.endswith("}"):
+            return "local", None
+        return "device", None
+    if n[:2] == "\\\\" or (_drive(n[:2]) and _remote_drive(n[0])):
+        return "share", None
+    last = n.split("\\")[-1]
+    if _drive(last[:2]):
+        last = last[2:]
+    base = last.split(".", 1)[0].split(":", 1)[0].rstrip(" ").upper()
+    if base in _RESERVED:
+        # a device in any folder, on the Windows of before 11; NUL and the console are harmless there, and on
+        # Windows 11 such a name is a file, which is judged as a file
+        if n.upper() in _QUIET:
+            return "quiet", None
+        return ("local" if base in _QUIET else "device"), None
+    return "local", None
+def _pipe_pid(name):
+    # The program that made a pipe, by the name Python gives the pipes it makes (multiprocessing: pyc-<pid>-...,
+    # asyncio: python-pipe-<pid>-...); None for any other name. Inside the wall such a pipe is among the wall's own
+    # names (`_local`), so there that name has `LOCAL\` in front.
+    low = name.lower()
+    if _IN_WALL and low.startswith("local\\"):
+        name, low = name[6:], low[6:]
+    for head in ("pyc-", "python-pipe-"):
+        if low.startswith(head) and "\\" not in name:
+            digits, dash, _ = name[len(head):].partition("-")
+            if dash and 0 < len(digits) < 11 and digits.isascii() and digits.isdigit() and digits[0] != "0":
+                return int(digits)
+    return None
+def _windows_place(name, made=False):
+    # What the guard says of a name on Windows. (None, False): a file of this computer's own disks, judged further
+    # as on any system. (None, True): a pipe of the run's own, NUL and the console, which are no file of a disk and
+    # are the run's to use. (the refusal, False): anything else. `made`: a pipe this program makes, which must be
+    # named for this program.
+    kind, pipe = _winplace(name)
+    if kind == "local":
+        return None, False
+    if kind == "quiet":
+        return None, True
+    if kind == "pipe":
+        if _BROKER_PIPE and not made and pipe.lower() == _BROKER_PIPE:
+            return None, True
+        pid = _pipe_pid(pipe)
+        if pid is not None and (pid == _os.getpid() if made else pid in _run_pids()):
+            return None, True
+        return "network pipe " + _shown(name), False
+    if kind == "share":
+        return "network share " + _shown(name), False
+    return "device " + _shown(name) + " (the tests may open no device of this computer but NUL and the console)", False
+def _not_local(path):
+    # the refusal of a name on Windows, or None (anywhere else, and for what is no name)
+    name = _plain_path(path)[1] if _WIN and path is not None and not isinstance(path, int) else None
+    return None if name is None else _windows_place(name)[0]
+# Who holds a port, as Windows itself says (its own tables of this computer's sockets, with the program of each), and
+# which programs are the run's: this one and, where the launcher says the run is held in a job of its own
+# (LANTERN_SANDBOX_JOB, lantern.winjob: nothing started in it can leave it), every program of that job.
+_JOB = _WIN and _os.environ.get("LANTERN_SANDBOX_JOB") == "own"
+_LIB = None
+if _WIN:
+    try:
+        import ctypes as _ct
+        _sockopt = _ct.WinDLL("ws2_32").getsockopt
+        _sockopt.argtypes = (_ct.c_size_t, _ct.c_int, _ct.c_int, _ct.c_void_p, _ct.POINTER(_ct.c_int))
+        _sockopt.restype = _ct.c_int
+        _drives = _ct.WinDLL("kernel32").GetDriveTypeW
+        _drives.argtypes, _drives.restype = (_ct.c_wchar_p,), _ct.c_uint
+        _LIB = (_ct, _ct.WinDLL("kernel32", use_last_error=True).QueryInformationJobObject,
+                _ct.WinDLL("iphlpapi").GetExtendedTcpTable, _ct.WinDLL("iphlpapi").GetExtendedUdpTable, _sockopt,
+                _drives)
+    except Exception:
+        _LIB = None
+def _in_wall(sid):
+    # Is this program inside the wall named `sid`: does Windows say that its token is an AppContainer's, and that
+    # container's? Every program the tests start is in it, as every program a job's member starts is in the job.
+    if _LIB is None or not sid:
+        return False
+    ct = _LIB[0]
+    try:
+        a, k = ct.WinDLL("advapi32", use_last_error=True), ct.WinDLL("kernel32", use_last_error=True)
+        k.GetCurrentProcess.restype = ct.c_void_p
+        k.CloseHandle.argtypes = k.LocalFree.argtypes = (ct.c_void_p,)
+        a.OpenProcessToken.argtypes = (ct.c_void_p, ct.c_uint32, ct.POINTER(ct.c_void_p))
+        a.GetTokenInformation.argtypes = (ct.c_void_p, ct.c_int, ct.c_void_p, ct.c_uint32, ct.POINTER(ct.c_uint32))
+        a.ConvertSidToStringSidW.argtypes = (ct.c_void_p, ct.POINTER(ct.c_void_p))
+        h = ct.c_void_p()
+        if not a.OpenProcessToken(k.GetCurrentProcess(), 0x0008, ct.byref(h)):       # TOKEN_QUERY
+            return False
+        try:
+            flag, got = ct.c_uint32(), ct.c_uint32()
+            if not a.GetTokenInformation(h, 29, ct.byref(flag), 4, ct.byref(got)) or not flag.value:
+                return False                                                        # TokenIsAppContainer
+            room = ct.create_string_buffer(256)
+            if not a.GetTokenInformation(h, 31, room, 256, ct.byref(got)):          # TokenAppContainerSid
+                return False
+            text = ct.c_void_p()
+            if not a.ConvertSidToStringSidW(ct.cast(room, ct.POINTER(ct.c_void_p))[0], ct.byref(text)):
+                return False
+            try:
+                return ct.wstring_at(text.value) == sid
+            finally:
+                k.LocalFree(text)
+        finally:
+            k.CloseHandle(h)
+    except Exception:
+        return False
+_server_pid = None
+if _WALL:
+    import time as _time
+    _IN_WALL = _in_wall(_WALL)
+    if _IN_WALL:
+        try:
+            _server_pid = _LIB[0].WinDLL("kernel32", use_last_error=True).GetNamedPipeServerProcessId
+            _server_pid.argtypes = (_LIB[0].c_void_p, _LIB[0].POINTER(_LIB[0].c_ulong))
+        except Exception:
+            _server_pid = None
+if not _IN_WALL:
+    _BROKER = _BROKER_PIPE = ""
+def _asked(dgram, port):
+    # Inside the wall Windows does not show a program its tables of this computer's sockets, so the launcher,
+    # outside it and in the run's job, is asked whether every socket at this port is one of the run's own programs.
+    # Its answer is taken only from an end of its own pipe, made by its own program, and only a yes counts.
+    import _winapi as w
+    h = None
+    for _ in range(40):
+        try:
+            h = w.CreateFile(_BROKER, 0x00100083, 0, 0, 3, 0, 0)        # to read and write; OPEN_EXISTING
+            break
+        except OSError as e:
+            if getattr(e, "winerror", None) != 231:     # ERROR_PIPE_BUSY: every end is answering another question
+                return False
+            try:
+                w.WaitNamedPipe(_BROKER, 250)
+            except OSError:
+                _time.sleep(0.02)
+    if h is None:
+        return False
+    try:
+        pid = _LIB[0].c_ulong(0)
+        if _server_pid is None or _BROKER_PID is None or not _server_pid(h, _LIB[0].byref(pid)) \
+                or pid.value != _BROKER_PID:
+            return False
+        w.WriteFile(h, (b"u" if dgram else b"t") + port.to_bytes(2, "big"))
+        got, _ = w.ReadFile(h, 1)
+        return got == b"1"
+    except (OSError, ValueError, OverflowError):
+        return False
+    finally:
+        w.CloseHandle(h)
+_PIPES = ("\\\\.\\pipe\\", "\\\\?\\pipe\\")
+def _local(name):
+    # Inside the wall Windows lets a program make a pipe only among the wall's own names (`\\.\pipe\LOCAL\...`), and
+    # finds it there for the wall's programs alone: a pipe a program of the run names, in either way of writing a
+    # pipe's name, is put there, where the program that made it is found too. The launcher's pipe stays as it is.
+    if type(name) is str and name[:9].lower() in _PIPES and name[9:15].lower() != "local\\" \
+            and name[9:].lower() != _BROKER_PIPE:
+        return "\\\\.\\pipe\\LOCAL\\" + name[9:]
+    return name
+# (datagram, family) -> (a row's size, where its port is, where its program is): MIB_TCPROW_OWNER_PID,
+# MIB_TCP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID, MIB_UDP6ROW_OWNER_PID
+_ROWS = {(False, 2): (24, 8, 20), (False, 23): (56, 20, 52), (True, 2): (12, 4, 8), (True, 23): (28, 20, 24)}
+def _owners(port, dgram):
+    # The programs (by number) that hold this computer's sockets at a port: listeners, or datagram sockets, of
+    # either family. None where Windows does not say.
+    if _LIB is None:
+        return None
+    ct, call = _LIB[0], _LIB[3] if dgram else _LIB[2]
+    found = set()
+    for family in (2, 23):
+        row, at, who = _ROWS[(dgram, family)]
+        size, raw, got = ct.c_ulong(0), None, None
+        for _ in range(8):
+            buf = (ct.c_char * max(size.value, 8))()
+            got = call(buf, ct.byref(size), 0, family, 1 if dgram else 3, 0)   # UDP_TABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER
+            if got == 0:
+                raw = buf.raw
+                break
+            if got != 122:                 # ERROR_INSUFFICIENT_BUFFER: the table grew since its size was asked
+                break
+        if raw is None:
+            if family == 23 and got == 50:     # ERROR_NOT_SUPPORTED: this computer has no IPv6
+                continue
+            return None
+        n = int.from_bytes(raw[:4], "little")
+        if 4 + n * row > len(raw):
+            return None
+        for i in range(n):
+            o = 4 + i * row
+            if int.from_bytes(raw[o + at:o + at + 2], "big") == port:
+                found.add(int.from_bytes(raw[o + who:o + who + 4], "little"))
+    return found
+def _job_pids():
+    if _LIB is None:
+        return None
+    ct, n = _LIB[0], 64
+    ptr = ct.sizeof(ct.c_void_p)
+    for _ in range(6):
+        size = 8 + n * ptr
+        buf = (ct.c_char * size)()
+        if _LIB[1](None, 3, buf, size, None):        # JobObjectBasicProcessIdList of this program's own job
+            raw = buf.raw
+            listed = int.from_bytes(raw[4:8], "little")
+            if 8 + listed * ptr > len(raw):
+                return None
+            return {int.from_bytes(raw[8 + i * ptr:8 + (i + 1) * ptr], "little") for i in range(listed)}
+        if ct.get_last_error() != 234:              # ERROR_MORE_DATA: more programs than the list could hold
+            return None
+        n *= 4
+    return None
+def _run_pids():
+    pids = {_os.getpid()}
+    if _JOB:
+        more = _job_pids()
+        if more:
+            pids |= more
+    return pids
+def _runs_port(dgram, port):
+    if _BROKER:
+        return _asked(dgram, port)
+    owners = _owners(port, dgram)
+    return bool(owners) and owners <= _run_pids()
+def _loopback(host):
+    # this computer's own address, written as a number
+    if type(host) is bytes:
+        try:
+            host = host.decode("ascii")
+        except ValueError:
+            return False
+    if type(host) is not str or not host.isascii():
+        return False
+    h = host.lower()
+    if h.startswith("::ffff:") and _four(h[7:]):
+        h = h[7:]
+    if _four(h):
+        return h.split(".")[0] == "127"
+    if _six(h):
+        try:
+            return _socket.inet_pton(_socket.AF_INET6, h) == bytes(15) + b"\1"
+        except (OSError, ValueError, AttributeError):
+            return False
+    return False
+def _windows_net(word, kind, to):
+    # On Windows, where the run has no network of its own: a test listens at this computer's own address only and
+    # at port 0, a port the system picks (there a port somebody else holds can be shared, and one a test chose may
+    # be one), and calls or sends only to this computer's own address, at a port where every socket is one of the
+    # run's own programs, as Windows itself says. Anything else is refused, as on any system without a network of
+    # the run's own.
+    if type(to) is tuple and len(to) >= 2 and _loopback(to[0]) and type(to[1]) is int and kind in (_STREAM, _DGRAM):
+        if word == "bind":
+            if to[1] == 0:
+                return
+        elif 0 < to[1] < 65536 and _runs_port(kind == _DGRAM, to[1]):
+            return
+    elif to is None and word != "bind":
+        return
+    _block("network " + word + " " + repr("" if to is None else to)[:80])
+def _written_out(sock, to):
+    # On Windows the name this computer keeps for itself goes down as its number, so that what the guard judged, a
+    # number, is what the system is handed.
+    if type(to) is tuple and to and type(to[0]) in (str, bytes):
+        host = to[0].decode("ascii", "replace") if type(to[0]) is bytes else to[0]
+        if host.isascii() and host.lower() == "localhost":
+            try:
+                fam = _family(sock)
+            except (TypeError, AttributeError):
+                return to
+            number = {getattr(_socket, "AF_INET", 2): "127.0.0.1", getattr(_socket, "AF_INET6", 23): "::1"}.get(fam)
+            if number is not None:
+                return (number,) + to[1:]
+    return to
+def _handle_kind(handle):
+    # the kind of socket a handle is (SOCK_STREAM, SOCK_DGRAM, ...), as the system says; None where it does not
+    if _LIB is None or type(handle) is not int or not 0 <= handle < 1 << 64:
+        return None
+    ct = _LIB[0]
+    v, n = ct.c_int(0), ct.c_int(4)
+    try:
+        if _LIB[4](handle, 0xFFFF, 0x1008, ct.byref(v), ct.byref(n)) != 0:     # SOL_SOCKET, SO_TYPE
+            return None
+    except Exception:
+        return None
+    return v.value
+def _where(path, made=False):
+    # A name a call is handed, as the plain name and its text, and whether it is the run's own to use whatever is
+    # done with it (a pipe of the run's own, NUL, the console). On Windows a name of another computer, another
+    # program's pipe or a device is refused here and named (`_windows_place`), before anything is done with it.
+    raw, name = _plain_path(path)
+    if name is None or not _WIN:
+        return raw, name, False
+    why, own = _windows_place(name, made)
+    if why is not None:
+        _block(why)
+    return raw, name, own
+def _program_of(line):
+    # the program a Windows command line starts, as Windows reads its first word
+    c = line.lstrip(" \t")
+    if c[:1] == '"':
+        return c[1:].split('"', 1)[0]
+    return c.split(" ", 1)[0].split("\t", 1)[0]
+def _unquote(text):
+    # %HH as the byte it stands for, the way SQLite reads a name written as a URI; anything else as it is written
+    if "%" not in text:
+        return text
+    raw, out, i = text.encode("utf-8", "surrogatepass"), bytearray(), 0
+    while i < len(raw):
+        two = raw[i + 1:i + 3]
+        if raw[i] == 37 and len(two) == 2 and all(c in b"0123456789abcdefABCDEF" for c in two):
+            out.append(int(two, 16))
+            i += 3
+        else:
+            out.append(raw[i])
+            i += 1
+    return out.decode("utf-8", "replace")
+def _sqlite_files(name):
+    # The file a database name stands for. A name written as a URI (file:..., which SQLite reads as one where it is
+    # told to) stands for the place in it, read as SQLite reads it: its %HH written out, cut at a NUL, with the
+    # computer it names (none, or "localhost", is this one), and none where every `mode` it gives is "memory".
+    # Until 2026-11-20 a URI was read by its text: "xmode=memory" read as a database in memory, and a place
+    # written with %HH was judged as written.
+    if name[:5].lower() != "file:":
+        return [] if name in ("", ":memory:") else [name]
+    path, _, query = name[5:].split("#", 1)[0].partition("?")
+    modes = [_unquote(v) for k, _, v in (q.partition("=") for q in query.split("&")) if _unquote(k) == "mode"]
+    if modes and all(m == "memory" for m in modes):
+        return []
+    host = ""
+    if path[:2] == "//":
+        host, slash, path = path[2:].partition("/")
+        path = slash + path
+    place = _unquote(path).split("\0", 1)[0]
+    if host and host.lower() != "localhost":
+        place = "//" + host + place         # another computer's: refused on Windows, nowhere on any other system
+    elif _WIN and place[:1] == "/" and _drive(place[1:3]):
+        place = place[1:]
+    return [] if place in ("", ":memory:") else [place]
+# What a Windows call that opens a file is asked for that changes the file: GENERIC_WRITE, GENERIC_ALL,
+# MAXIMUM_ALLOWED, ACCESS_SYSTEM_SECURITY, FILE_WRITE_DATA, FILE_APPEND_DATA, FILE_WRITE_EA, FILE_DELETE_CHILD,
+# FILE_WRITE_ATTRIBUTES, DELETE, WRITE_DAC, WRITE_OWNER.
+_FILE_WRITES = 0x40000000 | 0x10000000 | 0x02000000 | 0x01000000 | 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 \
+    | 0x40000 | 0x80000
 # The person's own folders are closed to the run's reads by the kernel, where it can be (lantern.sandbox.read_wall:
 # LANTERN_SANDBOX_CLOSED names them, ..._OPENED what stays readable inside them, ..._LISTED the folders whose names
 # may be read). The guard refuses nothing there. It says what the tests reached for, once for each place: a run
@@ -1332,7 +1868,7 @@ def _reads(path, names=False):
     if len(_SAID) >= 20:
         return
     try:
-        p = _os.path.abspath(_os.fsdecode(path))
+        p = _os.path.abspath(_os.fsdecode(_held(_os.fspath(path))))
         q = _leads_to(p)
     except (TypeError, ValueError, OSError):
         return
@@ -1359,33 +1895,40 @@ def _judge(ev, args):
         path, mode, flags = (tuple(args) + (None, None, None))[:3]
         if isinstance(path, int) or path is None:
             return
+        raw, name, own = _where(path)
+        if own or name is None:
+            return
         w = (isinstance(mode, str) and any(c in mode for c in "wax+")) or (isinstance(flags, int) and flags & _WFLAGS)
-        if w and not _ok(path):
-            _block("write to " + _os.fsdecode(path))
+        if w and not _ok(raw):
+            _block("write to " + _shown(name))
         if _CLOSED and not w:
-            _reads(path)
+            _reads(raw)
     elif ev in ("os.listdir", "os.scandir"):
         p = args[0] if args else None
-        if _CLOSED and p is not None and not isinstance(p, int):
-            _reads(p, True)
+        if p is not None and not isinstance(p, int):
+            raw = _where(p)[0]
+            if _CLOSED and raw is not None:
+                _reads(raw, True)
     elif ev in _PATHS:
         for i, at, follow in _PATHS[ev]:
             p = args[i] if i < len(args) else None
             fd = args[at] if at is not None and at < len(args) else None
-            if p is not None and not isinstance(p, int) and not _ok(p, fd, follow):
-                _block(ev.split(".")[-1] + " " + (_full(p, fd) or _os.fsdecode(p)))
+            if p is not None and not isinstance(p, int):
+                raw, name, own = _where(p)
+                if name is not None and not own and not _ok(raw, fd, follow):
+                    _block(ev.split(".")[-1] + " " + _shown(_full(raw, fd) or name))
+        if ev == "os.symlink" and args:
+            _where(args[0])            # the place the new link names: on Windows never another computer's
     elif ev == "sqlite3.connect":
         # SQLite opens and writes its files itself, below Python: a database file outside the folders the run may
         # write in is refused when it could be changed or would be made. One that cannot be written (a file of
         # the copy an app is started on, which is read-only) can still be read.
-        db = args[0] if args else None
-        if isinstance(db, (str, bytes)) or hasattr(db, "__fspath__"):
-            p = _os.fsdecode(db)
-            if p.startswith("file:"):
-                p, _, q = p[5:].partition("?")
-                p = "" if "mode=memory" in q else ("/" + p.lstrip("/") if p.startswith("//") else p)
-            if p and p != ":memory:" and not _ok(p) and (not _os.path.exists(p) or _os.access(p, _os.W_OK)):
-                _block("write to " + p)
+        name = _plain_path(args[0] if args else None)[1]
+        for p in [] if name is None else _sqlite_files(name):
+            if _where(p)[2]:
+                continue
+            if not _ok(p) and (not _os.path.exists(p) or _os.access(p, _os.W_OK)):
+                _block("write to " + _shown(p))
     elif ev in ("socket.connect", "socket.bind", "socket.sendto", "socket.sendmsg"):
         s = args[0]
         try:
@@ -1394,13 +1937,23 @@ def _judge(ev, args):
             fam = getattr(s, "family", None)
         came = args[1] if len(args) > 1 else None
         to = _pair(came)
+        word = ev.split(".")[1]
         if fam in _NET:
             # In a network of the run's own: listening anywhere (there is only this computer in it), and calling
             # or sending to this computer's own address. Any other address is refused before it is tried, so
             # the run's log says what the tests reached for. So is an address whose host the system may have
-            # read as another than the guard reads here (`_as_handed`).
-            if not (_OWN and (ev == "socket.bind" or to is None or _here(to))) or not _as_handed(came):
-                _block("network " + ev.split(".")[1] + " " + repr("" if to is None else to)[:80])
+            # read as another than the guard reads here (`_as_handed`). On Windows, which makes no network of the
+            # run's own: the run's own sockets at this computer's own address (`_windows_net`).
+            if not _as_handed(came):
+                _block("network " + word + " " + repr("" if to is None else to)[:80])
+            if _WIN and not _OWN:
+                try:
+                    kind = _kind(s)
+                except (TypeError, AttributeError):
+                    kind = None
+                _windows_net(word, kind, to)
+            elif not (_OWN and (ev == "socket.bind" or to is None or _here(to))):
+                _block("network " + word + " " + repr("" if to is None else to)[:80])
         elif fam == _UNIX and fam is not None and isinstance(to, (str, bytes, bytearray)) and to:
             # A socket file is how the programs of one computer talk to each other (a desktop's message bus,
             # Docker): one outside the run's own folders is another program's, or would be made where the tests
@@ -1408,9 +1961,12 @@ def _judge(ev, args):
             name = _os.fsdecode(bytes(to)) if not isinstance(to, str) else to
             if name[:1] == "\0":
                 if not _OWN:
-                    _block("network " + ev.split(".")[1] + " to the socket name " + repr(name[1:])[:80])
+                    _block("network " + word + " to the socket name " + repr(name[1:])[:80])
             elif not _ok(name):
-                _block("network " + ev.split(".")[1] + " to the socket file " + name[:200])
+                _block("network " + word + " to the socket file " + name[:200])
+        elif _WIN:
+            # another kind of socket (Bluetooth, a virtual machine's): there is none of the run's own
+            _block("network " + word + " of a socket of the family " + repr(fam)[:20] + " " + repr(to)[:80])
     elif ev in ("socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyaddr"):
         # This computer under its own names is no question to the network, and neither is where an address written
         # as a number is. Who a number belongs to (gethostbyaddr) is one, and so is who this computer's own name
@@ -1431,6 +1987,58 @@ def _judge(ev, args):
         host = to[0] if type(to) is tuple and to else None
         if type(host) in (str, bytes) and not _here(to) and not _number(host):
             _block("network lookup " + repr(host)[:80])
+    elif ev in _HANDED:
+        # A file or an address handed to another program of this computer to open (the one it is opened with, a
+        # browser for an address), which is none of the run's: on every system, before anything is handed over.
+        what = _plain_path(args[0] if args else None)[1]
+        _block("network " + _HANDED[ev] + " " + ("" if what is None else repr(what)[:200])
+               + " (handed to another program of this computer to open)")
+    elif ev == "winreg.ConnectRegistry":
+        # the settings of another computer, over the network; this computer's own (no name) are not
+        computer = _held(args[0]) if args else None
+        if computer is not None and computer != "":
+            _block("network registry of " + repr(computer)[:80])
+    elif ev == "_winapi.CreateFile":
+        # how a program of Windows opens a file, a pipe or a device by its name, below `open`
+        name, access, share, made, flags = (tuple(args) + (None,) * 5)[:5]
+        raw, plain, own = _where(name)
+        if plain is not None and not own:
+            writes = not (type(access) is int and not access & _FILE_WRITES and type(made) is int and made == 3
+                          and type(flags) is int and not flags & 0x04000000)    # OPEN_EXISTING, DELETE_ON_CLOSE
+            if writes and not _ok(raw, None, not (type(flags) is int and flags & 0x00200000)):   # OPEN_REPARSE_POINT
+                _block("write to " + _shown(plain))
+    elif ev == "_winapi.CreateNamedPipe":
+        # a pipe is made only under a name of this program's own: another end of another program's pipe would
+        # take its callers
+        _where(args[0] if args else None, made=True)
+    elif ev == "_winapi.CreateJunction":
+        if args:
+            _where(args[0])            # the place the junction names
+        raw, name, own = _where(args[1] if len(args) > 1 else None)
+        if name is not None and not own and not _ok(raw, None, False):
+            _block("junction " + _shown(name))
+    elif ev == "_winapi.CopyFile2":
+        if args:
+            _where(args[0])
+        raw, name, own = _where(args[1] if len(args) > 1 else None)
+        flags = args[2] if len(args) > 2 else 0
+        if name is not None and not own and not _ok(raw, None, not (type(flags) is int and flags & 0x800)):
+            _block("copyfile " + _shown(name))   # COPY_FILE_COPY_SYMLINK: the link itself is made
+    elif ev == "_winapi.CreateProcess":
+        # a program started from another computer, or in a folder of another computer
+        program, line, folder = (tuple(args) + (None, None, None))[:3]
+        for p in (program, folder, _program_of(line) if type(line) is str else None):
+            if p:
+                _where(p)
+    elif ev in _NAMED_FIRST:
+        # a library loaded, a folder libraries are looked for in, the current folder, a program started: on
+        # Windows never another computer's, a device or a pipe
+        p = args[_NAMED_FIRST[ev]] if len(args) > _NAMED_FIRST[ev] else None
+        if p is not None and not isinstance(p, int):
+            _where(p)
+_HANDED = {"os.startfile": "startfile", "os.startfile/2": "startfile", "webbrowser.open": "browser"}
+_NAMED_FIRST = {"ctypes.dlopen": 0, "os.add_dll_directory": 0, "os.chdir": 0, "os.exec": 0, "os.spawn": 1,
+                "os.posix_spawn": 0}
 # A guard the project brings itself (an audit hook of its own) has its say first. Python calls hooks in the order
 # they were added and this guard is the first, so a hook added later never saw what is refused here: a project's
 # tests of its own guard failed in the sandbox with the sandbox's words. So the hooks a program adds are kept here
@@ -1485,6 +2093,24 @@ def _name_first(sock, address):
     if family in _NET:
         _sys.audit("socket.getaddrinfo", host, address[1] if len(address) > 1 else None, family, kind, proto)
         _block("network lookup " + repr(host)[:80])
+def _bound_first(sock, to):
+    # On Windows a datagram socket that sends, or is connected, before it is bound is bound by the system at every
+    # address of this computer, where other computers can send to it. One that goes to this computer's own address
+    # is bound to that address first, at a port the system picks, judged as any bind is.
+    try:
+        if _kind(sock) != _DGRAM or _family(sock) not in (2, 23):
+            return
+        _below.socket.getsockname(sock)
+        return                     # bound already
+    except (TypeError, AttributeError):
+        return
+    except OSError:
+        pass                       # WSAEINVAL: not bound yet
+    if type(to) is tuple and to and _loopback(to[0]):
+        try:
+            _below.socket.bind(sock, ("::1" if _family(sock) == 23 else "127.0.0.1", 0))
+        except OSError:
+            pass                   # the call itself then gets the system's own answer
 def _asks_first(name, at):
     down = getattr(_socket.socket, name, None)
     if down is None:               # sendmsg: not on every system
@@ -1493,9 +2119,13 @@ def _asks_first(name, at):
         i = at(args)               # where the address stands among what the call was given
         if i is not None:
             to = _pair(args[i])
+            _name_first(self, to)
+            if _WIN and not _OWN:
+                to = _written_out(self, to)
+                if name != "bind":
+                    _bound_first(self, to)
             if to is not args[i]:
                 args = args[:i] + (to,) + args[i + 1:]
-            _name_first(self, to)
         return down(self, *args, **more)
     call.__name__, call.__qualname__, call.__doc__ = name, "socket." + name, down.__doc__
     setattr(_socket.socket, name, call)
@@ -1561,9 +2191,148 @@ def _plainly(name, word):
 _plainly("getaddrinfo", "host")
 _plainly("gethostbyname", None)
 _plainly("gethostbyname_ex", None)
+# Windows: the calls Python tells its hooks nothing of. The event loop Windows uses unless a program asks for
+# another connects, sends and opens pipes with calls of its own module (`_overlapped`), and a program that looks at
+# a name (whether it is there, what it is, where a link leads, how much room its disk has) or waits for a pipe asks
+# the system with no event either; for a name of another computer the system then reaches for it over the network.
+# Those calls are wrapped here, by the names programs call them by, and judge as the events above judge. A program
+# that loads such a module anew, or calls the system's own library itself, is not held by this guard.
+if _WIN:
+    try:
+        import _overlapped as _ovl
+    except ImportError:
+        _ovl = None
+    try:
+        import _winapi as _wa, nt as _nt
+    except ImportError:
+        _wa = _nt = None
+    def _same(call, down, name):
+        call.__name__, call.__qualname__ = name, name
+        call.__doc__ = getattr(down, "__doc__", None)
+        return call
+    def _net_of(word, handle, came, want=None):
+        # an address one of the loop's calls hands the system, judged as `_judge` judges a socket's
+        to = _pair(came)
+        kind = _handle_kind(handle)
+        if kind is None or (want is not None and kind != want) or not _as_handed(came):
+            _block("network " + word + " " + repr("" if to is None else to)[:80])
+        _windows_net(word, kind, to)
+        if kind == _DGRAM and type(to) is tuple and len(to) in (2, 4):
+            # the family the loop's call reads the address in: a pair is IPv4, four parts IPv6
+            s = _below.socket(2 if len(to) == 2 else 23, kind, 0, handle)
+            try:
+                _bound_first(s, to)
+            finally:
+                s.detach()
+        return to
+    if _ovl is not None:
+        _OV = _ovl.Overlapped
+        class _Overlapped:
+            # one asynchronous call of the loop's: the two that reach an address are judged, the rest are its own
+            __slots__ = ("_ov",)
+            def __init__(self, *args, **more):
+                self._ov = _OV(*args, **more)
+            def __getattr__(self, name):
+                if name == "_ov":
+                    raise AttributeError(name)
+                return getattr(self._ov, name)
+            def ConnectEx(self, handle, address, /):
+                return self._ov.ConnectEx(handle, _net_of("connect", handle, address, _STREAM))
+            def WSASendTo(self, handle, buf, flags, address, /):
+                return self._ov.WSASendTo(handle, buf, flags, _net_of("sendto", handle, address, _DGRAM))
+        _Overlapped.__name__ = _Overlapped.__qualname__ = "Overlapped"
+        _Overlapped.__module__, _Overlapped.__doc__ = "_overlapped", _OV.__doc__
+        def _loop_calls(connect, pipe, bind):
+            def WSAConnect(handle, address, /):
+                return connect(handle, _net_of("connect", handle, address))
+            def ConnectPipe(address, /):
+                # a client's end of a pipe, opened to read and write: a pipe of the run's own, or a file it may write
+                raw, name, own = _where(address)
+                if name is not None and not own and not _ok(raw):
+                    _block("write to " + _shown(name))
+                return pipe(address if raw is None else raw)
+            def BindLocal(handle, family, /):
+                # The loop binds a socket before it connects it, to every address at a port the system picks: a
+                # socket bound so could be made a listener at every address. It is bound to this computer's own
+                # address instead, judged as any bind is, which is all a connection to it needs.
+                if family not in (2, 23):
+                    return bind(handle, family)          # the system's own answer
+                kind = _handle_kind(handle)
+                if kind is None:
+                    _block("network bind of a handle that is no socket of this program")
+                s = _below.socket(family, kind, 0, handle)
+                try:
+                    s.bind(("::1" if family == 23 else "127.0.0.1", 0))
+                finally:
+                    s.detach()
+            return (_same(WSAConnect, connect, "WSAConnect"), _same(ConnectPipe, pipe, "ConnectPipe"),
+                    _same(BindLocal, bind, "BindLocal"))
+        _ovl.WSAConnect, _ovl.ConnectPipe, _ovl.BindLocal = _loop_calls(_ovl.WSAConnect, _ovl.ConnectPipe, _ovl.BindLocal)
+        _ovl.Overlapped = _Overlapped
+    if _wa is not None:
+        def _waits(down):
+            def WaitNamedPipe(name, timeout, /):
+                raw = _where(name)[0]
+                return down(name if raw is None else raw, timeout)
+            return _same(WaitNamedPipe, down, "WaitNamedPipe")
+        _wa.WaitNamedPipe = _waits(_wa.WaitNamedPipe)
+        if callable(getattr(_wa, "CopyFile2", None)):
+            # how `shutil.copy2` copies on Windows: judged here as its event is judged, should a Python not raise it
+            def _copies(down):
+                def CopyFile2(existing_file_name, new_file_name, flags, progress_routine=None):
+                    _judge("_winapi.CopyFile2", (existing_file_name, new_file_name, flags))
+                    return down(existing_file_name, new_file_name, flags, progress_routine)
+                return _same(CopyFile2, down, "CopyFile2")
+            _wa.CopyFile2 = _copies(_wa.CopyFile2)
+    if _IN_WALL:
+        def _locally(down, name):
+            def call(first, /, *rest):
+                return down(_local(first), *rest)
+            return _same(call, down, name)
+        if _wa is not None:
+            for _n in ("CreateNamedPipe", "CreateFile", "WaitNamedPipe"):
+                setattr(_wa, _n, _locally(getattr(_wa, _n), _n))
+        if _ovl is not None:
+            _ovl.ConnectPipe = _locally(_ovl.ConnectPipe, "ConnectPipe")
+    def _placed(down, quiet):
+        # A call that looks at a name. Another computer's, a device or another program's pipe is refused and named
+        # before the system is asked; a call that only answers yes or no answers no, and the name is said once.
+        def call(path, *args, **more):
+            if path is not None and not isinstance(path, int):
+                raw, name = _plain_path(path)
+                if name is not None:
+                    why = _windows_place(name)[0]
+                    if why is not None:
+                        if quiet:
+                            _say(why)
+                            return False
+                        _block(why)
+                    path = raw
+            return down(path, *args, **more)
+        return _same(call, down, getattr(down, "__name__", "call"))
+    if _nt is not None:
+        _WRAPPED = {}
+        for _n, _quiet in (("stat", 0), ("lstat", 0), ("readlink", 0), ("_getfinalpathname", 0),
+                           ("_getvolumepathname", 0), ("_getdiskusage", 0), ("_findfirstfile", 0), ("access", 1),
+                           ("_path_exists", 1), ("_path_isdir", 1), ("_path_isfile", 1), ("_path_islink", 1),
+                           ("_path_isjunction", 1), ("_path_lexists", 1), ("_path_isdevdrive", 1)):
+            _f = getattr(_nt, _n, None)
+            if callable(_f):
+                _WRAPPED[id(_f)] = (_f, _placed(_f, _quiet))
+        # by every name the system's own modules hold them under (ntpath has some of them as its own functions)
+        for _m in (_nt, _os, _os.path):
+            for _n, _f in list(vars(_m).items()):
+                if id(_f) in _WRAPPED and _WRAPPED[id(_f)][0] is _f:
+                    setattr(_m, _n, _WRAPPED[id(_f)][1])
+        for _n in ("supports_dir_fd", "supports_fd", "supports_follow_symlinks", "supports_effective_ids"):
+            _s = getattr(_os, _n, None)
+            if isinstance(_s, set):
+                _s.update(w for f, w in list(_WRAPPED.values()) if f in _s)
 _sys.addaudithook(_hook)
 _sys.addaudithook = _add
 _sys.lantern_sandbox_guard = "on"   # lantern.tracehook looks for this before it runs a test (LANTERN_SANDBOX_GUARD)
+if _IN_WALL:
+    _sys.lantern_sandbox_wall = "on"   # ... and for this where the run promised the wall (LANTERN_SANDBOX_CONTAINER)
 '''
 
 
@@ -1572,18 +2341,243 @@ class Result(dict):
     pass
 
 
-def _copy(repo: Path, dst: Path) -> None:
+def _copy(repo: Path, dst: Path) -> list[str]:
+    """The project, copied for a run of its tests; its links stay links. On Windows a link that names a place of
+    another computer (a share, by its name or by a drive letter Windows gave it) is not copied, and its name is
+    handed back: a test that opens it would have Windows reach for that computer over the network, and the guard,
+    which reads the name the test gives, would see only a file of the copy (a firm pass or fail, stage 4,
+    2026-11-20). A link the tests make themselves is judged when it is made."""
+    left: list[str] = []
+
     def ignore(d, names):
-        return [n for n in names if n in SKIP]
+        out = [n for n in names if n in SKIP]
+        if sys.platform == "win32":
+            for n in names:
+                if n not in SKIP and _link_not_here(os.path.join(d, n)):
+                    out.append(n)
+                    left.append(os.path.relpath(os.path.join(d, n), repo))
+        return out
     shutil.copytree(repo, dst, symlinks=True, ignore=ignore)
+    return left
+
+
+def _a_drive(part: str) -> bool:
+    return len(part) == 2 and part[1] == ":" and part[0].isascii() and part[0].isalpha()
+
+
+def _remote_drive(letter: str) -> bool:
+    """Is this drive letter a share of another computer (Windows' DRIVE_REMOTE)? Windows says it without asking
+    the network. False anywhere else."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        return ctypes.WinDLL("kernel32").GetDriveTypeW(ctypes.c_wchar_p(letter + ":\\")) == 4
+    except (OSError, AttributeError):
+        return False
+
+
+def _not_here(place: str, remote=None) -> bool:
+    """On Windows: is this place anything but a folder or file of this computer's own disks? A share by its name
+    (`\\\\computer\\share`, with forward slashes, or `\\\\?\\UNC\\...`), a drive letter Windows gave a share
+    (`remote`, a stand-in for Windows' own answer in a test), a pipe or a device. Read from the text, as the guard
+    reads a name; nothing is opened."""
+    n = place.replace("/", "\\")
+    if n[:4] in ("\\\\?\\", "\\\\.\\", "\\??\\"):
+        n = n[4:]
+        if n[:7].lower() == "volume{":
+            return False
+        if not _a_drive(n[:2]):
+            return True
+    elif n[:2] == "\\\\":
+        return True
+    return _a_drive(n[:2]) and (remote or _remote_drive)(n[0])
+
+
+def _link_not_here(path: str) -> bool:
+    """Is this a link whose text names a place that is not this computer's own (`_not_here`)? Nothing it names is
+    opened."""
+    try:
+        return os.path.islink(path) and _not_here(os.readlink(path))
+    except (OSError, ValueError):
+        return False
+
+
+def _path_here(path: str, remote=None, sep: str = os.pathsep) -> tuple[str, list[str]]:
+    """PATH for tests on Windows, and the folders left out of it: those of another computer. Windows looks for a
+    program named by its bare name in every folder of PATH, and for a share it asks that computer over the
+    network, below anything the guard can see."""
+    kept, left = [], []
+    for folder in path.split(sep):
+        (left if folder and _not_here(folder, remote) else kept).append(folder)
+    return sep.join(kept), left
 
 
 MOST_LINKS = 20_000         # links of one repository that are made links again in the tests' copy
 LINK_TEXT = 4096            # the longest path a link names
+MOST_HOPS = 40              # links followed on the way to one place (Linux's own limit)
+MOST_STEPS = 2_000_000      # steps of all the ways read for one copy on Windows, so that no project holds a run up
+# a piece of a link's text that Windows reads otherwise than git keeps it: a stream of a file (`a:b`), a character
+# Windows allows in no name, a control character, a dot or a space at its end (Windows' own names drop them)
+WINDOWS_READS_OTHERWISE = re.compile(r'[<>:"|?*\x00-\x1f]|[. ]$')
+SURROGATE = 0x20000000      # the bit of a Windows reparse tag that says the point stands for another place
+NO_RIGHT = 1314             # Windows' ERROR_PRIVILEGE_NOT_HELD: this user may make no link
 
 
 def _n_links(n: int, many: str, one: str) -> str:
     return f"sandbox: {n} {one if n == 1 else many}"
+
+
+def _pieces(text: str, windows: bool) -> list[str] | None:
+    """The pieces of a link's text as this system reads them, or None for a full path (one that does not begin at
+    the link's own folder; on Windows also one that names a drive, or begins at the top of one)."""
+    if windows:
+        if text[:1] in ("/", "\\") or text[1:2] == ":":
+            return None
+        return re.split(r"[\\/]", text)
+    return None if text.startswith("/") else text.split("/")
+
+
+def _by_text(pieces) -> list[str] | None:
+    """A path read by its text alone, each `..` taking away the piece before it: the pieces of the place from the
+    project's top, or None when it goes up past the top."""
+    at: list[str] = []
+    for p in pieces:
+        if p in ("", "."):
+            continue
+        if p != "..":
+            at.append(p)
+        elif at:
+            at.pop()
+        else:
+            return None
+    return at
+
+
+def _fold(piece: str) -> str:
+    """A name as Windows compares names: each letter as its capital, where it has one capital letter."""
+    return "".join(u if len(u := c.upper()) == 1 else c for c in piece)
+
+
+def _key(parts) -> str:
+    return "\0".join(_fold(p) for p in parts)
+
+
+class _Far(Exception):
+    """The way of a link could not be followed to its end: a loop, more than MOST_HOPS links on it, or more steps
+    for all the ways of one copy than MOST_STEPS."""
+
+
+def _leads(folder: list[str], pieces: list[str], links: dict[str, list[str]], windows_way: bool,
+           steps: list[int]) -> list[str] | None:
+    """Where a link in `folder` (its pieces from the project's top) whose text is `pieces` leads, through the
+    links that will be in the copy (`links`: the place of each, as `_key` writes it, to the pieces of its text):
+    the pieces of the place from the project's top, or None when the way leaves the project; `_Far` when it cannot
+    be followed to its end (`steps` counts down). Read two ways. Linux and macOS go into each link on the way
+    before the `..` after it (`windows_way` false). Windows puts the folder of a link, the link's text and the rest
+    of the way together and reads every `..` of that by its text before it goes on (`windows_way`; found on
+    GitHub's Windows machine, 2026-11-20: there `vendor/..` is the project's own top whatever `vendor` names)."""
+    first = _by_text([*folder, *pieces]) if windows_way else [*folder, *pieces]
+    if first is None:
+        return None
+    todo, at, keys, hops = list(reversed(first)), [], [], 0        # `todo` is read from its end
+    while todo:
+        p = todo.pop()
+        steps[0] -= 1 + len(at)
+        if steps[0] < 0:
+            raise _Far
+        if p in ("", "."):
+            continue
+        if p == "..":
+            if not at:
+                return None
+            at.pop()
+            keys.pop()
+            continue
+        key = f"{keys[-1]}\0{_fold(p)}" if keys else _fold(p)
+        text = links.get(key)
+        if text is None:
+            at.append(p)
+            keys.append(key)
+            continue
+        hops += 1
+        if hops > MOST_HOPS:
+            raise _Far
+        if windows_way:
+            steps[0] -= len(at) + len(text) + len(todo)
+            joined = _by_text([*at, *text, *reversed(todo)])
+            if joined is None:
+                return None
+            todo, at, keys = list(reversed(joined)), [], []
+        else:
+            todo.extend(reversed(text))
+    return at
+
+
+def _both_ways(found: dict, top: str, steps: list[int]) -> tuple[dict[str, bool], dict[str, str]]:
+    """Of the links about to be made on Windows (`found`: each place with its pieces from the project's top and the
+    pieces of its text, in the order the repository lists them), those whose way stays inside the project read
+    both ways `_leads` reads it, through the links that stay, each with whether the place it leads to is a folder
+    (Windows asks which a link is when it is made); and each of the others with the reason, `out` or `far`. As on
+    Linux and macOS, where the system's own answer is asked once the links are there, one link at a time: a link
+    that leads out goes, and the ones after it are read without it, and all of them again until none goes. Where
+    the steps run out, none of them is made."""
+    keep = dict(found)
+    links = {_key(parts): pieces for parts, pieces in keep.values()}
+    left: dict[str, str] = {}
+    ends: dict[str, list[str]] = {}
+    again = True
+    while again:
+        again = False
+        for place, (parts, pieces) in list(keep.items()):
+            try:
+                ways = [_leads(parts[:-1], pieces, links, way, steps) for way in (False, True)]
+            except _Far:
+                if steps[0] < 0:
+                    left.update(dict.fromkeys(keep, "far"))
+                    return {}, left
+                ways = None
+            if ways is not None and None not in ways:
+                ends[place] = ways[1]
+                continue
+            del keep[place], links[_key(parts)]
+            ends.pop(place, None)
+            left[place] = "out" if ways else "far"
+            again = True
+    return {place: os.path.isdir(os.path.join(top, *end)) for place, end in ends.items()}, left
+
+
+def _read_small(place: str, st, within) -> bytes | None:
+    """The text of the small file at a link's place in Lantern's copy, when it can be a link's text: a plain file of
+    one line, no longer than LINK_TEXT, in a folder inside the copy (`within`), read without going through a link
+    (where the system has no word for that, Windows, the file is the one `st` looked at just before). None
+    otherwise."""
+    if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= LINK_TEXT \
+            or not within(os.path.realpath(os.path.dirname(place))):
+        return None
+    try:
+        fd = os.open(place, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                     | getattr(os, "O_BINARY", 0))
+        try:
+            again = os.fstat(fd)
+            raw = os.read(fd, LINK_TEXT + 1) if stat.S_ISREG(again.st_mode) and again.st_size == st.st_size else b""
+        finally:
+            os.close(fd)
+    except OSError:
+        return None
+    if len(raw) != st.st_size or b"\0" in raw or b"\n" in raw or b"\r" in raw:
+        return None
+    return raw
+
+
+def _write_small(place: str, raw: bytes, mode: int) -> None:
+    """The small file a link was, written back at its place (where nothing is now)."""
+    fd = os.open(place, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_BINARY", 0), mode)
+    try:
+        os.write(fd, raw)
+    finally:
+        os.close(fd)
 
 
 def _links_again(repo: Path, app: Path, log) -> None:
@@ -1597,11 +2591,16 @@ def _links_again(repo: Path, app: Path, log) -> None:
     Here each file that the repository's own record calls a link (`gitfacts.links`) is made a link again in the
     tests' copy, which is thrown away with the run, when the link stays in the project: its text is one line of
     a path's length, no full path, and does not go up past the project's top as written; and, once all are
-    made, where it leads through the others is still inside the copy (a link to the project's own top makes
-    `top/..` the folder above). A link that leads out stays the small file it was, and the log says how many.
-    Nothing here opens what a link names, and Lantern's own copy of the repository is not changed. A folder of
+    made, where it leads through the others, as the system itself answers, is still inside the copy (a link to
+    the project's own top makes `top/..` the folder above). On Windows (a firm pass or fail, stage 4, 2026-11-20;
+    until then no link was made there, and tests that pass at home failed in the copy) each is read first the two
+    ways `_leads` reads a link, through the links about to be made, and made only where both stay inside: with
+    Windows' own separator, and as a link to a folder where it leads to one (`_both_ways`). A link that leads out
+    stays the small file it was, and so does one this computer does not let Lantern make; the log says how many.
+    Nothing here reads what a link names, and Lantern's own copy of the repository is not changed. A folder of
     the person's own keeps its links as it always did (`_copy`), with the sandbox's walls around them."""
-    if os.name != "posix":
+    windows = os.name == "nt"
+    if os.name != "posix" and not windows:
         return
     from . import gitfacts, remote
     try:
@@ -1611,86 +2610,122 @@ def _links_again(repo: Path, app: Path, log) -> None:
     if not names:
         return
     top = os.path.realpath(app)
+    folded = os.path.normcase(top)
 
     def within(path: str) -> bool:
-        return path == top or path.startswith(top + os.sep)
+        path = os.path.normcase(path)
+        return path == folded or path.startswith(folded + os.sep)
 
-    made: dict[str, tuple[bytes, int]] = {}
-    out = odd = 0
+    def stays(place: str) -> bool:
+        try:
+            return within(os.path.realpath(place))
+        except (OSError, ValueError):
+            return False
+
+    found: dict[str, tuple[list[str], list[str]]] = {}
+    texts: dict[str, tuple[str, bytes, int]] = {}
+    said = dict.fromkeys(("out", "far", "other", "refused", "odd"), 0)
     for name in names[:MOST_LINKS]:
         parts = name.split("/")
-        if name.startswith("/") or any(part in ("", ".", "..") for part in parts):
+        if name.startswith("/") or any(part in ("", ".", "..") for part in parts) \
+                or windows and any(":" in part or "\\" in part for part in parts):
             continue
         place = os.path.join(top, *parts)
         try:
             st = os.lstat(place)
         except OSError:
             continue                                # not in the copy (a folder the copy leaves out)
-        if stat.S_ISLNK(st.st_mode):
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) & SURROGATE:
             continue                                # a copy that kept its links: as it is
-        try:
-            if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= LINK_TEXT \
-                    or not within(os.path.realpath(os.path.dirname(place))):
-                odd += 1
-                continue
-            fd = os.open(place, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
-            try:
-                raw = os.read(fd, LINK_TEXT + 1)
-            finally:
-                os.close(fd)
-        except OSError:
-            odd += 1
-            continue
-        if len(raw) != st.st_size or b"\0" in raw or b"\n" in raw or b"\r" in raw:
-            odd += 1
+        raw = _read_small(place, st, within)
+        if raw is None:
+            said["odd"] += 1
             continue
         target = os.fsdecode(raw)
-        where = os.path.normpath(os.path.join(os.path.dirname(name), target))
-        if target.startswith("/") or where == ".." or where.startswith("../"):
-            out += 1
+        pieces = _pieces(target, windows)
+        if pieces is None or _by_text([*parts[:-1], *pieces]) is None:
+            said["out"] += 1
             continue
+        if windows and any(p not in (".", "..") and WINDOWS_READS_OTHERWISE.search(p) for p in pieces):
+            said["other"] += 1
+            continue
+        found[place] = (parts, pieces)
+        texts[place] = (target, raw, stat.S_IMODE(st.st_mode))
+    folders: dict[str, bool] = {}
+    if windows and found:
+        folders, left = _both_ways(found, top, [MOST_STEPS])
+        for why in left.values():
+            said[why] += 1
+        found = {place: found[place] for place in folders}
+    made: dict[str, tuple[bytes, int]] = {}
+    for place in found:
+        target, raw, mode = texts[place]
         beside = f"{place}.lantern-link-{uuid.uuid4().hex[:12]}"
         try:
-            os.symlink(target, beside)
-            os.replace(beside, place)
+            os.symlink(target.replace("/", "\\") if windows else target, beside,
+                       target_is_directory=folders.get(place, False))
+        except OSError as e:
+            said["refused" if e.errno == errno.EPERM or getattr(e, "winerror", None) == NO_RIGHT else "odd"] += 1
+            continue
+        try:
+            if windows:                             # Windows puts no link to a folder in a file's place: it goes first
+                os.unlink(place)
+                try:
+                    os.rename(beside, place)
+                except OSError:
+                    _write_small(place, raw, mode)
+                    raise
+            else:
+                os.replace(beside, place)
         except OSError:
             try:
                 os.unlink(beside)
             except OSError:
                 pass
-            odd += 1
+            said["odd"] += 1
             continue
-        made[place] = (raw, stat.S_IMODE(st.st_mode))
+        made[place] = (raw, mode)
     again = True
-    while again:                                    # where each one leads, through the others
+    while again:                                    # where each one leads, through the others, as the system says
         again = False
         for place in list(made):
-            if within(os.path.realpath(place)):
+            if stays(place):
                 continue
             raw, mode = made.pop(place)
-            try:
-                os.unlink(place)
-                fd = os.open(place, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-                try:
-                    os.write(fd, raw)
-                finally:
-                    os.close(fd)
-            except OSError:
-                pass
-            out += 1
+            os.unlink(place)                        # a link that leads out is never left: the copy fails instead
+            _write_small(place, raw, mode)
+            said["out"] += 1
             again = True
     if made:
         log(_n_links(len(made), "links of the repository are links again in the tests' copy",
                      "link of the repository is a link again in the tests' copy")
             + " (Lantern's own copy of a repository keeps each as a small file)")
-    if out:
-        log(_n_links(out, "links of the repository lead out of the project and stay small files in the copy: "
-                          "tests that go through them do not find what they name",
+    if said["out"]:
+        log(_n_links(said["out"], "links of the repository lead out of the project and stay small files in the "
+                                  "copy: tests that go through them do not find what they name",
                      "link of the repository leads out of the project and stays a small file in the copy: "
                      "tests that go through it do not find what it names"))
-    if odd:
-        log(_n_links(odd, "files that the repository holds as links are not a link's text in Lantern's copy "
-                          "and stay as they are",
+    if said["far"]:
+        log(_n_links(said["far"], "links of the repository lead through too many other links to be followed, and "
+                                  "stay small files in the copy: tests that go through them do not find what they name",
+                     "link of the repository leads through too many other links to be followed, and stays a small "
+                     "file in the copy: tests that go through it do not find what it names"))
+    if said["other"]:
+        log(_n_links(said["other"], "links of the repository name their place in words Windows reads otherwise "
+                                    "than git, and stay small files in the copy: tests that go through them do not "
+                                    "find what they name",
+                     "link of the repository names its place in words Windows reads otherwise than git, and stays a "
+                     "small file in the copy: tests that go through it do not find what it names"))
+    if said["refused"]:
+        why = " (on Windows that takes Developer Mode or the right to make links)" if windows else ""
+        log(_n_links(said["refused"], "links of the repository stay small files in the tests' copy: this computer "
+                                      f"did not let Lantern make a link{why}, so tests that go through them do not "
+                                      "find what they name",
+                     "link of the repository stays a small file in the tests' copy: this computer did not let "
+                     f"Lantern make a link{why}, so tests that go through it do not find what it names"))
+    if said["odd"]:
+        log(_n_links(said["odd"], "files that the repository holds as links are not a link's text in Lantern's copy "
+                                  "and stay as they are",
                      "file that the repository holds as a link is not a link's text in Lantern's copy and "
                      "stays as it is"))
 
@@ -1731,7 +2766,11 @@ def _copy_in(repo: Path, app: Path, log) -> None:
     """The project's copy for one run, or `Unavailable` with the reason when it cannot be made."""
     log("sandbox: copying the project to a temp folder")
     try:
-        _copy(repo, app)
+        far = _copy(repo, app)
+        if far:
+            log(_n_links(len(far), "links of the project name", "link of the project names")
+                + " a place on another computer and " + ("is" if len(far) == 1 else "are")
+                + " not in the tests' copy: " + ", ".join(far[:3]) + (f" and {len(far) - 3} more" if len(far) > 3 else ""))
         _links_again(repo, app, log)
     except RecursionError as e:   # the standard library copies by calling itself once per folder level
         raise Unavailable("the project could not be copied into the sandbox's temp folder "
@@ -2023,7 +3062,9 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
     """Run, streaming each output line to `log`, and leave nothing behind: when the command ends, at the wall
     clock (`timeout`), when `cancel` (a threading.Event) is set and when `stop_all` is called, every process it
     started is ended too. Returns (result, output, stopped at the wall clock); the result is None when the command
-    was stopped, at the wall clock or because it was asked.
+    was stopped, at the wall clock or because it was asked, and `_jail.OVER_MEMORY` when the job that holds it said
+    its programs together went over their memory (Windows: the run is then stopped, as Linux's launcher stops it and
+    ends with that result; a job's `refused` says it was so, which a command that ends with that number does not).
 
     `job`: called before the process is made; what it returns holds the process (Windows: `winjob.Job`, which the
     process is put in before it runs). `ask`: seconds the command has to end what it started after SIGTERM, for a
@@ -2076,9 +3117,13 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         deadline, delay = time.monotonic() + timeout, 0.001
+        watch = getattr(held, "over_memory", None)     # Windows: the job says when its programs went over
         while not run.ended():
             if run.asked.is_set() or (cancel is not None and cancel.is_set()):
                 why = "asked"
+                break
+            if watch is not None and _watched(watch):
+                why = "memory"
                 break
             if time.monotonic() >= deadline:
                 why = "clock"
@@ -2101,13 +3146,30 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
     reader.join(timeout=5)
     if reader.is_alive():
         log("sandbox: something this run started still holds its output open")
-    return (None if why else proc.returncode), "\n".join(lines), why == "clock"
+    rc = None if why else proc.returncode
+    if why in ("", "memory") and getattr(held, "refused", False) is True:
+        # also when Windows said it as the command ended by itself; a run stopped at the wall clock or because it
+        # was asked was stopped for that, whatever the job says after
+        from . import _jail
+        rc = _jail.OVER_MEMORY
+    return rc, "\n".join(lines), why == "clock"
+
+
+def _watched(watch) -> bool:
+    """What the job that holds a run says of its memory (`winjob.Job.over_memory`). Lantern cannot say the tests
+    passed or failed where Windows does not answer it: the run is then stopped, and is not counted."""
+    try:
+        return watch()
+    except OSError as e:
+        raise Unavailable(f"Windows did not say whether the tests stayed within their memory ({e}), so what they "
+                          "did is not counted") from e
 
 
 def _windows_job(memory: int = MEMORY_MB):
-    """Windows: the Job Object a project's tests run in (`memory` megabytes for each process; every process in it
-    ends when the job is stopped or closed, and nothing started inside can leave it). None on other systems, where
-    `lantern._jail` does that work. `Unavailable` when Windows does not make it: the tests are then not run."""
+    """Windows: the Job Object a project's tests run in (`memory` megabytes for the tests and everything they start,
+    counted together, `winjob.Job`; every process in it ends when the job is stopped or closed, and nothing started
+    inside can leave it). None on other systems, where `lantern._jail` does that work. `Unavailable` when Windows
+    does not make it: the tests are then not run."""
     if sys.platform != "win32":
         return None
     from . import winjob
@@ -2292,7 +3354,8 @@ def blocked_reasons(output: str, no_memory_folder: bool = False) -> list[str]:
         elif _NO_NETWORK.search(line):
             why = "network (the sandbox has no network)"
         if why:
-            kind = "network" if why.startswith("network") else "read" if why.startswith("read of ") else "write"
+            kind = "network" if why.startswith("network") else "read" if why.startswith("read of ") \
+                else "device" if why.startswith("device ") else "write"
             key = (kind, why[:120])
             if key not in seen:
                 seen.add(key)
@@ -2329,7 +3392,8 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
     socket file outside their own folders was out of reach for programs that are not Python too; `own_sockets()`
     says why not), `off_network` (this run's own walls kept the tests from the network: Docker, a network of the
     run's own, Python's tests through the guard, or any other program where `held_below_python()`; False for tests
-    that are not Python where nothing of Lantern's holds them, and the log then says why), `output_tail`,
+    that are not Python where nothing of Lantern's holds them, and the log then says why), `windows_wall` (every
+    program of the tests was inside a wall of Windows' own made for this run: `WALL_LINE`), `output_tail`,
     `stderr_tail`. `memory`: the megabytes for this run (`memory_limit`; ValueError for
     anything that is no such number). `cancel`: a threading.Event; once set, the tests and everything they
     started are ended. Raises `Unavailable` when the sandbox cannot be set up: the tests were then not run.
@@ -2369,6 +3433,7 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
                libraries=found.record)
     res.setdefault("own_network", False)
     res.setdefault("own_sockets", False)
+    res.setdefault("windows_wall", False)
     res["off_network"] = _was_off_network(backend, language, bool(res["own_network"]))
     res.setdefault("over_memory", False)
     res["cancelled"] = res.get("returncode") is None and not res.get("timed_out") and not res.get("over_memory")
@@ -2527,6 +3592,112 @@ def _own_python(root: Path, libs: Path, app: Path, log) -> tuple[str, Path, Path
     return str(exe), home, site
 
 
+# Windows: what of this computer's Python a whole Python of the run's own is made of (`_whole_python`): the files
+# beside its program and these two folders, and of its library folder all but the libraries installed on this
+# computer and Python's own tests. Python's programs for installing, its documents, tools, headers and files for
+# building other programs are not needed to run it, and are left out.
+WHOLE_FOLDERS = ("DLLs", "Lib")
+WHOLE_LEFT_IN_LIB = ("site-packages", "test")
+# The modules a project's tests commonly load that are made of more than Python: each must load in the copy wherever
+# it loads in this Python (a Python that finds a library of the system outside its own folder, as conda's does, would
+# lose it in the copy).
+WHOLE_MODULES = ("_socket", "select", "_overlapped", "_multiprocessing", "_ssl", "_hashlib", "_sqlite3", "_ctypes",
+                 "pyexpat", "_elementtree", "_decimal", "_lzma", "_bz2", "zlib", "_uuid", "_asyncio", "_queue",
+                 "unicodedata", "_zoneinfo", "_wmi")
+
+
+def _whole_python(home: Path, named: list[str], timeout: float = 120) -> str:
+    """Windows: a whole Python of the run's own in `home` (which must not be there yet), a copy of this computer's
+    Python (`sys.base_prefix`) without the libraries installed on it, whose one library file (`lantern.pth`) names
+    the folders in `named` (the fetched libraries, the project's `src`, the copy). Returns its program.
+
+    The Python of the run's own that `_own_python` makes is, on Windows, a small program that starts this computer's
+    Python, and Windows looks for a program named without its folder beside the program that asks before it looks in
+    PATH: a test that started `python` by that bare name got this computer's Python, with this computer's libraries
+    (`_own_python_words`). A whole Python is its own program, so what Windows finds beside it is itself; and it lies
+    in the run's folder, where a container of the run's own (`lantern.wincontainer`) may read it.
+
+    Raises OSError where it cannot be made: this computer's Python is not of the shape Python documents for Windows,
+    or is an embeddable one (a `._pth` file decides its path, and would decide the copy's), a folder name cannot be
+    written in a path file, or the copy does not start as a Python whose home is `home`, or does not load a module of
+    `WHOLE_MODULES` that this Python loads. `home` is then left for the caller to remove."""
+    import importlib
+    base = Path(sys.base_prefix)
+    program = "python.exe"
+    if not (base / program).is_file() or not (base / "Lib" / "os.py").is_file():
+        raise OSError(errno.ENOENT, "this computer's Python is not of the shape Python documents for Windows")
+    with os.scandir(base) as found:
+        tops = sorted((e for e in found), key=lambda e: e.name)
+    if any(e.name.lower().endswith("._pth") for e in tops):
+        raise OSError(errno.EINVAL, "this computer's Python is an embeddable one, whose path a file of its own decides")
+    if any("\n" in p or "\r" in p or p.lstrip().startswith(("import ", "import\t", "#")) for p in named):
+        raise OSError(errno.EINVAL, "a folder name that cannot be written in a path file")
+    loads_here = set()
+    for name in WHOLE_MODULES:
+        try:
+            importlib.import_module(name)
+            loads_here.add(name)
+        except ImportError:
+            continue
+    home.mkdir()
+    for e in tops:
+        if e.is_file(follow_symlinks=False):
+            shutil.copy2(e.path, home / e.name)
+    lib = base / "Lib"
+    for folder in WHOLE_FOLDERS:
+        if (base / folder).is_dir():
+            shutil.copytree(base / folder, home / folder, symlinks=True,
+                            ignore=lambda at, names: [n for n in names if Path(at) == lib and n in WHOLE_LEFT_IN_LIB])
+    site = home / "Lib" / "site-packages"
+    site.mkdir()
+    exe = home / program
+    # Does it start, is its home the copy, and does it load what this Python loads? Asked of the copy while its path
+    # file is not written yet: Python looks for a start-up file (`sitecustomize`) in every folder on its path, and
+    # neither a fetched library nor the project is to be on the path of a Python outside the sandbox.
+    ask = ("import importlib, os, sys\nprint(os.path.realpath(sys.prefix))\nprint(os.path.realpath(sys.base_prefix))\n"
+           f"for name in {sorted(loads_here)!r}:\n"
+           "    try:\n        importlib.import_module(name)\n    except ImportError:\n        print('missing', name)\n")
+    said = subprocess.run([str(exe), "-I", "-c", ask], capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout, cwd=str(home), env=programs.env({k: os.environ[k] for k in (
+                              "PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR") if k in os.environ}))
+    lines = said.stdout.splitlines()
+    mine = os.path.realpath(home)
+    if said.returncode != 0 or lines[:2] != [mine, mine]:
+        raise OSError(errno.ENOEXEC, "the copy of this computer's Python does not start as a Python of its own")
+    missing = [line.split(" ", 1)[1] for line in lines[2:] if line.startswith("missing ")]
+    if missing:
+        raise OSError(errno.ENOENT, f"the copy of this computer's Python does not load {', '.join(missing[:3])}")
+    (site / "lantern.pth").write_text("".join(p + "\n" for p in named), encoding="utf-8")
+    return str(exe)
+
+
+def _runs_own_python(root: Path, libs: Path, app: Path, log,
+                     whole: bool = False) -> tuple[str, list[str], str | None] | None:
+    """The Python of the run's own for tests on fetched libraries: (its program, the files it is made of that say
+    where its libraries are, the folder of the environment it is or None for a whole Python), or None where none
+    could be made (the guard then keeps to the fetched libraries for every Python handed the tests' environment).
+    On Windows a whole Python (`_whole_python`), and where that cannot be made the older one (`_own_python`), whose
+    line says what the bare name `python` then starts (`_own_python_words`). `whole`: a whole Python or none (the
+    tests are to run inside a wall of Windows' own, which can read no other)."""
+    if sys.platform == "win32":
+        home = root / OWN_PYTHON
+        src = app / "src"
+        try:
+            exe = _whole_python(home, [str(libs), *([str(src)] if src.is_dir() else []), str(app)])
+        except (OSError, subprocess.SubprocessError) as e:
+            why = e.strerror if isinstance(e, OSError) and e.strerror else type(e).__name__
+            log("sandbox: " + NO_WHOLE_PYTHON.format(why=why))
+            _rm(home)
+        else:
+            return exe, [exe, str(home / "Lib" / "site-packages" / "lantern.pth")], None
+    if whole:
+        return None
+    own = _own_python(root, libs, app, log)
+    if own is None:
+        return None
+    return own[0], [str(own[1] / "pyvenv.cfg"), str(own[2] / "lantern.pth")], str(own[1])
+
+
 def _programs_run_by(libs: Path, python: str) -> int:
     """The command-line programs the fetched libraries brought (`libs/bin`) name, in their first line, the Python
     that fetched them, as pip writes it: the full path of the Python that runs Lantern. Have them name `python`
@@ -2589,6 +3760,19 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
             _make_read_only(app)
         env = _env_base(tmp)
         env["LANTERN_SANDBOX_WRITABLE"] = os.pathsep.join(str(w) for w in writable)
+        if sys.platform == "win32" and theirs:
+            # The tests run in a job of their own (`_windows_job`), which nothing they start can leave: the guard
+            # counts every program of that job as the run's own, so a test may call a server another program of
+            # its own started (lantern.winjob). An app started by one of Lantern's own drivers is one program, and
+            # there only that program's own sockets are its own.
+            env["LANTERN_SANDBOX_JOB"] = "own"
+        if sys.platform == "win32" and env.get("PATH"):
+            env["PATH"], far = _path_here(env["PATH"])
+            if far:
+                log(f"sandbox: {len(far)} folder{'' if len(far) == 1 else 's'} of PATH "
+                    f"{'is' if len(far) == 1 else 'are'} on another computer and "
+                    f"{'is' if len(far) == 1 else 'are'} not on the tests' PATH: " + ", ".join(far[:3])
+                    + (f" and {len(far) - 3} more" if len(far) > 3 else ""))
         if as_nobody and env.get("PATH"):
             env["PATH"], closed = _path_for(env["PATH"], 65534, 65534)
             if closed:
@@ -2611,6 +3795,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
     out_json = tmp / ("behave.observed.json" if inside is not None else "trace.json")
     pkg_root = str(Path(__file__).resolve().parent.parent)
     made_of: list[str] = []         # what the tests' user must be able to read, or the launcher starts nothing
+    walled = False
     if language == "python" and libs is not None:
         # On the fetched libraries and no others: the guard takes the libraries installed beside this Python off
         # the path (`_only_fetched`), and the recorder runs from its own file, not from Lantern's folder.
@@ -2624,11 +3809,17 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         env["LANTERN_SANDBOX_SITE"] = os.pathsep.join([str(libs), *([str(src)] if src.is_dir() else [])])
         env["LANTERN_SANDBOX_GUARD"] = "required"
         env["LANTERN_SANDBOX_LIBRARIES"] = "fetched"
-        python, own = sys.executable, _own_python(root, libs, app, log)
-        if own is not None:     # this computer's Python under another name, where the only libraries are the fetched
+        # Windows: every program of these tests inside a wall of Windows' own made for this run (`_walled`), on a
+        # whole Python of the run's own, which the wall can read
+        walled = theirs and _walled(language, True)
+        python, own = sys.executable, _runs_own_python(root, libs, app, log, whole=walled)
+        if walled and (own is None or own[2] is not None):
+            raise Unavailable(NO_WALL_PYTHON)
+        if own is not None:     # a Python of the run's own, where the only libraries are the fetched
             python = own[0]
-            made_of += [str(own[1] / "pyvenv.cfg"), str(own[2] / "lantern.pth")]
-            env["VIRTUAL_ENV"] = str(own[1])
+            made_of += own[1]
+            if own[2] is not None:
+                env["VIRTUAL_ENV"] = own[2]
         # a program a fetched library brings is found by its name, before one of that name on this computer
         first = [os.path.dirname(python)] if own is not None else []
         first += [str(libs / d) for d in ("bin", "Scripts") if (libs / d).is_dir()]
@@ -2641,7 +3832,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         log("sandbox: the tests run on the fetched libraries and Python's own, with the network off; the "
             "libraries installed on this computer are not on their path")
         if own is not None:
-            log("sandbox: " + _own_python_words(sys.platform == "win32"))
+            log("sandbox: " + (WHOLE_PYTHON if own[2] is None else _own_python_words(sys.platform == "win32")))
     elif language == "python":
         made_of = _made_of(pkg_root)
         env["PYTHONPATH"] = os.pathsep.join([str(hook), pkg_root, str(app)])
@@ -2698,7 +3889,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         cmd[2:4] = ["-c", f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])"]
     log(f"sandbox: restricted process, running {' '.join(words)}")
     if no_own and inside is None:
-        first, *more = _no_network_words(no_own, language)
+        first, *more = _no_network_words(no_own, language, walled)
         log("sandbox: the tests have no network of their own (" + first + ")")
         for line in more:
             log("sandbox: " + line)
@@ -2718,14 +3909,35 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
                 f"closed now ({shut[0][:200]}{', ...' if len(shut) > 1 else ''}): a library that is only there "
                 "is not found by the tests")
     left: list[str] = []
-    rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=lambda: _windows_job(memory), cancel=cancel,
-                                    ask=_jail.ASK if _LINUX else 0.0, left=left)
+    jobs: list = []                   # Windows: the job, which says whether its programs went over their memory
+
+    def job():
+        jobs.append(_windows_job(memory))
+        return jobs[-1]
+    box = _wall_for(root, tmp, app) if walled else None     # `Unavailable` where Windows does not make it
+    try:
+        if box is not None:
+            from . import wincontainer
+            # The command is started inside the wall by Lantern's launcher (in the run's job, outside the wall),
+            # which answers the guard there whose a port is, through a pipe of a name chosen here.
+            env["LANTERN_SANDBOX_CONTAINER"] = box.text
+            env[wincontainer.BROKER_VARIABLE] = wincontainer.BROKER_PREFIX + os.urandom(16).hex()
+            cmd = [sys.executable, "-I", "-c", f"import sys; sys.path.insert(0, {pkg_root!r}); "
+                   "from lantern.wincontainer import main; main(sys.argv[1:])", box.text, "--", *cmd]
+            log("sandbox: the tests run " + WALL_LINE)
+        rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=job, cancel=cancel,
+                                        ask=_jail.ASK if _LINUX else 0.0, left=left)
+    finally:
+        if box is not None:
+            _wall_down(box, log)
     why = _unavailable(rc, output)
     if why:
         raise Unavailable(why)
     if os.name == "posix":
         left += _left_by_launcher(output)
-    over = os.name == "posix" and _over_memory(rc, output)
+        over = _over_memory(rc, output)
+    else:                             # the job's own word, not a number the tests may end with themselves
+        over = rc == _jail.OVER_MEMORY and any(getattr(j, "refused", False) is True for j in jobs)
     if over:        # stopped by the launcher, which had ended everything before it said so: no result of the tests' own
         rc = None
         log(_stopped(_over_words(memory), left, "every process it started was ended"))
@@ -2740,10 +3952,40 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
     data = _recorded(out_json)
     _map_pairs(data, str(app), repo)
     # `own_network` and `own_sockets` are what the launcher was told to make: a launcher that could not make
-    # them starts nothing
+    # them starts nothing; and a wall the tests' Python is not inside runs no test (`lantern.tracehook`)
     return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, over_memory=over,
                   output_tail=output[-6000:], _full=output, not_ended=left, own_network=not no_own,
-                  own_sockets=_LINUX and not no_doorman)
+                  own_sockets=_LINUX and not no_doorman, windows_wall=box is not None)
+
+
+def _wall_for(root: Path, tmp: Path, app: Path):
+    """A wall of Windows' own for one run (`lantern.wincontainer.Container`): the run's folder given to it to read
+    and run what is there (the whole Python of the run's own, the guard, the fetched libraries), and the copy and
+    the temp folder to change too; those rights go with the run's folder. Raises `Unavailable` where Windows does
+    not make it or will not give it the folders: the tests were promised the wall, and are not run without it."""
+    from . import wincontainer
+    box = None
+    try:
+        box = wincontainer.Container()
+        box.grant(root)
+        box.grant(tmp, change=True)
+        box.grant(app, change=True)
+        return box
+    except Exception as e:  # noqa: BLE001 - ContainerError, OSError, and a system that makes no such wall at all
+        if box is not None:
+            _wall_down(box, lambda line: None)
+        code = getattr(e, "code", 0)
+        raise Unavailable(NO_WALL + (f" (error {code:#x})" if isinstance(code, int) and code else "")) from e
+
+
+def _wall_down(box, log) -> None:
+    """The wall's profile deleted after the run (`Container.close`); where Windows keeps it, the log says so."""
+    try:
+        box.close()
+    except Exception as e:  # noqa: BLE001 - ContainerError, and anything else: the run's own result stands
+        code = getattr(e, "code", 0)
+        log(f"sandbox: Windows did not delete the record of the wall it made for this run ({box.name}"
+            + (f", error {code:#x}" if isinstance(code, int) and code else "") + ")")
 
 
 def _site_dirs() -> list[str]:

@@ -28,6 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 
 from lantern import (aiapp, context, depaudit, listing, packs, php_frontend, pipeline, quick, readiness, remote,
                      scanresult, security, websec)
@@ -230,7 +231,7 @@ def test_two_runs_of_one_folder_share_the_list_until_the_last_ends(tmp_path, mon
     assert not listing.going(repo)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
+@needs_links
 def test_a_file_is_still_asked_about_when_it_is_opened(tmp_path):
     """What a run keeps is which files there are, never that they may be read: a file that became a link out of the
     project after it was listed is not read."""

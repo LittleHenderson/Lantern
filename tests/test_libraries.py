@@ -428,6 +428,13 @@ def test_the_checks_record_names_every_library_the_tests_ran_on(tmp_path, monkey
     assert [(p["name"], p["version"], p["fingerprint"]) for p in libs["packages"]] == [
         ("stage2sample", "1.0.0", "sha256:" + pystore.sha256["stage2sample-1.0.0-py3-none-any.whl"])]
     assert _tests_criterion(release)["state"] == "passed"
+    assert run["windows_wall"] is _walled_here(), run
+
+
+def _walled_here() -> bool:
+    """Where Windows makes the wall, a project's Python tests on fetched libraries ran inside it, and the check of
+    the project decides as it does on every other system (a firm pass or fail, stage 4's finish check)."""
+    return sys.platform == "win32" and not sandbox.wall_here()
 
 
 def test_a_failing_test_on_fetched_libraries_is_a_failure(tmp_path, monkeypatch, pystore):
@@ -435,6 +442,7 @@ def test_a_failing_test_on_fetched_libraries_is_a_failure(tmp_path, monkeypatch,
     run, release, _ = _check(_py_project(tmp_path / "proj", "self.assertEqual(stage2sample.answer(), 41)"), UNITTEST)
     assert run["returncode"] == 1 and run["libraries"]["state"] == "fetched"
     assert _tests_criterion(release)["state"] == "failed" and release["decision"] == "Blocked"
+    assert run["windows_wall"] is _walled_here(), run
 
 
 def test_libraries_that_cannot_be_had_are_not_a_failure_of_the_tests(tmp_path, monkeypatch, pystore):

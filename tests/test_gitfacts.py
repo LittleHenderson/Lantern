@@ -26,11 +26,11 @@ import types
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 
 from lantern import case, evidence, gitfacts, programs, remote, winowner
 from lantern.cli import main
 
-only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links)")
 WHEN = {"GIT_AUTHOR_DATE": "2026-11-01T10:00:00+0100", "GIT_COMMITTER_DATE": "2026-11-01T10:00:00+0100"}
 
 
@@ -298,7 +298,15 @@ def test_a_planted_commondir_does_not_have_another_repository_read(where, tmp_pa
     assert gitfacts.head_commit(d) is None
 
 
-@only_posix
+def _remove_git_folder(at: Path) -> None:
+    """A folder of git's data, removed: git's object files are read-only on Windows, which removes no such file."""
+    for folder, _dirs, files in os.walk(at):
+        for f in files:
+            os.chmod(os.path.join(folder, f), 0o600)
+    shutil.rmtree(at)
+
+
+@needs_links
 @pytest.mark.parametrize("what", [".git", "refs", "HEAD", "config", "packed-refs", "index", "objects"])
 def test_a_link_in_place_of_git_data_is_not_followed(what, tmp_path, other, monkeypatch):
     d = make(tmp_path)
@@ -309,10 +317,11 @@ def test_a_link_in_place_of_git_data_is_not_followed(what, tmp_path, other, monk
         shutil.rmtree(d / ".git" / "refs" / "heads")        # the branch could now only come from the linked file
         (d / ".git" / "refs" / "heads").mkdir()
     elif at.is_dir():
-        shutil.rmtree(at)
+        _remove_git_folder(at)
     else:
         at.unlink()
-    os.symlink(other / ".git" if what == ".git" else other / ".git" / what, at)
+    theirs = other / ".git" if what == ".git" else other / ".git" / what
+    os.symlink(theirs, at, target_is_directory=theirs.is_dir())     # on Windows a link to a folder is made as one
     got = evidence.git_info(d)
     assert nothing_of(other, got), got
     if what == "config":        # the folder's own commit is still read; its settings, which are the link, are not
@@ -333,10 +342,7 @@ def test_a_junction_in_place_of_git_data_is_not_followed(what, tmp_path, other):
     import _winapi
     d = make(tmp_path)
     at = d / ".git" if what == ".git" else d / ".git" / what
-    for folder, _dirs, files in os.walk(at):    # git's object files are read-only on Windows
-        for f in files:
-            os.chmod(os.path.join(folder, f), 0o600)
-    shutil.rmtree(at)
+    _remove_git_folder(at)
     _winapi.CreateJunction(str(other / ".git" if what == ".git" else other / ".git" / what), str(at))
     got = evidence.git_info(d)
     assert got["commit"] is None and nothing_of(other, got), got
@@ -805,7 +811,7 @@ def _borrow(how: str, d: Path, o: Path, tmp_path: Path) -> None:
     write(d / ".git" / "refs" / "heads" / "main", git("rev-parse", "HEAD", cwd=o) + "\n")
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("how", BORROWS)
 def test_git_is_not_started_where_the_objects_folder_leads_elsewhere(how, tmp_path, monkeypatch):
     d = make(tmp_path)
@@ -923,7 +929,7 @@ STILL_THERE = ["a link to nothing among the folders of single objects", "a link 
                "a link to itself"]
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("what", STILL_THERE)
 def test_a_link_to_nothing_is_there_and_still_stops_git(what, tmp_path, monkeypatch):
     """The twins of the test above. Gone means that nothing is there under the name; a link is there, wherever it

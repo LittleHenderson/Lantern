@@ -865,11 +865,20 @@ def test_a_name_in_an_address_is_refused_before_the_system_is_asked_for_it(tmp_p
 def test_the_twins_a_number_this_computer_and_what_is_no_name_go_down_as_before(tmp_path):
     """The same calls with an address written as a number and with `localhost`: no lookup is heard of, the call
     itself is what the guard refuses (there is no network of the run's own here), and its line names the call as it
-    always did. What is no address is the system's to refuse, and a socket file of the run's own is made."""
+    always did. What is no address is the system's to refuse, and a socket file of the run's own is made. On Windows
+    the guard's own rule (stage 4) writes `localhost` out as its number, and binds a datagram socket that sends to
+    this computer to its own address first (`_written_out`, `_bound_first`): the line says so there."""
     r = _guard_alone(tmp_path, THE_TWINS, NAME, str(_six()))
-    call = lambda what, to: (f"refused: {what} | network {EVENT[what.split(' to ')[0]]} {to!r} | "      # noqa: E731
-                             f"socket.{EVENT[what.split(' to ')[0]]}")
-    want = ([call(way, ("192.0.2.1", 9)) for way in WAYS] + [call(way + " to localhost", ("localhost", 9)) for way in WAYS]
+    windows = sys.platform == "win32"
+
+    def call(what, to, here=False):
+        event = EVENT[what.split(" to ")[0]]
+        if here and windows:
+            to = ("127.0.0.1", to[1])
+        first = "socket.bind " if here and windows and event == "sendto" else ""
+        return f"refused: {what} | network {event} {to!r} | {first}socket.{event}"
+    want = ([call(way, ("192.0.2.1", 9)) for way in WAYS]
+            + [call(way + " to localhost", ("localhost", 9), here=True) for way in WAYS]
             + ["refused: sendto everybody | network sendto ('<broadcast>', 9) | socket.sendto",
                "refused: bind anywhere | network bind ('', 0) | socket.bind",
                "no address: a name that is no address | ", "no address: a number where the name goes | "]
@@ -909,9 +918,10 @@ WHO = NAMED + '''
 
 
 def test_who_an_address_is_is_a_lookup_and_writing_it_out_is_none(tmp_path):
-    """With the guard and nothing else around it. On Windows no event loop starts under the guard (CLAUDE.md, the
-    sandbox's row), so the two questions put through one are asked where a loop starts."""
-    six, loop = _six(), sys.platform != "win32"
+    """With the guard and nothing else around it. The two questions put through an event loop are asked on every
+    system: until stage 4 (2026-11-20) no event loop started under the guard on Windows, and they were left out
+    there (CLAUDE.md, the sandbox's row)."""
+    six, loop = _six(), True
     r = _guard_alone(tmp_path, WHO, NAME, str(six), str(loop))
     want = ([f"refused: a name | network lookup {NAME!r}", f"refused: a name, numbers asked for | network lookup {NAME!r}",
              "refused: who 192.0.2.1 is | network lookup '192.0.2.1'",
