@@ -93,20 +93,41 @@ def test_what_the_cases_below_stand_on():
 
 @pytest.mark.parametrize("how", list(SECOND))
 def test_a_python_the_tests_start_themselves_runs_on_the_fetched_libraries_too(tmp_path, monkeypatch, pystore, how):
-    """On Windows one of these ways leads to the computer's own Python, and the run's log says which (found on
-    GitHub's Windows machine, 2026-11-14, not fixed: `sandbox._own_python_words`). This test says so on Windows
-    itself, so that the day it is fixed there this line fails and is taken out."""
+    """On Windows the Python of the run's own was a small program that starts the computer's Python, and Windows
+    looks for a program named without its folder beside the program that asks first: a test that started `python`
+    by its bare name, in an environment of its own making, got the computer's own Python, with the computer's
+    libraries and without Lantern's guard (found on GitHub's Windows machine, 2026-11-14). Since stage 4 of a firm
+    pass or fail it is a whole Python of the run's own there (`sandbox._whole_python`), and every way finds the
+    same libraries, as on every other system."""
     _online(monkeypatch, python=pystore)
     lines: list[str] = []
     res = sandbox.run(_starts(tmp_path / "proj", SECOND[how]), UNITTEST, log=lines.append, backend="subprocess")
     assert res["libraries"]["state"] == "fetched"
-    assert any("started by a Python of the run's own" in line for line in lines), lines
-    if sys.platform == "win32":
-        assert any("by the bare name `python`" in line and "the computer's own Python" in line for line in lines), lines
-        if how == "started by the name python":
-            assert res["returncode"] == 1 and "!= 'True True'" in res["output_tail"], res["output_tail"]
-            return
+    assert any("started by a" in line and "Python of the run's own" in line for line in lines), lines
+    assert not any("the computer's own Python" in line for line in lines), lines
     assert res["returncode"] == 0, res["output_tail"]
+
+
+def test_where_no_whole_python_can_be_made_on_windows_the_older_one_stands_and_says_what_the_bare_name_starts(
+        tmp_path, monkeypatch, pystore):
+    """A whole Python of the run's own cannot be made of every Python (an embeddable one, whose path a file of its
+    own decides): there the older one stands, and its line says what the bare name `python` then starts. Elsewhere
+    a whole Python is never asked for."""
+    _online(monkeypatch, python=pystore)
+
+    def refuse(home, named, timeout=120):
+        raise OSError(22, "this computer's Python is an embeddable one")
+    monkeypatch.setattr(sandbox, "_whole_python", refuse)
+    lines: list[str] = []
+    res = sandbox.run(_starts(tmp_path / "proj", SECOND["handed the tests' environment"]), UNITTEST, log=lines.append,
+                      backend="subprocess")
+    assert res["returncode"] == 0, res["output_tail"]
+    assert any("started by a Python of the run's own" in line for line in lines), lines
+    windows = sys.platform == "win32"
+    assert any("a whole Python of the run's own could not be made (this computer's Python is an embeddable one)"
+               in line for line in lines) is windows, lines
+    assert any("by the bare name `python`" in line and "the computer's own Python" in line for line in lines) is windows, \
+        lines
 
 
 def test_where_no_python_of_the_runs_own_can_be_made_the_guard_still_keeps_to_the_fetched_libraries(
@@ -118,7 +139,11 @@ def test_where_no_python_of_the_runs_own_can_be_made_the_guard_still_keeps_to_th
 
     def refuse(self, folder):
         raise OSError(28, "no room")
+
+    def no_whole(home, named, timeout=120):
+        raise OSError(28, "no room")
     monkeypatch.setattr(venv.EnvBuilder, "create", refuse)
+    monkeypatch.setattr(sandbox, "_whole_python", no_whole)       # Windows' own (a whole Python of the run's own)
     lines: list[str] = []
     res = sandbox.run(_starts(tmp_path / "proj", SECOND["handed the tests' environment"]), UNITTEST, log=lines.append,
                       backend="subprocess")

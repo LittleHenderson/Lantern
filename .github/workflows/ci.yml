@@ -430,6 +430,9 @@ jobs:
       - run: >-
           python -m pytest -q -rs tests/test_sandbox_windows.py
           tests/test_wincontainer.py
+          tests/test_libraries_run.py::test_a_python_the_tests_start_themselves_runs_on_the_fetched_libraries_too
+          tests/test_libraries_run.py::test_where_no_whole_python_can_be_made_on_windows_the_older_one_stands_and_says_what_the_bare_name_starts
+          tests/test_libraries_run.py::test_where_no_python_of_the_runs_own_can_be_made_the_guard_still_keeps_to_the_fetched_libraries
           tests/test_sandbox.py::test_tests_that_use_an_event_loop_run
           tests/test_sandbox.py::test_an_event_loop_whose_socket_pair_is_made_the_windows_way_starts_on_windows_and_nowhere_else
           tests/test_sandbox.py::test_the_guard_refuses_every_listener_and_every_connection_on_this_computer_too

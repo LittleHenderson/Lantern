@@ -340,7 +340,7 @@ def test_the_whole_python_is_a_python_of_its_own_with_the_runs_libraries_only(tm
 
 # ---------------------------------------------------------------------------- what Windows does, tried on Windows
 PROBE = r'''
-import _winapi, asyncio, ctypes, json, multiprocessing, os, socket, subprocess, sys, threading, time
+import _winapi, asyncio, ctypes, json, multiprocessing, os, re, socket, subprocess, sys, threading, time
 from ctypes import wintypes
 
 
@@ -361,15 +361,25 @@ def bounded(fn, seconds):
     return box.get("r", {"ok": False, "error": "still waiting", "s": seconds})
 
 
-def program(cmd, seconds=30, word=False, same=None, **kw):
-    """A program's result only: `word`, the one word it printed (the probe's own programs print one), and `same`,
-    whether the one line it printed names that folder. Nothing it read or printed besides is kept."""
+CODE = re.compile(r"\bcode:?\s+'?([A-Z][A-Z0-9_]{1,24})\b")
+SYSCALL = re.compile(r"\bsyscall:?\s+'?([a-z][a-z0-9_]{1,24})\b")
+
+
+def program(cmd, seconds=30, word=False, same=None, codes=False, **kw):
+    """A program's result only: `word`, the one word it printed (the probe's own programs print one), `same`,
+    whether the one line it printed names that folder, and `codes`, the error code and the system call a program
+    of Node names when it fails (`EPERM`, `lstat`). Nothing it read or printed besides is kept."""
     t = time.monotonic()
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=seconds, **kw)
         out = {"ok": r.returncode == 0, "rc": r.returncode, "s": round(time.monotonic() - t, 2)}
         if word:
             out["word"] = (r.stdout.split() or [""])[0][:20]
+        if codes:
+            said = r.stdout + "\n" + r.stderr
+            out["codes"] = sorted(set(CODE.findall(said)))[:4]
+            out["syscalls"] = sorted(set(SYSCALL.findall(said)))[:4]
+            out["module"] = "Cannot find module" in said
         if same is not None:
             out["same"] = os.path.normcase(os.path.realpath(r.stdout.strip() or "?")) == same
         return out
@@ -648,6 +658,27 @@ def loop_subprocess():
     return asyncio.run(main())
 
 
+def broker(name):
+    """A pipe a program outside the container made for this container alone: opened, asked, answered."""
+    h = _winapi.CreateFile(name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
+                           _winapi.OPEN_EXISTING, 0, _winapi.NULL)
+    try:
+        _winapi.WriteFile(h, b"tcp 1")
+        data, _ = _winapi.ReadFile(h, 64)
+        return data == b"yes"           # whether the answer was the one it gives (nothing read is kept)
+    finally:
+        _winapi.CloseHandle(h)
+
+
+def closed_port():
+    """A connection to a port of this computer that nobody holds (one the run held a moment ago)."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    socket.create_connection(("127.0.0.1", port), timeout=4).close()
+
+
 def other_pipe_by_name():
     _winapi.CloseHandle(_winapi.CreateFile(given["pipe"], _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0,
                                            _winapi.NULL, _winapi.OPEN_EXISTING, 0, _winapi.NULL))
@@ -658,6 +689,9 @@ NODE_CONNECT = ("const s = require('net').connect(9, process.argv[1]); s.setTime
                 "s.on('error', e => { console.log(e.code); process.exit(2) })")
 NODE_READ = "require('fs').readFileSync(process.argv[1]); console.log('read')"
 NODE_WRITE = "require('fs').writeFileSync(process.argv[1], 'x'); console.log('wrote')"
+NODE_DATAGRAM = ("const d = require('dgram').createSocket('udp4'); "
+                 "d.send(Buffer.from('n'), Number(process.argv[1]), '127.0.0.1', e => { console.log(e ? e.code : 'sent'); "
+                 "d.close() })")
 NODE_OWN_SERVER = ("const net = require('net'); const srv = net.createServer(c => c.end('n')); "
                    "srv.listen(0, '127.0.0.1', () => { const c = net.connect(srv.address().port, '127.0.0.1'); "
                    "c.on('data', () => { console.log('ok'); process.exit(0) }); "
@@ -695,6 +729,12 @@ if __name__ == "__main__":
     if given.get("own"):
         facts["own_address"] = bounded(connect(given["own"], given["any"]), 15)
     facts["other_datagram"] = bounded(datagrams_to("127.0.0.1", given["udp"]), 15)
+    if given.get("own"):
+        facts["own_address_datagram"] = bounded(datagrams_to(given["own"], given["udp_any"]), 15)
+    facts["outside_datagram"] = bounded(datagrams_to("192.0.2.1", 9), 15)     # whether Windows refuses it at all
+    facts["closed_port"] = bounded(closed_port, 15)
+    facts["broker"] = bounded(lambda: broker(given["broker"]), 15)
+    facts["broker_no_label"] = bounded(lambda: broker(given["broker_no_label"]), 15)
     facts["other_pipe"] = bounded(pipe(given["pipe"]), 15)
     facts["person_read"] = attempt(read(given["person_file"]))
     facts["person_list"] = attempt(listing(given["person"]))
@@ -725,8 +765,9 @@ if __name__ == "__main__":
         facts["node_copy_read"] = program([node, "-e", NODE_READ, given["person_file"]], word=True)
         facts["node_copy_write"] = program([node, "-e", NODE_WRITE, os.path.join(given["person"], "node.txt")],
                                            word=True)
+        facts["node_copy_datagram"] = program([node, "-e", NODE_DATAGRAM, str(given["udp_node"])], word=True)
         if given.get("npm_cli"):
-            facts["npm_version"] = program([node, given["npm_cli"], "--version"], seconds=90)
+            facts["npm_version"] = program([node, given["npm_cli"], "--version"], seconds=90, codes=True)
     # the pipes: Windows' answer to each kind of name, then what multiprocessing and the event loop do once every
     # name is put under the container's own part (as a guard inside it would put them)
     facts["pipe_plain"] = bounded(lambda: pipe_pair(PLAIN), 15)
@@ -756,10 +797,12 @@ REFUSED = ("outside_v4", "outside_v6", "lookup_outside", "other_pipe", "other_pi
 # Another program of this computer that waits at an address: Windows drops what the container sends there without
 # a word, so the try may wait; what counts is that nothing reached that program (which listens for it, `reached`)
 UNREACHED = {"other_listener": "tcp", "other_listener_v6": "tcp6", "any_listener_loopback": "any",
-             "own_address": "any", "other_datagram": "udp"}
+             "own_address": "any"}
 REFUSED_PROGRAMS = {"curl_outside": None, "curl_file": None, "curl_other_listener": "tcp", "curl_own_address": "any",
                     "node_copy_outside": None, "node_copy_other_listener": "tcp", "node_copy_read": None,
                     "node_copy_write": None}
+# Datagrams sent from the container to a socket of another program of this computer (`other_datagram`,
+# `own_address_datagram`, `node_copy_datagram`) are counted in `costs["reached"]` and written out with the rest.
 HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "npm_version")
 
 
@@ -798,6 +841,60 @@ def _take(srv, kind: str, reached: list) -> None:
         reached.append(kind)
 
 
+class _Broker:
+    """A pipe this program makes for the container alone (its owner, the system and the container's SID; with or
+    without the mark that lets a program of low integrity write to it), which answers one question with "yes"."""
+
+    def __init__(self, sid: str, label: bool):
+        import _winapi
+        from ctypes import wintypes
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+            ctypes.c_wchar_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+        self._sd = ctypes.c_void_p()
+        text = f"D:P(A;;GA;;;OW)(A;;GA;;;SY)(A;;GRGW;;;{sid})" + ("S:(ML;;NW;;;LW)" if label else "")
+        if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(text, 1, ctypes.byref(self._sd), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        class Attributes(ctypes.Structure):
+            _fields_ = [("length", wintypes.DWORD), ("descriptor", ctypes.c_void_p), ("inherit", wintypes.BOOL)]
+        self._sa = Attributes(ctypes.sizeof(Attributes), self._sd, False)
+        self.name = "\\\\.\\pipe\\lantern-probe-" + os.urandom(8).hex()
+        self._h = _winapi.CreateNamedPipe(self.name, _winapi.PIPE_ACCESS_DUPLEX,
+                                          _winapi.PIPE_TYPE_MESSAGE | _winapi.PIPE_READMODE_MESSAGE | _winapi.PIPE_WAIT,
+                                          1, 512, 512, 0, ctypes.addressof(self._sa))
+        self.asked = 0
+        self._done = threading.Event()
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        import _winapi
+        try:
+            _winapi.ConnectNamedPipe(self._h)
+            if self._done.is_set():
+                return
+            data, _ = _winapi.ReadFile(self._h, 64)
+            if data:
+                self.asked += 1
+                _winapi.WriteFile(self._h, b"yes")
+        except OSError:
+            return
+
+    def close(self):
+        import _winapi
+        self._done.set()
+        try:                    # the server waits for a caller: be one, so that it stops waiting
+            _winapi.CloseHandle(_winapi.CreateFile(self.name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0,
+                                                   _winapi.NULL, _winapi.OPEN_EXISTING, 0, _winapi.NULL))
+        except OSError:
+            pass
+        ctypes.WinDLL("kernel32").LocalFree(self._sd)
+
+
+def _pipe_for(sid: str, label: bool) -> _Broker:
+    return _Broker(sid, label)
+
+
 def _count(folder: Path) -> tuple[int, int]:
     files = size = 0
     for here, _, names in os.walk(folder):
@@ -823,7 +920,10 @@ def tried(tmp_path_factory):
     costs["make"] = round(time.monotonic() - t, 2)
     listener = socket.socket()
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_any = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_node = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     every = socket.socket()
+    brokers: list = []
     listener6 = None
     pipe = None
     try:
@@ -863,9 +963,12 @@ def tried(tmp_path_factory):
         every.bind(("0.0.0.0", 0))
         every.listen()
         threading.Thread(target=_take, args=(every, "any", reached), daemon=True).start()
-        udp.bind(("127.0.0.1", 0))
-        udp.settimeout(0.5)
-        threading.Thread(target=_take, args=(udp, "udp", reached), daemon=True).start()
+        for sock, kind, where in ((udp, "udp", "127.0.0.1"), (udp_any, "udp_any", "0.0.0.0"),
+                                  (udp_node, "udp_node", "127.0.0.1")):
+            sock.bind((where, 0))
+            sock.settimeout(0.5)
+            threading.Thread(target=_take, args=(sock, kind, reached), daemon=True).start()
+        brokers += [_pipe_for(box.text, label=True), _pipe_for(box.text, label=False)]
         try:
             listener6 = socket.socket(socket.AF_INET6)
             listener6.bind(("::1", 0))
@@ -882,6 +985,8 @@ def tried(tmp_path_factory):
                  "base_python": str(Path(sys.base_prefix) / "python.exe"), "tmp": str(tmp), "app": str(app),
                  "copy": str(root / "py"), "base": sys.base_prefix, "sid": box.text,
                  "udp": udp.getsockname()[1], "any": every.getsockname()[1], "own": _own_address(),
+                 "udp_any": udp_any.getsockname()[1], "udp_node": udp_node.getsockname()[1],
+                 "broker": brokers[0].name, "broker_no_label": brokers[1].name,
                  "listener6": listener6.getsockname()[1] if listener6 is not None else 0,
                  "curl": str(curl) if curl.is_file() else "", "node": node, "node_copy": str(node_copy),
                  "npm_cli": npm_cli}
@@ -898,13 +1003,17 @@ def tried(tmp_path_factory):
         costs["probe"] = round(time.monotonic() - t, 2)
         time.sleep(1)                   # a datagram on its way is counted too
         costs["rc"], costs["timed_out"], costs["reached_outside"] = rc, timed_out, len(reached)
-        costs["reached"] = {kind: reached.count(kind) for kind in ("tcp", "tcp6", "any", "udp", "pipe")}
+        costs["reached"] = {kind: reached.count(kind) for kind in ("tcp", "tcp6", "any", "udp", "udp_any", "udp_node",
+                                                                   "pipe")}
+        costs["brokers_asked"] = [b.asked for b in brokers]
         said = [line for line in output.splitlines() if line.startswith("FACTS ")]
         facts = json.loads(said[-1][len("FACTS "):]) if said else {"no facts": output[-3000:]}
     finally:
-        for s in (listener, udp, every, listener6):
+        for s in (listener, udp, udp_any, udp_node, every, listener6):
             if s is not None:
                 s.close()
+        for b in brokers:
+            b.close()
         if pipe is not None:
             pipe.close()
         t = time.monotonic()
@@ -973,7 +1082,7 @@ def test_another_program_of_this_computer_is_not_reached_from_the_container(trie
     if name not in facts:
         pytest.skip("this computer has no IPv6 loopback" if name.endswith("v6") else "this computer has no address "
                     "of its own on a network")
-    assert name == "other_datagram" or not facts[name].get("ok"), facts[name]
+    assert not facts[name].get("ok"), facts[name]
     assert costs["reached"][UNREACHED[name]] == 0, costs
 
 
