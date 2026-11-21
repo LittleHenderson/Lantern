@@ -126,8 +126,6 @@ class Calls:
             caps = value._obj
             self._say("UpdateProcThreadAttribute", "capabilities", caps.AppContainerSid, caps.Capabilities,
                       caps.CapabilityCount, size)
-        elif attribute == wincontainer.ATTRIBUTE_PACKAGES_POLICY:
-            self._say("UpdateProcThreadAttribute", "policy", value._obj.value, size)
         else:
             n = size // ctypes.sizeof(ctypes.c_void_p)
             self._say("UpdateProcThreadAttribute", "handles", [value[i] for i in range(n)])
@@ -273,20 +271,6 @@ def test_the_command_starts_in_the_container_with_its_standard_handles_only_and_
     assert ("LocalFree", 0x5200) in api.log
 
 
-def test_a_less_privileged_container_is_asked_for_only_when_it_is_named():
-    """`less`: one more entry in the list Windows starts the program with, the policy that leaves out what Windows
-    grants to every application package; without it the list is as before (the test above)."""
-    api = Calls()
-    assert wincontainer.start(SID_TEXT, ["C:\\run\\py\\python.exe", "-V"], api=api, less=True) == 0
-    assert api.calls("InitializeProcThreadAttributeList") == [("InitializeProcThreadAttributeList", False, 3),
-                                                              ("InitializeProcThreadAttributeList", True, 3)]
-    assert api.calls("UpdateProcThreadAttribute") == [
-        ("UpdateProcThreadAttribute", "capabilities", 0x5200, None, 0, ctypes.sizeof(wincontainer.SecurityCapabilities)),
-        ("UpdateProcThreadAttribute", "policy", wincontainer.PACKAGES_OPT_OUT, ctypes.sizeof(ctypes.c_uint32)),
-        ("UpdateProcThreadAttribute", "handles", [0x11, 0x12])]
-    assert len(api.calls("CreateProcessW")) == 1
-
-
 @pytest.mark.parametrize("call", ["ConvertStringSidToSidW", "InitializeProcThreadAttributeList",
                                   "UpdateProcThreadAttribute", "CreateProcessW", "WaitForSingleObject"])
 def test_a_command_windows_will_not_start_or_wait_for_is_said_and_everything_is_given_back(call):
@@ -302,7 +286,7 @@ def test_a_command_windows_will_not_start_or_wait_for_is_said_and_everything_is_
 
 
 def test_the_launcher_says_why_in_lanterns_words_and_ends_as_the_sandbox_reads_it(monkeypatch, capsys):
-    def refused(container, cmd, api=None, less=False):
+    def refused(container, cmd, api=None):
         raise wincontainer.ContainerError("CreateProcessW", 5)
     monkeypatch.setattr(wincontainer, "start", refused)
     with pytest.raises(SystemExit) as e:
@@ -318,14 +302,10 @@ def test_the_launcher_says_why_in_lanterns_words_and_ends_as_the_sandbox_reads_i
 
 @pytest.mark.parametrize("code", [0, 1, 0xC0000005, 0xFFFFFFFF])
 def test_the_launcher_ends_with_the_tests_own_result(monkeypatch, code):
-    asked: list = []
-    monkeypatch.setattr(wincontainer, "start", lambda container, cmd, api=None, less=False: asked.append(less) or code)
+    monkeypatch.setattr(wincontainer, "start", lambda container, cmd, api=None: code)
     with pytest.raises(SystemExit) as e:
         wincontainer.main([SID_TEXT, "--", "python.exe"])
     assert e.value.code & 0xFFFFFFFF == code and -(1 << 31) <= e.value.code < (1 << 31)
-    with pytest.raises(SystemExit):
-        wincontainer.main([SID_TEXT, "--", "python.exe"], less=True)
-    assert asked == [False, True]           # a less privileged container only where the launcher is told so
 
 
 def test_a_containers_name_is_lanterns_own_and_one_windows_takes():
@@ -699,35 +679,6 @@ def closed_port():
     socket.create_connection(("127.0.0.1", port), timeout=4).close()
 
 
-def ancestors(path):
-    """For each folder above `path`, from the top of its drive down: 0 where this program may look at it, else the
-    error number. Names are not kept."""
-    chain, p = [], os.path.abspath(path)
-    while os.path.dirname(p) != p:
-        p = os.path.dirname(p)
-        chain.append(p)
-    out = []
-    for folder in reversed(chain):
-        try:
-            os.lstat(folder)
-            out.append(0)
-        except OSError as e:
-            out.append(getattr(e, "winerror", None) or e.errno or -1)
-    return out
-
-
-def looks(places):
-    """Whether this program may look at each place (`given["roots"]`: a label for each), by label only."""
-    out = {}
-    for label, place in places.items():
-        try:
-            os.lstat(place)
-            out[label] = 0
-        except OSError as e:
-            out[label] = getattr(e, "winerror", None) or e.errno or -1
-    return out
-
-
 def npm_env(node, tmp):
     """npm as the sandbox starts it: its home, settings, cache and temp folder inside the run (`_env_base`), and the
     copy of Node first on PATH, so that the shell npm runs a script with finds it."""
@@ -738,24 +689,52 @@ def npm_env(node, tmp):
                 PATH=os.path.dirname(node) + os.pathsep + os.environ.get("PATH", ""))
 
 
-KEEP = ["--preserve-symlinks", "--preserve-symlinks-main"]   # Node takes a module's path as it is handed
+# Node takes a module's path as it is handed, and does not look at the folders above it, which the container may not
+# look at (the sixth round: every folder above the run's folder, the top of the drive too)
+KEEP = ["--preserve-symlinks", "--preserve-symlinks-main"]
+FORK = ("const cp = require('child_process'); "
+        "if (process.argv[2] === 'child') { process.send('k', () => process.exit(0)) } "
+        "else { const c = cp.fork(__filename, ['child']); c.on('message', m => { console.log(m); process.exit(0) }); "
+        "c.on('error', e => { console.log(e.code || 'error'); process.exit(2) }); "
+        "setTimeout(() => { console.log('timeout'); process.exit(3) }, 10000) }")
+CHILDREN = {   # what a test runner does with programs of its own: one word each when it worked
+    "node_spawn_pipe": ("const r = require('child_process').spawnSync('cmd.exe', ['/d', '/c', 'echo s'], "
+                        "{encoding: 'utf8'}); console.log(r.error ? r.error.code : (r.stdout.trim() || 'empty'))"),
+    "node_spawn_async": ("const c = require('child_process').spawn('cmd.exe', ['/d', '/c', 'echo a']); let o = ''; "
+                         "c.stdout.on('data', d => { o += d }); "
+                         "c.on('close', () => { console.log(o.trim() || 'empty'); process.exit(0) }); "
+                         "c.on('error', e => { console.log(e.code); process.exit(2) }); "
+                         "setTimeout(() => { console.log('timeout'); process.exit(3) }, 10000)"),
+    "node_exec": "console.log(require('child_process').execSync('echo x', {encoding: 'utf8'}).trim())",
+    "node_spawn_node": ("const r = require('child_process').spawnSync(process.execPath, ['-e', \"console.log('n')\"], "
+                        "{encoding: 'utf8'}); console.log(r.error ? r.error.code : (r.stdout.trim() || 'empty'))"),
+    "node_worker": ("const { Worker } = require('worker_threads'); "
+                    "const w = new Worker(\"require('worker_threads').parentPort.postMessage('w')\", { eval: true }); "
+                    "w.on('message', m => { console.log(m); process.exit(0) }); "
+                    "w.on('error', e => { console.log(e.code || 'error'); process.exit(2) }); "
+                    "setTimeout(() => { console.log('timeout'); process.exit(3) }, 10000)"),
+}
 
 
 def node_from_files(node, npm_cli, tmp, app):
-    """Node started from a file of the run, with and without `KEEP`, and npm so started (round 6)."""
+    """Node started from a file of the run, without and with `KEEP`, its child processes, and npm started with
+    `KEEP` (rounds 6 and 7), with npm's home, cache and temp folder inside the run, as the sandbox starts it."""
     facts = {}
+    env = dict(npm_env(node, tmp), NODE_OPTIONS=" ".join(KEEP))
     script = os.path.join(app, "probe_file.js")
     with open(script, "w", encoding="utf-8") as f:
         f.write("console.log('f')")
-    facts["node_file"] = program([node, script], word=True, codes=True)
-    facts["node_file_keep"] = program([node, *KEEP, script], word=True, codes=True)
-    facts["node_realpath_js"] = program([node, "-e", NODE_REALPATH], word=True, cwd=app)
-    facts["node_realpath_native"] = program([node, "-e", NODE_REALPATH.replace("realpathSync(", "realpathSync.native(")],
-                                            word=True, cwd=app)
+    facts["node_file"] = program([node, script], word=True, codes=True, env=npm_env(node, tmp))   # without KEEP
+    facts["node_file_keep"] = program([node, *KEEP, script], word=True, codes=True, env=env)
+    for name, code in CHILDREN.items():
+        facts[name] = program([node, "-e", code], seconds=30, word=True, codes=True, env=env, cwd=app)
+    fork = os.path.join(app, "probe_fork.js")
+    with open(fork, "w", encoding="utf-8") as f:
+        f.write(FORK)
+    facts["node_fork"] = program([node, *KEEP, fork], seconds=30, word=True, codes=True, env=env, cwd=app)
     if npm_cli:
-        env = dict(npm_env(node, tmp), NODE_OPTIONS=" ".join(KEEP))
         facts["npm_version_keep"] = program([node, *KEEP, npm_cli, "--version"], seconds=90, codes=True, env=env)
-        js = os.path.join(tmp, "js6")
+        js = os.path.join(tmp, "js7")
         os.makedirs(js, exist_ok=True)
         with open(os.path.join(js, "package.json"), "w", encoding="utf-8") as f:
             json.dump({"name": "probe", "version": "1.0.0", "scripts": {"test": "node -e \"console.log('t')\""}}, f)
@@ -773,8 +752,6 @@ NODE_CONNECT = ("const s = require('net').connect(9, process.argv[1]); s.setTime
                 "process.exit(3) }); s.on('connect', () => { console.log('connected'); process.exit(0) }); "
                 "s.on('error', e => { console.log(e.code); process.exit(2) })")
 NODE_READ = "require('fs').readFileSync(process.argv[1]); console.log('read')"
-NODE_REALPATH = ("try { require('fs').realpathSync(process.cwd()); console.log('done') } "
-                 "catch (e) { console.log(e.code) }")
 NODE_WRITE = "require('fs').writeFileSync(process.argv[1], 'x'); console.log('wrote')"
 NODE_DATAGRAM = ("const d = require('dgram').createSocket('udp4'); "
                  "d.send(Buffer.from('n'), Number(process.argv[1]), '127.0.0.1', e => { console.log(e ? e.code : 'sent'); "
@@ -854,19 +831,7 @@ if __name__ == "__main__":
         facts["node_copy_write"] = program([node, "-e", NODE_WRITE, os.path.join(given["person"], "node.txt")],
                                            word=True)
         facts["node_copy_datagram"] = program([node, "-e", NODE_DATAGRAM, str(given["udp_node"])], word=True)
-        if given.get("npm_cli"):
-            facts["npm_version"] = program([node, given["npm_cli"], "--version"], seconds=90, codes=True)
-            env = npm_env(node, given["tmp"])
-            facts["npm_version_home"] = program([node, given["npm_cli"], "--version"], seconds=90, codes=True, env=env)
-            js = os.path.join(given["tmp"], "js")
-            os.makedirs(js, exist_ok=True)
-            with open(os.path.join(js, "package.json"), "w", encoding="utf-8") as f:
-                json.dump({"name": "probe", "version": "1.0.0", "scripts": {"test": "node -e \"console.log('t')\""}}, f)
-            facts["npm_test_home"] = program([node, given["npm_cli"], "test", "--silent"], seconds=90, word=True,
-                                             codes=True, env=env, cwd=js)
         facts.update(node_from_files(node, given.get("npm_cli", ""), given["tmp"], given["app"]))
-    facts["ancestors"] = ancestors(given["app"])
-    facts["looks"] = looks(given.get("roots") or {})
     # the pipes: Windows' answer to each kind of name, then what multiprocessing and the event loop do once every
     # name is put under the container's own part (as a guard inside it would put them)
     facts["pipe_plain"] = bounded(lambda: pipe_pair(PLAIN), 15)
@@ -884,44 +849,7 @@ if __name__ == "__main__":
     sys.stdout.flush()
     os._exit(0)
 '''
-# A fifth round: the same kind of tries in a less privileged container (`wincontainer.start(less=True)`), which what
-# Windows grants to every application package does not reach. Datagrams are counted and written out with the rest.
-LESS = TOOLS + r'''
-
-if __name__ == "__main__":
-    given = json.loads(open(sys.argv[1], encoding="utf-8").read())
-    def here(p):
-        return os.path.normcase(os.path.realpath(p))
-    facts = {"prefix_is_copy": here(sys.prefix) == here(given["copy"])}
-    for name, fn in (("token", token), ("loop", loop), ("socketpair", pair), ("own_server", own_server),
-                     ("datagrams", datagrams)):
-        facts[name] = bounded(fn, 20)
-    facts["second_program"] = bounded(second_program, 30)
-    facts["cmd"] = program(["cmd.exe", "/d", "/c", "echo inside"])
-    facts["outside_v4"] = bounded(connect("192.0.2.1", 9), 15)
-    facts["lookup_outside"] = bounded(lookup("lantern-probe.invalid"), 15)
-    facts["other_listener"] = bounded(connect("127.0.0.1", given["listener"]), 15)
-    facts["other_datagram"] = bounded(datagrams_to("127.0.0.1", given["udp"]), 15)
-    facts["person_read"] = attempt(read(given["person_file"]))
-    facts["write_tmp"] = attempt(write(os.path.join(given["tmp"], "x.txt")))
-    if given.get("node_copy"):
-        node = given["node_copy"]
-        facts["node_copy_start"] = program([node, "-e", "console.log(process.version)"])
-        facts["node_copy_own_server"] = program([node, "-e", NODE_OWN_SERVER], word=True)
-        facts["node_copy_datagram"] = program([node, "-e", NODE_DATAGRAM, str(given["udp_node"])], word=True)
-        facts.update(node_from_files(node, given.get("npm_cli", ""), given["tmp"], given["app"]))
-    facts["ancestors"] = ancestors(given["app"])
-    facts["looks"] = looks(given.get("roots") or {})
-    os.environ["PROBE_LOCAL_PIPES"] = "1"
-    local_names()
-    facts["pool_local"] = bounded(pool, 60)
-    print("FACTS " + json.dumps(facts), flush=True)
-    sys.stdout.flush()
-    os._exit(0)
-'''
 LAUNCH = "import sys; sys.path.insert(0, {root!r}); from lantern.wincontainer import main; main(sys.argv[1:])"
-LAUNCH_LESS = ("import sys; sys.path.insert(0, {root!r}); from lantern.wincontainer import main; "
-               "main(sys.argv[1:], less=True)")
 # What an honest test does, which must still work inside the container (a pipe, a pool of processes, a manager and
 # the event loop's programs once their pipes are named under the container's own part of the names)
 HONEST = ("loop", "socketpair", "own_server", "loop_server", "datagrams", "second_program", "cmd", "write_tmp",
@@ -941,8 +869,12 @@ REFUSED_PROGRAMS = {"curl_outside": None, "curl_file": None, "curl_other_listene
 # `own_address_datagram`, `node_copy_datagram`) are counted in `costs["reached"]` and written out with the rest.
 # npm with a home the run may not read (`npm_version`) is written out only: the sandbox gives the tests a home of
 # their own inside the run (`sandbox._env_base`)
-HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "npm_version_home", "npm_test_home")
-SAYS = {"node_copy_own_server": "ok", "npm_test_home": "t"}      # the one word each prints when it worked
+HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "node_file_keep", "node_spawn_pipe",
+                   "node_spawn_async", "node_exec", "node_spawn_node", "node_worker", "node_fork",
+                   "npm_version_keep", "npm_test_keep")
+SAYS = {"node_copy_own_server": "ok", "node_file_keep": "f", "node_spawn_pipe": "s", "node_spawn_async": "a",
+        "node_exec": "x", "node_spawn_node": "n", "node_worker": "w", "node_fork": "k",
+        "npm_test_keep": "t"}      # the one word each prints when it worked
 
 
 def _own_address() -> str:
@@ -1032,17 +964,6 @@ class _Broker:
 
 def _pipe_for(sid: str, label: bool) -> _Broker:
     return _Broker(sid, label)
-
-
-def _roots(tmp: Path) -> dict:
-    """Places a run's folder could be put under, by label (the probe keeps the labels only)."""
-    system = os.environ.get("SYSTEMDRIVE", "C:") + "\\"
-    places = {"system_drive": system, "temp_drive": os.path.splitdrive(str(tmp))[0] + "\\",
-              "users": os.path.join(system, "Users")}
-    for label, name in (("program_data", "PROGRAMDATA"), ("public", "PUBLIC")):
-        if os.environ.get(name):
-            places[label] = os.environ[name]
-    return places
 
 
 def _count(folder: Path) -> tuple[int, int]:
@@ -1139,7 +1060,7 @@ def tried(tmp_path_factory):
                  "broker": brokers[0].name, "broker_no_label": brokers[1].name,
                  "listener6": listener6.getsockname()[1] if listener6 is not None else 0,
                  "curl": str(curl) if curl.is_file() else "", "node": node, "node_copy": str(node_copy),
-                 "npm_cli": npm_cli, "roots": _roots(tmp)}
+                 "npm_cli": npm_cli}
         (root / "given.json").write_text(json.dumps(given), encoding="utf-8")
         env = sandbox._env_base(tmp)
         env["PATH"] = os.pathsep.join([os.path.dirname(exe), env.get("PATH", "")])
@@ -1169,77 +1090,6 @@ def tried(tmp_path_factory):
         t = time.monotonic()
         box.close()
         costs["delete"] = round(time.monotonic() - t, 2)
-    return facts, costs
-
-
-@pytest.fixture(scope="module")
-def tried_less(tmp_path_factory):
-    """`LESS` once, in a less privileged container of a run's own, started as `tried` starts its probe (a whole
-    Python in the run's folder, from inside a job of the run's own). Returns (facts, costs)."""
-    if not WINDOWS:
-        pytest.skip("an AppContainer is Windows' own")
-    root = tmp_path_factory.mktemp("less")
-    person = tmp_path_factory.mktemp("person_less")
-    (person / "secret.txt").write_text("the person's own words\n", encoding="utf-8")
-    tmp, app = root / "tmp", root / "app"
-    costs: dict = {}
-    box = wincontainer.Container()
-    listener = socket.socket()
-    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_node = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        box.grant(root)
-        tmp.mkdir()
-        app.mkdir()
-        box.grant(tmp, change=True)
-        box.grant(app, change=True)
-        exe = sandbox._whole_python(root / "py", [str(app)])
-        (root / "less.py").write_text(LESS, encoding="utf-8")
-        node = shutil.which("node") or ""
-        node_copy = npm_cli = ""
-        if node.lower().endswith(".exe"):
-            (root / "node").mkdir()
-            node_copy = shutil.copy2(node, root / "node" / "node.exe")
-            npm = Path(node).resolve().parent / "node_modules" / "npm"
-            if (npm / "bin" / "npm-cli.js").is_file():
-                shutil.copytree(npm, root / "node" / "node_modules" / "npm", symlinks=True)
-                npm_cli = str(root / "node" / "node_modules" / "npm" / "bin" / "npm-cli.js")
-        reached: list = []
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        threading.Thread(target=_take, args=(listener, "tcp", reached), daemon=True).start()
-        for sock, kind in ((udp, "udp"), (udp_node, "udp_node")):
-            sock.bind(("127.0.0.1", 0))
-            sock.settimeout(0.5)
-            threading.Thread(target=_take, args=(sock, kind, reached), daemon=True).start()
-        given = {"listener": listener.getsockname()[1], "udp": udp.getsockname()[1],
-                 "udp_node": udp_node.getsockname()[1], "person_file": str(person / "secret.txt"), "tmp": str(tmp),
-                 "copy": str(root / "py"), "node_copy": str(node_copy), "npm_cli": npm_cli, "app": str(app),
-                 "roots": _roots(tmp)}
-        (root / "given.json").write_text(json.dumps(given), encoding="utf-8")
-        env = sandbox._env_base(tmp)
-        env["PATH"] = os.pathsep.join([os.path.dirname(exe), env.get("PATH", "")])
-        root_of_lantern = str(Path(wincontainer.__file__).resolve().parent.parent)
-        cmd = [sys.executable, "-I", "-c", LAUNCH_LESS.format(root=root_of_lantern), box.text, "--", exe,
-               str(root / "less.py"), str(root / "given.json")]
-        t = time.monotonic()
-        rc, output, timed_out = sandbox._stream(cmd, app, env, 300, lambda line: None,
-                                                job=lambda: sandbox._windows_job(2048))
-        costs["probe"] = round(time.monotonic() - t, 2)
-        time.sleep(1)                   # a datagram on its way is counted too
-        costs["rc"], costs["timed_out"] = rc, timed_out
-        costs["reached"] = {kind: reached.count(kind) for kind in ("tcp", "udp", "udp_node")}
-        said = [line for line in output.splitlines() if line.startswith("FACTS ")]
-        if said:
-            facts = json.loads(said[-1][len("FACTS "):])
-        else:                           # outcomes only: the launcher's own line, and the kind of error Python named
-            facts = {"no facts": True,
-                     "launcher": [line for line in output.splitlines() if line.startswith(wincontainer.MARK)][-1:],
-                     "errors": sorted(set(re.findall(r"^(\w+(?:Error|Exception))\b", output, re.M)))[:4]}
-    finally:
-        for s in (listener, udp, udp_node):
-            s.close()
-        box.close()
     return facts, costs
 
 
@@ -1333,52 +1183,11 @@ def test_a_program_that_is_not_python_does_its_honest_work_in_the_container(trie
     assert facts[name].get("word") == SAYS[name] if name in SAYS else True, facts[name]
 
 
-# ---------------------------------------------------------------------------- the fifth round: a less privileged one
-LESS_HONEST = ("loop", "socketpair", "own_server", "datagrams", "second_program", "cmd", "write_tmp", "pool_local")
-
-
 @ONLY_WINDOWS
-def test_what_a_less_privileged_container_did_is_written_out(tried_less, capsys):
-    facts, costs = tried_less
-    with capsys.disabled():
-        print("\n[wincontainer less] costs: " + json.dumps(costs))
-        for name, value in facts.items():
-            print(f"[wincontainer less] {name}: {json.dumps(value)[:300]}")
-    assert "no facts" not in facts, facts
-    assert costs["rc"] == 0 and not costs["timed_out"], costs
-
-
-@ONLY_WINDOWS
-def test_in_a_less_privileged_container_the_tests_python_is_the_runs_own_whole_python(tried_less):
-    facts, _ = tried_less
-    assert facts.get("prefix_is_copy"), facts
-
-
-@ONLY_WINDOWS
-@pytest.mark.parametrize("name", LESS_HONEST)
-def test_what_an_honest_test_does_still_works_in_a_less_privileged_container(tried_less, name):
-    facts, _ = tried_less
-    assert (facts.get(name) or {}).get("ok"), facts.get(name)
-
-
-@ONLY_WINDOWS
-@pytest.mark.parametrize("name", ("outside_v4", "lookup_outside", "person_read"))
-def test_what_lies_outside_the_run_is_refused_in_a_less_privileged_container_too(tried_less, name):
-    facts, _ = tried_less
-    assert name in facts and not facts[name].get("ok"), facts.get(name)
-
-
-@ONLY_WINDOWS
-def test_another_programs_listener_is_not_reached_from_a_less_privileged_container_either(tried_less):
-    facts, costs = tried_less
-    assert not facts["other_listener"].get("ok") and costs["reached"]["tcp"] == 0, (facts["other_listener"], costs)
-
-
-@ONLY_WINDOWS
-@pytest.mark.parametrize("name", ("node_copy_start", "node_copy_own_server"))
-def test_a_program_that_is_not_python_works_in_a_less_privileged_container_too(tried_less, name):
-    facts, _ = tried_less
-    if name not in facts:
+def test_without_the_two_switches_node_cannot_start_a_file_in_the_container(tried):
+    """Node looks at every folder above a file it starts, and the container may look at none of them: Node then
+    stops with EPERM. With `KEEP` the same file starts (`node_file_keep`)."""
+    facts, _ = tried
+    if "node_file" not in facts:
         pytest.skip("Node is not installed on this computer")
-    assert facts[name].get("ok"), facts[name]
-    assert facts[name].get("word") == SAYS[name] if name in SAYS else True, facts[name]
+    assert not facts["node_file"].get("ok") and "EPERM" in facts["node_file"].get("codes", []), facts["node_file"]

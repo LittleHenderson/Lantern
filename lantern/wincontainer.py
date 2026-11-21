@@ -51,10 +51,6 @@ CHANGE = 0x001301BF
 
 ATTRIBUTE_HANDLE_LIST = 0x00020002            # PROC_THREAD_ATTRIBUTE_HANDLE_LIST
 ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009  # PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
-ATTRIBUTE_PACKAGES_POLICY = 0x0002000F        # PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY
-# ... PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT: a "less privileged" container, which what Windows grants
-# to every application package does not reach (only what is granted to it, or to every less privileged one)
-PACKAGES_OPT_OUT = 0x00000001
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 STARTF_USESTDHANDLES = 0x00000100
 STD_HANDLES = (0xFFFFFFF6, 0xFFFFFFF5, 0xFFFFFFF4)   # STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE
@@ -266,33 +262,26 @@ def _inherited_handles(api) -> list:
     return handles
 
 
-def start(container: str, cmd: list[str], api=None, less: bool = False) -> int:
+def start(container: str, cmd: list[str], api=None) -> int:
     """Run `cmd` in the container whose SID is `container` (as text), with this program's standard handles, its
-    environment and its folder; wait for it, and return its result. Nothing else of this program is handed on.
-    `less`: as a less privileged container (`PACKAGES_OPT_OUT`; tried on Windows itself, `tests/test_wincontainer.py`,
-    before the sandbox may ask for it)."""
+    environment and its folder; wait for it, and return its result. Nothing else of this program is handed on."""
     api = api if api is not None else _Api()
     sid = ctypes.c_void_p(None)
     _need(api, "ConvertStringSidToSidW", api.ConvertStringSidToSidW(container, ctypes.byref(sid)))
     try:
         caps = SecurityCapabilities(sid.value, None, 0, 0)
-        policy = _DWORD(PACKAGES_OPT_OUT)
         handles = _inherited_handles(api)
-        count = 3 if less else 2
         size = ctypes.c_size_t(0)
-        api.InitializeProcThreadAttributeList(None, count, 0, ctypes.byref(size))  # asks how much room the list takes
+        api.InitializeProcThreadAttributeList(None, 2, 0, ctypes.byref(size))     # asks how much room the list takes
         if not size.value:
             raise ContainerError("InitializeProcThreadAttributeList", api.last_error())
         room = (ctypes.c_byte * size.value)()
         _need(api, "InitializeProcThreadAttributeList",
-              api.InitializeProcThreadAttributeList(room, count, 0, ctypes.byref(size)))
+              api.InitializeProcThreadAttributeList(room, 2, 0, ctypes.byref(size)))
         info = ProcessInformation()
         try:
             _need(api, "UpdateProcThreadAttribute", api.UpdateProcThreadAttribute(
                 room, 0, ATTRIBUTE_SECURITY_CAPABILITIES, ctypes.byref(caps), ctypes.sizeof(caps), None, None))
-            if less:
-                _need(api, "UpdateProcThreadAttribute", api.UpdateProcThreadAttribute(
-                    room, 0, ATTRIBUTE_PACKAGES_POLICY, ctypes.byref(policy), ctypes.sizeof(policy), None, None))
             listed = (_HANDLE * max(1, len(handles)))(*handles)
             if handles:     # only these are inherited, whatever else this program holds that could be
                 _need(api, "UpdateProcThreadAttribute", api.UpdateProcThreadAttribute(
@@ -327,13 +316,13 @@ def _exit_code(code: int) -> int:
     return code - (1 << 32) if code >= 1 << 31 else code
 
 
-def main(argv: list[str], less: bool = False) -> None:
+def main(argv: list[str]) -> None:
     """`<container SID> -- <command...>`: the command, run in the container; this program ends with its result."""
     if len(argv) < 3 or argv[1] != "--":
         print(f"{MARK} container 87", flush=True)      # ERROR_INVALID_PARAMETER
         sys.exit(UNAVAILABLE)
     try:
-        code = start(argv[0], argv[2:], less=less)
+        code = start(argv[0], argv[2:])
     except ContainerError as e:
         print(f"{MARK} container {e.code}", flush=True)
         sys.exit(UNAVAILABLE)
