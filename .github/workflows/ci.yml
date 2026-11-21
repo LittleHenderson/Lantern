@@ -407,10 +407,11 @@ jobs:
           assert "LW-AUTH-MISSING" in rules, rules
 
   windows-box:
-    # The sealed box's tests for Windows alone, the older tests of what it lets a test do on this computer, and the
-    # behaviour checks' tests, which start apps in the box, so that what the box lets a project's tests and apps do
-    # here is known minutes in: GitHub hands out a job's log only once the job has ended, and the Windows job above
-    # takes about 50 minutes. That job runs these tests again with the whole suite.
+    # The sealed box's tests for Windows alone, the older tests of what it lets a test do on this computer (its own
+    # servers and event loops, process pools, moving its files between its folders), and the behaviour checks'
+    # tests, which start apps in the box, so that what the box lets a project's tests and apps do here is known
+    # minutes in: GitHub hands out a job's log only once the job has ended, and the Windows job above takes about
+    # 50 minutes. That job runs these tests again with the whole suite.
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -431,6 +432,10 @@ jobs:
           tests/test_sandbox_own_network.py::test_tests_that_start_a_server_on_their_own_computer_run
           tests/test_sandbox_own_network.py::test_the_twin_that_reaches_outside_is_still_refused_and_written_down
           tests/test_sandbox_own_network.py::test_the_guard_lets_this_computer_through_only_in_a_network_the_launcher_made
+          tests/test_sandbox_shared_memory.py::test_tests_that_use_process_locks_pools_and_queues_run
+          tests/test_sandbox_second_look.py::test_tests_that_move_a_file_from_one_of_their_folders_to_another_run_as_they_do_at_home
+          tests/test_sandbox_second_look.py::test_the_twin_that_moves_a_file_out_of_its_folders_is_still_refused
+          tests/test_sandbox_second_look.py::test_lanterns_own_install_record_in_the_home_folder_is_not_a_read_the_tests_were_refused
           tests/test_behave.py
         timeout-minutes: 20
 

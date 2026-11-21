@@ -38,7 +38,6 @@ from lantern import sandbox
 
 LINUX = sys.platform.startswith("linux")
 UNITTEST = ["python", "-m", "unittest", "-v"]
-only_posix = pytest.mark.skipif(os.name != "posix", reason="a second name for a file needs a right of its own on Windows")
 
 
 @pytest.fixture
@@ -114,7 +113,6 @@ class Moves(unittest.TestCase):
 '''
 
 
-@only_posix
 def test_tests_that_move_a_file_from_one_of_their_folders_to_another_run_as_they_do_at_home(tmp_path):
     """Six of six failed in the sandbox on the code before ("Invalid cross-device link"), where the kernel has
     the rule the doorman's side is put under (Linux 6.12 on), and passed at home and on stage 1's code."""
@@ -130,6 +128,7 @@ import os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 OUTSIDE = Path({outside!r})
+HELD = {held!r}             # whether this system holds a program below Python to the run's folders too
 
 class Out(unittest.TestCase):
     def setUp(self):
@@ -146,6 +145,8 @@ class Out(unittest.TestCase):
             os.link(self.mine, OUTSIDE / "also.txt")
 
     def test_nor_by_a_program_that_is_not_python_under_the_guard(self):
+        if not HELD:
+            self.skipTest("nothing below Python holds a program to the run's folders on this system")
         code = ("import os, sys\\n"
                 "for do in (os.rename, os.link):\\n"
                 "    try:\\n"
@@ -159,19 +160,20 @@ class Out(unittest.TestCase):
 '''
 
 
-@only_posix
 def test_the_twin_that_moves_a_file_out_of_its_folders_is_still_refused(tmp_path):
     """What the rule is for stays: nothing of the tests' appears in a folder that is not theirs, by Python or by
-    a program below it, and Python's tries are written down."""
+    a program below it where the kernel holds such a program to the run's folders (`sandbox.reach`), and Python's
+    tries are written down."""
     outside = tmp_path / "outside"
     outside.mkdir()
     os.chmod(outside, 0o777)                    # the system's own rights would let any user write there
-    repo = _project(tmp_path / "tiny", OUT.format(outside=str(outside)))
+    held = LINUX and sandbox.landlock_abi() >= 1
+    repo = _project(tmp_path / "tiny", OUT.format(outside=str(outside), held=held))
     res = sandbox.run(repo, UNITTEST, log=lambda line: None, backend="subprocess")
     assert sorted(os.listdir(outside)) == [], os.listdir(outside)
-    if LINUX and sandbox.landlock_abi() >= 1:
-        # where the kernel holds the tests to their folders, each of the three is refused and the tests pass
-        assert res["returncode"] == 0 and "Ran 3 tests" in res["output_tail"], res["output_tail"]
+    # each try is refused and the tests pass; where nothing below Python holds a program, that one is not tried
+    assert res["returncode"] == 0 and "Ran 3 tests" in res["output_tail"], res["output_tail"]
+    assert held or "skipped=1" in res["output_tail"], res["output_tail"]
     assert {b["kind"] for b in res["blocked"]} <= {"write", "read"}, res["blocked"]
     assert any(b["kind"] == "write" and "outside" in b["what"] for b in res["blocked"]), res["blocked"]
 
@@ -272,7 +274,6 @@ class Reads(unittest.TestCase):
 '''
 
 
-@only_posix
 def test_lanterns_own_install_record_in_the_home_folder_is_not_a_read_the_tests_were_refused(tmp_path, open_place):
     """On GitHub's machines 19 tests failed for this alone: every run there named a refused read of
     `lantern.egg-info/entry_points.txt`, which Python itself reads, and a run that was refused something is not
@@ -318,7 +319,7 @@ class Uses(unittest.TestCase):
 '''
 
 
-@only_posix
+@pytest.mark.skipif(os.name != "posix", reason="its Python is made the POSIX way (bin/python, a link to this one)")
 def test_tests_find_the_libraries_this_python_has_through_a_path_file_wherever_the_folder_lies(tmp_path, open_place):
     """A run inside a run: Lantern's own tests, run by Lantern, start runs of their own with a Python whose
     libraries are the ones fetched for the outer run, in the outer run's folder (a temp folder: closed). On the
