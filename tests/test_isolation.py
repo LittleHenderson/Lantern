@@ -424,7 +424,10 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     can run a step as another user, so the first pass names them as skipped), through sudo like the second, and no
     test may be skipped there either. Since 2026-11-20 a Windows job of its own runs the sealed box's tests for
     Windows alone, so that what the box does there is known minutes in (GitHub hands out a job's log only once the
-    job has ended), and the Windows job runs them again with the whole suite."""
+    job has ended), and the Windows job runs them again with the whole suite. Since 2026-11-21 the browser job runs
+    the browser checks' tests on a real browser as the ordinary user, with the machine's rule against user namespaces
+    taken away for that one command and put back after it (the browser keeps its own sandbox); no test may be skipped
+    there, and the step looks in the run's own words for the browser its tests started."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -434,7 +437,7 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
         assert all(" -rs" in line for line in mine), (path.name, mine)
         assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
         runs += [(path.name, line) for line in mine]
-    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 8, runs
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 9, runs
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
     first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network
@@ -510,6 +513,18 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert ("grep -q '^programs these tests started: .*pyright 1\\.1\\.414 (node at .*typescript 6\\.0\\.2 (node at ' "
             "pytest.log ||") in ci
     assert "tests/test_typecheck.py" in its[0] and " or test_typecheck" in its[0], its[0]      # macOS: the whole file
+    # The browser checks' tests: the ordinary user's, like the third pass, with the rule put back whatever they
+    # ended with, no test skipped, and the browser they started named in the run's own words.
+    browse = ci[ci.index("\n  browser:"):]
+    browse = browse[browse.index("The browser checks' tests on a real browser"):]
+    browse = browse[: browse.index("\n  install:")]
+    lines = [line.strip() for line in browse.splitlines() if re.search(r"\bpython -m pytest\b", line)]
+    assert lines == ['LANTERN_TESTS_BROWSER="$browser" python -m pytest -q -rs -p no:cacheprovider tests/test_browse.py '
+                     '| tee "$RUNNER_TEMP/browse.log" || status=$?'], lines
+    assert "set -o pipefail" in browse and not re.search(r"\bsudo\b[^\n]*\bpython\b", browse), browse
+    assert browse.index('sudo sysctl -w "$rule=0"') < browse.index(lines[0]) < browse.index('sudo sysctl -w "$rule=$was"') \
+        < browse.index('[ "$status" -eq 0 ] || exit "$status"') < browse.index("grep -q '^SKIPPED'") \
+        < browse.index("grep -q '^programs these tests started: .*browser '"), browse
     assert [what for what, _ in _rules_gates()] == [
         "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required"
         ".*LANTERN_TESTS_TYPECHECK=required",

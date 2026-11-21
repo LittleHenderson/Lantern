@@ -9,6 +9,14 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Browser checks, written down before they are built (a firm pass or fail, stage 5, step 1): `docs/browser.md` says
+  what a real browser will check on the project's own site (pages that do not open, errors in the page's own script,
+  links and buttons that lead nowhere, forms, what a visitor who is not signed in can open, the protections the site
+  really sends against what its code says, anything a page asks another computer for, the basics of use without a
+  mouse), each check with its codes, a broken example and its safe twin, where it runs and where it never does, and
+  its limits. `lantern/browse.py` holds the same list; `tests/browse_sites.py` writes two small sites, each safe or
+  with one of 25 planted problems; `tests/test_browse.py` holds the checks to the page, and its 27 tests with a real
+  browser (CI's browser job, as the ordinary user, with the browser's own sandbox) fail until the checks are built.
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
   inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
   the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own
