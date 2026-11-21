@@ -542,7 +542,7 @@ jobs:
     # Pinned to Ubuntu 24.04: `ubuntu-latest` moved to 26.04 on 2026-11-05 and Playwright 1.48's browser packages
     # (libicu74, libvpx9, libx264-164) are not in it yet; the same image also runs Tesseract several times slower.
     runs-on: ubuntu-24.04
-    timeout-minutes: 130
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -560,6 +560,27 @@ jobs:
         run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
       - run: LANTERN_BROWSERS="firefox webkit" bash tools/audit.sh --browser
         timeout-minutes: 100
+      - name: The browser checks' tests on a real browser (Playwright's Chromium), as the ordinary user, with the browser's own sandbox
+        timeout-minutes: 20
+        # docs/browser.md: each of the two small sites of tests/browse_sites.py written safe breaks no check, and each
+        # of its 25 planted problems breaks its own check, with its own code, and no other. The browser keeps its own
+        # sandbox, which an ordinary user gets on this machine only with a user namespace: the machine's rule against
+        # those is taken away for this one command and put back after it, whatever the tests ended with. No test may
+        # be skipped here, and the run must name the browser its tests started.
+        run: |
+          set -o pipefail   # piped into tee
+          browser=$(node -p "require('playwright').chromium.executablePath()")
+          test -x "$browser" || { echo "::error::Playwright's Chromium is not at $browser"; exit 1; }
+          rule=kernel.apparmor_restrict_unprivileged_userns
+          was=$(sysctl -n "$rule" 2>/dev/null || true)
+          echo "the machine's rule $rule: ${was:-not there}"
+          if [ -n "$was" ]; then sudo sysctl -w "$rule=0"; fi
+          status=0
+          LANTERN_TESTS_BROWSER="$browser" python -m pytest -q -rs -p no:cacheprovider tests/test_browse.py | tee "$RUNNER_TEMP/browse.log" || status=$?
+          if [ -n "$was" ]; then sudo sysctl -w "$rule=$was"; fi
+          [ "$status" -eq 0 ] || exit "$status"
+          if grep -q '^SKIPPED' "$RUNNER_TEMP/browse.log"; then echo "::error::A test of the browser checks was skipped where a browser was named"; exit 1; fi
+          grep -q '^programs these tests started: .*browser ' "$RUNNER_TEMP/browse.log" || { echo "::error::The run does not name the browser its tests started"; exit 1; }
 
   install:
     # What a tester does: one pip command into a clean venv (no extras), then the first three commands.

@@ -238,7 +238,7 @@ MEGABYTES = (128, 1 << 20)                # what a person may set instead, in wh
 MEMORY_VARIABLE = "LANTERN_TEST_MEMORY_MB"   # the limit for a whole installation
 MARK = "LANTERN-SANDBOX-BLOCKED:"
 JS_NOTE = "Tests run; your map upgrades for Python only for now."
-INSIDE = ("lantern._behave_inside",)      # Lantern's own drivers that `run_inside` may start in the sandbox
+INSIDE = ("lantern._behave_inside", "lantern._browse_inside")   # Lantern's own drivers `run_inside` may start
 # Where `run_inside` starts nothing, and why. An app is asked on an event loop, and until 2026-11-20 the guard could
 # not let one start on Windows without losing sight of what it connects to, so no app was started there. Since then
 # it judges the calls of either loop there (this module's opening text) and every system Lantern runs on starts
@@ -3452,13 +3452,16 @@ def _others_may_read(folder: Path) -> None:
         os.chmod(f, stat.S_IRUSR | stat.S_IWUSR | stat.S_IROTH)
 
 
-def run_inside(repo: Path, module: str, scene: dict, log=print, timeout: float = WALL_CLOCK, cancel=None) -> Result:
+def run_inside(repo: Path, module: str, scene: dict, log=print, timeout: float = WALL_CLOCK, cancel=None,
+               where=None) -> Result:
     """Start one of Lantern's own drivers (`INSIDE`) on a copy of the project in the restricted process: no
     network, writes only in the sandbox's temp folder, never Docker. `scene` goes in as a file and what the driver
     wrote down comes back as `observed` ({} when it left nothing that can be read). The promises are `run`'s:
     `Unavailable` when the sandbox cannot be set up, or starts no app on this system (`NO_APPS`): the project's code
     was then not started. Everything the driver started is ended when it ends, at the time limit and when `cancel`
-    is set."""
+    is set. `where`: called with the run's temp folder once it is made and before it changes hands and the driver
+    starts, for a driver that is spoken to while it runs (the browser checks: `lantern.browse`); what it makes there
+    is handed over with the folder."""
     if module not in INSIDE:
         raise ValueError("not one of Lantern's own drivers")
     if NO_APPS:
@@ -3472,7 +3475,7 @@ def run_inside(repo: Path, module: str, scene: dict, log=print, timeout: float =
         root = Path(tempfile.mkdtemp(prefix="lantern-sandbox-"))
         try:
             res = _run_subprocess(repo, [module], "python", root, log, timeout, "", me, inside=(module, scene),
-                                  memory=memory_limit())
+                                  memory=memory_limit(), where=where)
         finally:
             if not _rm(root):
                 log(f"sandbox: its temp folder could not be deleted and is still there: {root}")
@@ -3738,7 +3741,7 @@ def _programs_run_by(libs: Path, python: str) -> int:
 
 
 def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=None, inside=None,
-                    memory: int = MEMORY_MB, plan=None) -> Result:
+                    memory: int = MEMORY_MB, plan=None, where=None) -> Result:
     from . import _jail
     app, tmp, hook = root / "app", root / "tmp", root / "hook"
     as_nobody = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -3755,6 +3758,8 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         tracer = _tracer(hook) if plan is not None and plan.fetch and language == "python" else None
         if inside is not None:      # the scene of one of Lantern's own drivers, written before the folder changes hands
             (tmp / "behave.scene.json").write_text(json.dumps(inside[1]), encoding="utf-8")
+            if where is not None:
+                where(tmp)
         _copy_in(repo, app, log)
         if not theirs:
             _make_read_only(app)
