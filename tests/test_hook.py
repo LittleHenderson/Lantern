@@ -12,6 +12,7 @@ is, never replaces or removes one it did not write, and says so where git would 
 """
 import os
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -365,7 +366,20 @@ def test_a_tag_is_checked_like_a_branch(tmp_path):
     assert tags == ["v1"], tags
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the line is for a hook git runs with its own shell; started here by sh")
+def _hooks_shell() -> str | None:
+    """The shell git starts a hook with: `sh`, and on Windows the one that comes with git, which git for Windows
+    keeps among its own folders (`…\\Git\\bin\\sh.exe`, `…\\Git\\usr\\bin\\sh.exe`; the git found first may be
+    `…\\Git\\cmd\\git.exe`, `…\\Git\\bin\\git.exe` or `…\\Git\\mingw64\\bin\\git.exe`)."""
+    if os.name != "nt":
+        return shutil.which("sh")
+    git = shutil.which("git")
+    for top in (Path(git).resolve().parents if git else ())[:3]:
+        for shell in (top / "bin" / "sh.exe", top / "usr" / "bin" / "sh.exe"):
+            if shell.is_file():
+                return str(shell)
+    return None
+
+
 def test_the_line_for_a_hook_of_ones_own_runs_this_lantern_too(tmp_path):
     """Where git runs hooks from another folder, Lantern gives the one line to add to the person's own hook. That line
     runs this Lantern, as Lantern's own hook does: not one the project brings, and not whichever one the Python finds
@@ -377,7 +391,9 @@ def test_the_line_for_a_hook_of_ones_own_runs_this_lantern_too(tmp_path):
     (project / "lantern").mkdir(parents=True)
     (project / "lantern" / "__init__.py").write_text("raise SystemExit('the project ran')\n", encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    r = subprocess.run(["sh", "-c", line], input="not what git says\n", cwd=project, env=env, capture_output=True,
+    shell = _hooks_shell()
+    assert shell, "no shell git starts its hooks with was found beside git"
+    r = subprocess.run([shell, "-c", line], input="not what git says\n", cwd=project, env=env, capture_output=True,
                        text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 2 and "could not read what git said is being pushed" in r.stderr, r.stderr
 

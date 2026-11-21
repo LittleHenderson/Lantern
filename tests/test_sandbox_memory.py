@@ -9,6 +9,10 @@ tests failed", a release that is Blocked. Two things were wrong: what was counte
 is counted is memory in use, looked at from outside by the launcher's supervisor (Linux), and tests that were
 stopped for it are tests that did not finish: "Incomplete", never a failure and never a pass.
 
+On Windows (a firm pass or fail, stage 4, 2026-11-20) the run's job counts it: the memory Windows has given the
+tests and everything they started, together (until then the job's limit was for each program alone, and tests that
+went over it were refused memory and read as failed, so the same project was Blocked there and Incomplete on Linux).
+
 Each case stands beside its twin: space reserved and never used beside memory really used, a run under its limit
 beside the same run over it, memory that programs share beside memory each has for itself."""
 import json
@@ -21,13 +25,18 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from test_sandbox import BACKENDS, DOCKER_SKIP, _tiny
+from test_sandbox import BACKENDS, DOCKER_SKIP, _alive, _tiny
 
 from lantern import _jail, cli, pipeline, release, sandbox
 
 PYTEST = ["python", "-m", "pytest", "-q", "-s", "-p", "no:randomly"]
 LINUX = sys.platform.startswith("linux")
+WINDOWS = sys.platform == "win32"
 watched = pytest.mark.skipif(not LINUX, reason="memory in use is looked at by the launcher's supervisor, which is Linux's")
+# the memory of the tests and of everything they started, counted together: by the launcher's supervisor on Linux
+# (memory in use) and by the run's job on Windows (the memory Windows has given them)
+counted = pytest.mark.skipif(not (LINUX or WINDOWS), reason="a run's memory is counted on Linux (the launcher's "
+                             "supervisor) and on Windows (the run's job); here the limit is on each program's space")
 
 
 def QUIET(line):
@@ -68,8 +77,9 @@ def test_the_sheet_says_the_memory_the_tests_will_have(tmp_path, monkeypatch):
     monkeypatch.delenv("LANTERN_TEST_MEMORY_MB", raising=False)
     monkeypatch.setattr(sandbox, "docker_ok", lambda: False)
     words = " | ".join(sandbox.describe(tmp_path, "python")["details"])
-    if LINUX:
+    if LINUX or WINDOWS:
         assert "2 GB of memory for the tests and everything they start, counted together" in words, words
+        assert "for each process" not in words, words
         assert "4 GB of memory" in " | ".join(sandbox.describe(tmp_path, "python", memory=4096)["details"])
     monkeypatch.setenv("LANTERN_SANDBOX", "docker")
     assert any("512 MB memory" in d for d in sandbox.describe(tmp_path, "python", memory=512)["details"])
@@ -77,9 +87,22 @@ def test_the_sheet_says_the_memory_the_tests_will_have(tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------------------------- reserved is not used
 RESERVES = '''
-import mmap
+import mmap, os
 
 def test_space_that_is_reserved_and_never_used():
+    if os.name == "nt":                     # Windows: space set aside with nothing behind it (MEM_RESERVE)
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.VirtualAlloc.restype = ctypes.c_void_p
+        k32.VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_uint32]
+        k32.VirtualFree.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
+        space = k32.VirtualAlloc(None, 3 << 30, 0x2000, 0x04)          # MEM_RESERVE, PAGE_READWRITE: 3 GB
+        assert space, ctypes.get_last_error()
+        assert k32.VirtualAlloc(space, 4096, 0x1000, 0x04) == space    # MEM_COMMIT: one page of it is ever written
+        ctypes.memset(space, ord("x"), 1)
+        assert ctypes.string_at(space, 1) == b"x"
+        assert k32.VirtualFree(space, 0, 0x8000)                        # MEM_RELEASE
+        return
     space = mmap.mmap(-1, 3 << 30)          # 3 GB of address space; one page of it is ever written
     space[0:1] = b"x"
     assert space[0:1] == b"x"
@@ -87,7 +110,7 @@ def test_space_that_is_reserved_and_never_used():
 '''
 
 
-@watched
+@counted
 def test_tests_that_reserve_far_more_space_than_they_use_run_as_they_do_at_home(tmp_path):
     repo = _tiny(tmp_path / "tiny", RESERVES)
     r = sandbox.run(repo, PYTEST, log=QUIET, backend="subprocess")
@@ -115,20 +138,20 @@ def _started(output: str) -> int:
     return int(next(line.split()[1] for line in output.splitlines() if line.startswith("STARTED ")))
 
 
-@watched
+@counted
 def test_tests_that_use_more_memory_than_their_limit_are_stopped_and_it_is_said(tmp_path):
     repo = _tiny(tmp_path / "tiny", USES.replace("TIMES", "40").replace("HOLD", "20"))     # 640 MB
     lines = []
     r = sandbox.run(repo, PYTEST, log=lines.append, backend="subprocess", memory=256)
     assert r["over_memory"] is True and r["memory_limit"] == 256, (r["returncode"], r["output_tail"])
     assert r["returncode"] is None and r["timed_out"] is False and r["cancelled"] is False
-    assert r["not_ended"] == [] and not os.path.exists(f"/proc/{_started(r['output_tail'])}")
+    assert r["not_ended"] == [] and not _alive(_started(r["output_tail"]))
     said = [x for x in lines if "more memory than their limit (256 MB)" in x]
     assert said and "every process it started was ended" in said[0], lines[-8:]
     assert "test_uses_more_and_more" not in "".join(x for x in lines if "passed" in x or "failed" in x)
 
 
-@watched
+@counted
 def test_the_same_tests_under_their_limit_pass(tmp_path):
     repo = _tiny(tmp_path / "tiny", USES.replace("TIMES", "4").replace("HOLD", "2"))       # 64 MB
     lines = []
@@ -151,7 +174,7 @@ def test_four_programs_that_use_100_mb_each():
 '''
 
 
-@watched
+@counted
 def test_what_the_tests_started_counts_with_them(tmp_path):
     """No one program is over the limit; together they are."""
     repo = _tiny(tmp_path / "tiny", SEVERAL.replace("HOLD", "20"))
@@ -159,11 +182,37 @@ def test_what_the_tests_started_counts_with_them(tmp_path):
     assert r["over_memory"] is True and r["returncode"] is None and r["not_ended"] == [], r["output_tail"]
 
 
-@watched
+@counted
 def test_the_same_programs_with_room_for_all_four_pass(tmp_path):
     repo = _tiny(tmp_path / "tiny", SEVERAL.replace("HOLD", "2"))
     r = sandbox.run(repo, PYTEST, log=QUIET, backend="subprocess", memory=1024)
     assert r["returncode"] == 0 and r["over_memory"] is False, r["output_tail"]
+
+
+ASKS = '''
+import time
+
+def test_memory_asked_for_and_never_written():
+    held = bytes(1 << 30)                   # 1 GB of nothing: asked for, and not one byte of it is written
+    time.sleep(HOLD)
+    assert len(held) == 1 << 30
+'''
+
+
+@counted
+def test_memory_asked_for_and_never_written_counts_on_windows_and_not_on_linux(tmp_path):
+    """What each system counts, as it is. Linux counts memory in use, and memory a program asked for and never
+    wrote is none of it: these tests pass there under 256 MB. Windows counts the memory it has given the tests'
+    programs, which it gives when they ask: there these tests are over their limit, and are stopped and said to be
+    like any others over it, never failed."""
+    repo = _tiny(tmp_path / "tiny", ASKS.replace("HOLD", "5"))
+    lines = []
+    r = sandbox.run(repo, PYTEST, log=lines.append, backend="subprocess", memory=256)
+    if LINUX:
+        assert r["returncode"] == 0 and r["over_memory"] is False, r["output_tail"]
+    else:
+        assert r["over_memory"] is True and r["returncode"] is None and r["not_ended"] == [], r["output_tail"]
+        assert any("more memory than their limit (256 MB)" in x for x in lines), lines[-8:]
 
 
 SHARED = '''
@@ -297,7 +346,7 @@ def test_without_a_word_from_the_person_the_check_gives_two_gigabytes(tmp_path, 
         pipeline.analyze(repo, out, trace_cmd=PYTEST, sandbox=True, offline=True, log=QUIET, test_memory=5)
 
 
-@watched
+@counted
 def test_the_whole_check_on_tests_that_use_too_much_memory_is_incomplete_not_blocked(tmp_path, capsys):
     """Nothing stood in for the sandbox here: `lantern analyze --trace --sandbox --test-memory 256`."""
     repo = _tiny(tmp_path / "hungry", USES.replace("TIMES", "40").replace("HOLD", "20"))
@@ -673,8 +722,9 @@ def test_in_a_real_container_the_kernels_own_count_says_it_and_docker_is_not_ask
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_tests_over_their_memory_limit_in_either_sandbox(backend, tmp_path):
-    if backend == "subprocess" and not LINUX:
-        pytest.skip("memory in use is looked at by the launcher's supervisor, which is Linux's")
+    if backend == "subprocess" and not (LINUX or WINDOWS):
+        pytest.skip("a run's memory is counted on Linux (the launcher's supervisor) and on Windows (the run's job); "
+                    "here the limit is on each program's space")
     repo = _tiny(tmp_path / "tiny", USES.replace("TIMES", "40").replace("HOLD", "20"))
     r = sandbox.run(repo, PYTEST, log=QUIET, backend=backend, memory=256)
     assert r["over_memory"] is True and r["returncode"] is None and r["memory_limit"] == 256, r["output_tail"]

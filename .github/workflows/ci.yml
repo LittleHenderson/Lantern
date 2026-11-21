@@ -408,10 +408,10 @@ jobs:
 
   windows-box:
     # The sealed box's tests for Windows alone, the older tests of what it lets a test do on this computer (its own
-    # servers and event loops, process pools, moving its files between its folders), and the behaviour checks'
-    # tests, which start apps in the box, so that what the box lets a project's tests and apps do here is known
-    # minutes in: GitHub hands out a job's log only once the job has ended, and the Windows job above takes about
-    # 50 minutes. That job runs these tests again with the whole suite.
+    # servers and event loops, process pools, moving its files between its folders, the memory a run gets), and the
+    # behaviour checks' tests, which start apps in the box, so that what the box lets a project's tests and apps do
+    # here is known minutes in: GitHub hands out a job's log only once the job has ended, and the Windows job above
+    # takes about 50 minutes. That job runs these tests again with the whole suite.
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -436,6 +436,16 @@ jobs:
           tests/test_sandbox_second_look.py::test_tests_that_move_a_file_from_one_of_their_folders_to_another_run_as_they_do_at_home
           tests/test_sandbox_second_look.py::test_the_twin_that_moves_a_file_out_of_its_folders_is_still_refused
           tests/test_sandbox_second_look.py::test_lanterns_own_install_record_in_the_home_folder_is_not_a_read_the_tests_were_refused
+          tests/test_sandbox_memory.py::test_the_sheet_says_the_memory_the_tests_will_have
+          tests/test_sandbox_memory.py::test_tests_that_reserve_far_more_space_than_they_use_run_as_they_do_at_home
+          tests/test_sandbox_memory.py::test_tests_that_use_more_memory_than_their_limit_are_stopped_and_it_is_said
+          tests/test_sandbox_memory.py::test_the_same_tests_under_their_limit_pass
+          tests/test_sandbox_memory.py::test_memory_asked_for_and_never_written_counts_on_windows_and_not_on_linux
+          tests/test_sandbox_memory.py::test_what_the_tests_started_counts_with_them
+          tests/test_sandbox_memory.py::test_the_same_programs_with_room_for_all_four_pass
+          tests/test_sandbox_memory.py::test_the_whole_check_on_tests_that_use_too_much_memory_is_incomplete_not_blocked
+          tests/test_sandbox_memory.py::test_tests_over_their_memory_limit_in_either_sandbox
+          tests/test_hook.py::test_the_line_for_a_hook_of_ones_own_runs_this_lantern_too
           tests/test_behave.py
         timeout-minutes: 20
 
