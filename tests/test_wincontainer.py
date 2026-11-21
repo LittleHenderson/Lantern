@@ -126,6 +126,8 @@ class Calls:
             caps = value._obj
             self._say("UpdateProcThreadAttribute", "capabilities", caps.AppContainerSid, caps.Capabilities,
                       caps.CapabilityCount, size)
+        elif attribute == wincontainer.ATTRIBUTE_PACKAGES_POLICY:
+            self._say("UpdateProcThreadAttribute", "policy", value._obj.value, size)
         else:
             n = size // ctypes.sizeof(ctypes.c_void_p)
             self._say("UpdateProcThreadAttribute", "handles", [value[i] for i in range(n)])
@@ -271,6 +273,20 @@ def test_the_command_starts_in_the_container_with_its_standard_handles_only_and_
     assert ("LocalFree", 0x5200) in api.log
 
 
+def test_a_less_privileged_container_is_asked_for_only_when_it_is_named():
+    """`less`: one more entry in the list Windows starts the program with, the policy that leaves out what Windows
+    grants to every application package; without it the list is as before (the test above)."""
+    api = Calls()
+    assert wincontainer.start(SID_TEXT, ["C:\\run\\py\\python.exe", "-V"], api=api, less=True) == 0
+    assert api.calls("InitializeProcThreadAttributeList") == [("InitializeProcThreadAttributeList", False, 3),
+                                                              ("InitializeProcThreadAttributeList", True, 3)]
+    assert api.calls("UpdateProcThreadAttribute") == [
+        ("UpdateProcThreadAttribute", "capabilities", 0x5200, None, 0, ctypes.sizeof(wincontainer.SecurityCapabilities)),
+        ("UpdateProcThreadAttribute", "policy", wincontainer.PACKAGES_OPT_OUT, ctypes.sizeof(ctypes.c_uint32)),
+        ("UpdateProcThreadAttribute", "handles", [0x11, 0x12])]
+    assert len(api.calls("CreateProcessW")) == 1
+
+
 @pytest.mark.parametrize("call", ["ConvertStringSidToSidW", "InitializeProcThreadAttributeList",
                                   "UpdateProcThreadAttribute", "CreateProcessW", "WaitForSingleObject"])
 def test_a_command_windows_will_not_start_or_wait_for_is_said_and_everything_is_given_back(call):
@@ -286,7 +302,7 @@ def test_a_command_windows_will_not_start_or_wait_for_is_said_and_everything_is_
 
 
 def test_the_launcher_says_why_in_lanterns_words_and_ends_as_the_sandbox_reads_it(monkeypatch, capsys):
-    def refused(container, cmd, api=None):
+    def refused(container, cmd, api=None, less=False):
         raise wincontainer.ContainerError("CreateProcessW", 5)
     monkeypatch.setattr(wincontainer, "start", refused)
     with pytest.raises(SystemExit) as e:
@@ -302,10 +318,14 @@ def test_the_launcher_says_why_in_lanterns_words_and_ends_as_the_sandbox_reads_i
 
 @pytest.mark.parametrize("code", [0, 1, 0xC0000005, 0xFFFFFFFF])
 def test_the_launcher_ends_with_the_tests_own_result(monkeypatch, code):
-    monkeypatch.setattr(wincontainer, "start", lambda container, cmd, api=None: code)
+    asked: list = []
+    monkeypatch.setattr(wincontainer, "start", lambda container, cmd, api=None, less=False: asked.append(less) or code)
     with pytest.raises(SystemExit) as e:
         wincontainer.main([SID_TEXT, "--", "python.exe"])
     assert e.value.code & 0xFFFFFFFF == code and -(1 << 31) <= e.value.code < (1 << 31)
+    with pytest.raises(SystemExit):
+        wincontainer.main([SID_TEXT, "--", "python.exe"], less=True)
+    assert asked == [False, True]           # a less privileged container only where the launcher is told so
 
 
 def test_a_containers_name_is_lanterns_own_and_one_windows_takes():
@@ -339,7 +359,7 @@ def test_the_whole_python_is_a_python_of_its_own_with_the_runs_libraries_only(tm
 
 
 # ---------------------------------------------------------------------------- what Windows does, tried on Windows
-PROBE = r'''
+TOOLS = r'''
 import _winapi, asyncio, ctypes, json, multiprocessing, os, re, socket, subprocess, sys, threading, time
 from ctypes import wintypes
 
@@ -697,7 +717,8 @@ NODE_OWN_SERVER = ("const net = require('net'); const srv = net.createServer(c =
                    "c.on('data', () => { console.log('ok'); process.exit(0) }); "
                    "c.on('error', e => { console.log(e.code); process.exit(2) }) }); "
                    "setTimeout(() => { console.log('timeout'); process.exit(3) }, 6000)")
-
+'''
+PROBE = TOOLS + r'''
 
 if __name__ == "__main__":
     given = json.loads(open(sys.argv[1], encoding="utf-8").read())
@@ -800,7 +821,41 @@ if __name__ == "__main__":
     sys.stdout.flush()
     os._exit(0)
 '''
+# A fifth round: the same kind of tries in a less privileged container (`wincontainer.start(less=True)`), which what
+# Windows grants to every application package does not reach. Datagrams are counted and written out with the rest.
+LESS = TOOLS + r'''
+
+if __name__ == "__main__":
+    given = json.loads(open(sys.argv[1], encoding="utf-8").read())
+    def here(p):
+        return os.path.normcase(os.path.realpath(p))
+    facts = {"prefix_is_copy": here(sys.prefix) == here(given["copy"])}
+    for name, fn in (("token", token), ("loop", loop), ("socketpair", pair), ("own_server", own_server),
+                     ("datagrams", datagrams)):
+        facts[name] = bounded(fn, 20)
+    facts["second_program"] = bounded(second_program, 30)
+    facts["cmd"] = program(["cmd.exe", "/d", "/c", "echo inside"])
+    facts["outside_v4"] = bounded(connect("192.0.2.1", 9), 15)
+    facts["lookup_outside"] = bounded(lookup("lantern-probe.invalid"), 15)
+    facts["other_listener"] = bounded(connect("127.0.0.1", given["listener"]), 15)
+    facts["other_datagram"] = bounded(datagrams_to("127.0.0.1", given["udp"]), 15)
+    facts["person_read"] = attempt(read(given["person_file"]))
+    facts["write_tmp"] = attempt(write(os.path.join(given["tmp"], "x.txt")))
+    if given.get("node_copy"):
+        node = given["node_copy"]
+        facts["node_copy_start"] = program([node, "-e", "console.log(process.version)"])
+        facts["node_copy_own_server"] = program([node, "-e", NODE_OWN_SERVER], word=True)
+        facts["node_copy_datagram"] = program([node, "-e", NODE_DATAGRAM, str(given["udp_node"])], word=True)
+    os.environ["PROBE_LOCAL_PIPES"] = "1"
+    local_names()
+    facts["pool_local"] = bounded(pool, 60)
+    print("FACTS " + json.dumps(facts), flush=True)
+    sys.stdout.flush()
+    os._exit(0)
+'''
 LAUNCH = "import sys; sys.path.insert(0, {root!r}); from lantern.wincontainer import main; main(sys.argv[1:])"
+LAUNCH_LESS = ("import sys; sys.path.insert(0, {root!r}); from lantern.wincontainer import main; "
+               "main(sys.argv[1:], less=True)")
 # What an honest test does, which must still work inside the container (a pipe, a pool of processes, a manager and
 # the event loop's programs once their pipes are named under the container's own part of the names)
 HONEST = ("loop", "socketpair", "own_server", "loop_server", "datagrams", "second_program", "cmd", "write_tmp",
@@ -848,7 +903,7 @@ def _take(srv, kind: str, reached: list) -> None:
     """Every connection or datagram that reaches one of the programs outside the run, counted until it is closed."""
     while True:
         try:
-            if kind == "udp":
+            if kind.startswith("udp"):     # every datagram counter (until the fifth round two asked for a connection)
                 srv.recvfrom(64)
             else:
                 srv.accept()[0].close()
@@ -1040,6 +1095,72 @@ def tried(tmp_path_factory):
     return facts, costs
 
 
+@pytest.fixture(scope="module")
+def tried_less(tmp_path_factory):
+    """`LESS` once, in a less privileged container of a run's own, started as `tried` starts its probe (a whole
+    Python in the run's folder, from inside a job of the run's own). Returns (facts, costs)."""
+    if not WINDOWS:
+        pytest.skip("an AppContainer is Windows' own")
+    root = tmp_path_factory.mktemp("less")
+    person = tmp_path_factory.mktemp("person_less")
+    (person / "secret.txt").write_text("the person's own words\n", encoding="utf-8")
+    tmp, app = root / "tmp", root / "app"
+    costs: dict = {}
+    box = wincontainer.Container()
+    listener = socket.socket()
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_node = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        box.grant(root)
+        tmp.mkdir()
+        app.mkdir()
+        box.grant(tmp, change=True)
+        box.grant(app, change=True)
+        exe = sandbox._whole_python(root / "py", [str(app)])
+        (root / "less.py").write_text(LESS, encoding="utf-8")
+        node = shutil.which("node") or ""
+        node_copy = ""
+        if node.lower().endswith(".exe"):
+            (root / "node").mkdir()
+            node_copy = shutil.copy2(node, root / "node" / "node.exe")
+        reached: list = []
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        threading.Thread(target=_take, args=(listener, "tcp", reached), daemon=True).start()
+        for sock, kind in ((udp, "udp"), (udp_node, "udp_node")):
+            sock.bind(("127.0.0.1", 0))
+            sock.settimeout(0.5)
+            threading.Thread(target=_take, args=(sock, kind, reached), daemon=True).start()
+        given = {"listener": listener.getsockname()[1], "udp": udp.getsockname()[1],
+                 "udp_node": udp_node.getsockname()[1], "person_file": str(person / "secret.txt"), "tmp": str(tmp),
+                 "copy": str(root / "py"), "node_copy": str(node_copy)}
+        (root / "given.json").write_text(json.dumps(given), encoding="utf-8")
+        env = sandbox._env_base(tmp)
+        env["PATH"] = os.pathsep.join([os.path.dirname(exe), env.get("PATH", "")])
+        root_of_lantern = str(Path(wincontainer.__file__).resolve().parent.parent)
+        cmd = [sys.executable, "-I", "-c", LAUNCH_LESS.format(root=root_of_lantern), box.text, "--", exe,
+               str(root / "less.py"), str(root / "given.json")]
+        t = time.monotonic()
+        rc, output, timed_out = sandbox._stream(cmd, app, env, 300, lambda line: None,
+                                                job=lambda: sandbox._windows_job(2048))
+        costs["probe"] = round(time.monotonic() - t, 2)
+        time.sleep(1)                   # a datagram on its way is counted too
+        costs["rc"], costs["timed_out"] = rc, timed_out
+        costs["reached"] = {kind: reached.count(kind) for kind in ("tcp", "udp", "udp_node")}
+        said = [line for line in output.splitlines() if line.startswith("FACTS ")]
+        if said:
+            facts = json.loads(said[-1][len("FACTS "):])
+        else:                           # outcomes only: the launcher's own line, and the kind of error Python named
+            facts = {"no facts": True,
+                     "launcher": [line for line in output.splitlines() if line.startswith(wincontainer.MARK)][-1:],
+                     "errors": sorted(set(re.findall(r"^(\w+(?:Error|Exception))\b", output, re.M)))[:4]}
+    finally:
+        for s in (listener, udp, udp_node):
+            s.close()
+        box.close()
+    return facts, costs
+
+
 @ONLY_WINDOWS
 def test_what_windows_did_is_written_out(tried, capsys):
     facts, costs = tried
@@ -1126,5 +1247,56 @@ def test_a_program_that_is_not_python_does_its_honest_work_in_the_container(trie
     facts, _ = tried
     if name not in facts:
         pytest.skip("Node is not installed on this computer" if name.startswith("node") else "Node came without npm")
+    assert facts[name].get("ok"), facts[name]
+    assert facts[name].get("word") == SAYS[name] if name in SAYS else True, facts[name]
+
+
+# ---------------------------------------------------------------------------- the fifth round: a less privileged one
+LESS_HONEST = ("loop", "socketpair", "own_server", "datagrams", "second_program", "cmd", "write_tmp", "pool_local")
+
+
+@ONLY_WINDOWS
+def test_what_a_less_privileged_container_did_is_written_out(tried_less, capsys):
+    facts, costs = tried_less
+    with capsys.disabled():
+        print("\n[wincontainer less] costs: " + json.dumps(costs))
+        for name, value in facts.items():
+            print(f"[wincontainer less] {name}: {json.dumps(value)[:300]}")
+    assert "no facts" not in facts, facts
+    assert costs["rc"] == 0 and not costs["timed_out"], costs
+
+
+@ONLY_WINDOWS
+def test_in_a_less_privileged_container_the_tests_python_is_the_runs_own_whole_python(tried_less):
+    facts, _ = tried_less
+    assert facts.get("prefix_is_copy"), facts
+
+
+@ONLY_WINDOWS
+@pytest.mark.parametrize("name", LESS_HONEST)
+def test_what_an_honest_test_does_still_works_in_a_less_privileged_container(tried_less, name):
+    facts, _ = tried_less
+    assert (facts.get(name) or {}).get("ok"), facts.get(name)
+
+
+@ONLY_WINDOWS
+@pytest.mark.parametrize("name", ("outside_v4", "lookup_outside", "person_read"))
+def test_what_lies_outside_the_run_is_refused_in_a_less_privileged_container_too(tried_less, name):
+    facts, _ = tried_less
+    assert name in facts and not facts[name].get("ok"), facts.get(name)
+
+
+@ONLY_WINDOWS
+def test_another_programs_listener_is_not_reached_from_a_less_privileged_container_either(tried_less):
+    facts, costs = tried_less
+    assert not facts["other_listener"].get("ok") and costs["reached"]["tcp"] == 0, (facts["other_listener"], costs)
+
+
+@ONLY_WINDOWS
+@pytest.mark.parametrize("name", ("node_copy_start", "node_copy_own_server"))
+def test_a_program_that_is_not_python_works_in_a_less_privileged_container_too(tried_less, name):
+    facts, _ = tried_less
+    if name not in facts:
+        pytest.skip("Node is not installed on this computer")
     assert facts[name].get("ok"), facts[name]
     assert facts[name].get("word") == SAYS[name] if name in SAYS else True, facts[name]
