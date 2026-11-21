@@ -546,7 +546,8 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
             det.insert(1, "writes allowed only in the copy and its own temp folder"
                           + (", network connections refused" if landlock_abi() >= 4 and held_below_python() else ""))
         if language == "python":
-            det.insert(1, "writing outside the copy and its temp folder and opening network connections are refused")
+            det.insert(1, WINDOWS_PYTHON if _windows_rule() else
+                       "writing outside the copy and its temp folder and opening network connections are refused")
         at = 2 if language == "python" else 1
         det[at:at] = _no_network_words(no_own, language)
     if sys.platform == "win32":
@@ -578,6 +579,14 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
 # ---------------------------------------------------------------------------- a network of the run's own
 NO_OWN_NETWORK = ("{why}, so nothing on this computer is let through either: tests that start a server and call "
                   "it will fail here")
+# On Windows the guard has a rule of its own where the run has no network of its own (`_windows_net`, a firm pass or
+# fail, stage 4, 2026-11-20): until then the two sentences above stood there too, and since that stage they are not
+# true there (found on GitHub's Windows machine while the tests of these words were read there).
+WINDOWS_NET = ("{why}: on Windows the tests may still start a server at this computer's own address, on a port the "
+               "system picks, and call what only their own programs listen at; every other address, on this "
+               "computer or outside it, is refused")
+WINDOWS_PYTHON = ("writing outside the copy and its temp folder is refused, and so is opening a network connection "
+                  "to anything but the tests' own programs")
 # Where nothing below Python holds a program (`held_below_python`), the two sentences above would be true of
 # Python code only. For tests that are not Python, in their place; for Python's tests, beside them.
 NOT_HELD = ("{why}. These tests are not Python, and they are not kept from the network by this run: Lantern's guard "
@@ -663,13 +672,22 @@ def not_held_how() -> str:
             "connections that Lantern can set (Linux 6.7 brought one)")
 
 
+def _windows_rule() -> bool:
+    """Does the guard's own rule for Windows decide what the tests' Python may reach here (`_windows_net`): on
+    Windows, which makes a run no network of its own. Asked by the words, so that a test can ask them of a pretend
+    system."""
+    return sys.platform == "win32" and not _LINUX
+
+
 def _no_network_words(why: str, language: str) -> list[str]:
     """What the sheet and the log say about a run with no network of its own: one sentence, and for Python's
-    tests a second where nothing below Python holds the programs they start."""
+    tests a second where nothing below Python holds the programs they start. On Windows the first says what the
+    guard's own rule there lets through (`WINDOWS_NET`)."""
+    first = (WINDOWS_NET if _windows_rule() else NO_OWN_NETWORK).format(why=why)
     if held_below_python():
-        return [NO_OWN_NETWORK.format(why=why)]
+        return [first]
     if language == "python":
-        return [NO_OWN_NETWORK.format(why=why), NOT_HELD_BESIDE.format(how=not_held_how())]
+        return [first, NOT_HELD_BESIDE.format(how=not_held_how())]
     return [NOT_HELD.format(why=why, how=not_held_how())]
 
 

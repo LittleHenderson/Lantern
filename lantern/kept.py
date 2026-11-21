@@ -469,10 +469,16 @@ def tidy(now: float | None = None, force: bool = False) -> int:
                     return 0
             except OSError:
                 pass
-        with contextlib.suppress(OSError):
-            fd = os.open(mark, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-            os.close(fd)
-            os.utime(mark, (now, now))
+        with contextlib.suppress(OSError, NotImplementedError):
+            # never through a link at the mark's place: where the system cannot open a name without going through
+            # one (Windows), only a plain file or nothing there is opened; dated through the open file where the
+            # system can (2026-11-20: on Windows a link there had what it names dated, or made)
+            if NOFOLLOW or _plain_or_absent(mark):
+                fd = os.open(mark, os.O_WRONLY | os.O_CREAT | NOFOLLOW | getattr(os, "O_BINARY", 0), 0o600)
+                try:
+                    os.utime(fd if os.utime in os.supports_fd else mark, (now, now))
+                finally:
+                    os.close(fd)
         removed = 0
         kept: list[tuple[float, int, Path]] = []
         for path, st in _entries(root):

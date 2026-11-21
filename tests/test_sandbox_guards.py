@@ -918,9 +918,10 @@ WHO = NAMED + '''
 
 
 def test_who_an_address_is_is_a_lookup_and_writing_it_out_is_none(tmp_path):
-    """With the guard and nothing else around it. On Windows no event loop starts under the guard (CLAUDE.md, the
-    sandbox's row), so the two questions put through one are asked where a loop starts."""
-    six, loop = _six(), sys.platform != "win32"
+    """With the guard and nothing else around it. The two questions put through an event loop are asked on every
+    system: until stage 4 (2026-11-20) no event loop started under the guard on Windows, and they were left out
+    there (CLAUDE.md, the sandbox's row)."""
+    six, loop = _six(), True
     r = _guard_alone(tmp_path, WHO, NAME, str(six), str(loop))
     want = ([f"refused: a name | network lookup {NAME!r}", f"refused: a name, numbers asked for | network lookup {NAME!r}",
              "refused: who 192.0.2.1 is | network lookup '192.0.2.1'",
