@@ -15,7 +15,6 @@ handles it is given with `--remote-debugging-io-pipes` (to come)."""
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import queue
@@ -87,7 +86,8 @@ class BrowserError(Exception):
 
 
 def _high(fd: int) -> int:
-    """`fd` again, at 10 or above and closed on exec, and the old number closed."""
+    """`fd` again, at 10 or above and closed on exec, and the old number closed (POSIX)."""
+    import fcntl                # not on Windows, where this module is imported too and the browser gets no pipe yet
     high = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 10)
     os.close(fd)
     return high
