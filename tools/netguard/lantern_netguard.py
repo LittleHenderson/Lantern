@@ -556,18 +556,25 @@ def _dial(host: str, port: int, tunnel: bool, forwarder):
 
 
 def _relay(a, b) -> None:
-    import select
+    """What either side says goes to the other, until one of them ends or neither says anything for ten minutes.
+    Watched by the system's own selector, never `select()`, which takes no connection numbered 1,024 or more
+    (FD_SETSIZE): a test run holds that many files and connections, and the proxy dropped one (2026-11-21)."""
+    import selectors
     a.settimeout(None)
     b.settimeout(None)
-    while True:
-        ready, _, broken = select.select([a, b], [], [a, b], 600)
-        if not ready or broken:
-            return
-        for s in ready:
-            data = s.recv(65536)
-            if not data:
+    with selectors.DefaultSelector() as watch:
+        for s in (a, b):
+            watch.register(s, selectors.EVENT_READ)
+        while True:
+            ready = watch.select(600)
+            if not ready:
                 return
-            (b if s is a else a).sendall(data)
+            for key, _ in ready:
+                s = key.fileobj
+                data = s.recv(65536)
+                if not data:
+                    return
+                (b if s is a else a).sendall(data)
 
 
 def _answer(conn) -> None:

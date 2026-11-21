@@ -13,7 +13,7 @@ program checks the store's certificate itself), and it keeps no copy of anything
 from __future__ import annotations
 
 import base64
-import select
+import selectors
 import socket
 import threading
 from urllib.parse import urlsplit
@@ -190,31 +190,37 @@ class Door:
     @staticmethod
     def _pipe(a: socket.socket, b: socket.socket, to_out: bytes = b"", to_conn: bytes = b"") -> None:
         """Everything `a` says goes to `b` and the other way round, until both have ended or neither has said
-        anything for `IDLE` seconds."""
+        anything for `IDLE` seconds. Watched by the system's own selector, never `select()`, which takes no
+        connection numbered 1,024 or more (FD_SETSIZE): a program that holds that many files and connections, as a
+        long test run does, had every connection of the doorkeeper dropped (2026-11-21)."""
         a.settimeout(None)
         b.settimeout(None)
         if to_out:
             b.sendall(to_out)
         if to_conn:
             a.sendall(to_conn)
-        other, going = {a: b, b: a}, {a, b}
-        while going:
-            ready, _, _ = select.select(list(going), [], [], IDLE)
-            if not ready:
-                return
-            for s in ready:
-                try:
-                    data = s.recv(65536)
-                except OSError:
+        other = {a: b, b: a}
+        with selectors.DefaultSelector() as going:
+            for s in (a, b):
+                going.register(s, selectors.EVENT_READ)
+            while going.get_map():
+                ready = going.select(IDLE)
+                if not ready:
                     return
-                if data:
-                    other[s].sendall(data)
-                    continue
-                going.discard(s)
-                try:
-                    other[s].shutdown(socket.SHUT_WR)
-                except OSError:
-                    pass
+                for key, _ in ready:
+                    s = key.fileobj
+                    try:
+                        data = s.recv(65536)
+                    except OSError:
+                        return
+                    if data:
+                        other[s].sendall(data)
+                        continue
+                    going.unregister(s)
+                    try:
+                        other[s].shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
 
 
 def listen(port: int = 0) -> socket.socket:

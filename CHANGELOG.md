@@ -9,6 +9,17 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The doorkeeper that is a test run's one way to its library store (`lantern/_stores.py`, `Door._pipe`) and the relay
+  of the guard's proxy for Lantern's own tests (`tools/netguard/lantern_netguard.py`, `_relay`) watch their
+  connections with the system's own selector (`selectors.DefaultSelector`), no longer with `select()`, which takes no
+  connection numbered 1,024 or more. In a program that held that many files and connections at once every connection
+  through them failed: on GitHub's Python 3.13 machine 187 of 7,240 tests, and 186 when it ran again, each a test that
+  goes through one of the two, after the tests before them had left over a thousand files open (each website a test
+  makes keeps its database files open while the web library keeps its handlers). The website's step starter waits the
+  same way and is left as it is: it is a program of its own, holding a few files for each step under way. Tests:
+  `tests/test_stores.py` (a plain request and a tunnel through a doorkeeper while the test program holds 1,100 files)
+  and `tests/test_netguard.py` (a program under the guard that holds 1,100 files reaches this computer through its
+  proxy); the 3 failed on the code before, beside twins that hold few.
 - A person can have a website check run their tests, once they have agreed to where the tests run (a firm pass or
   fail, stage 3, step 6). The words come from the server and are the test machine's program's own (`GET /v1/tests`,
   `runner.ask()`: where the tests run and what that machine keeps them from, where their libraries are fetched from,

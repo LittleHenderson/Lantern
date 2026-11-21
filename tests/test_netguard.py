@@ -205,8 +205,27 @@ LOCAL = """
 """
 
 
-def test_a_program_that_sends_everything_to_its_proxy_still_reaches_this_computer():
-    out = _json(_program(LOCAL))
+# Before the program asks anything, it holds files open until one is numbered past the 1,024 that `select()` takes
+# (FD_SETSIZE), raising its own limit for that where it is lower: a test run holds that many in CI, and on 2026-11-21
+# the guard's proxy dropped a connection of GitHub's Python 3.13 job numbered past it.
+HOLD = """
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft != resource.RLIM_INFINITY and soft < %(many)d + 256:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (%(many)d + 256 if hard == resource.RLIM_INFINITY else min(%(many)d + 256, hard), hard))
+    held = [os.open(os.devnull, os.O_RDONLY)]
+    while held[-1] < %(many)d:
+        held.append(os.open(os.devnull, os.O_RDONLY))
+"""
+
+
+@pytest.mark.parametrize("held", [0, 1100])
+def test_a_program_that_sends_everything_to_its_proxy_still_reaches_this_computer(held):
+    """Also while it holds over a thousand files open, when every connection it makes is numbered past what
+    `select()` takes."""
+    if held and os.name != "posix":
+        pytest.skip("a descriptor's number is POSIX's: Windows hands a socket out as a handle, which select() takes")
+    out = _json(_program((HOLD % {"many": held} if held else "") + LOCAL))
     assert out["tunnel"] == "HELLO" and out["plain"].endswith("ok") and out["attempts"] == []
 
 
