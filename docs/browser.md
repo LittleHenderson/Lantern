@@ -13,11 +13,15 @@ its code says, anything a page asks another computer for, and the basics of use 
 
 ```bash
 lantern browse PATH      # opens the site of the project at PATH in a browser, writes PATH/.lantern/browser.json
+lantern browse PATH --browser /full/path/of/chrome   # that browser (default: LANTERN_BROWSER, else where it is installed)
 ```
 
-Result `0` only when every check held or had nothing to check; `1` when a check is broken, undecided or was not run;
-`2` when there is nothing to open (no pages and no app Lantern can start); `3` when the site was not started or no
-browser could be used.
+The command prints each check that did not hold, with its codes and the first three things the browser saw for it
+(text of the site's own, printed with anything that is not printable replaced), then one line of counts. The record
+is written whatever came out, also when nothing could be opened (`ran` false and the reason). Result `0` only when a
+check held and every other check held or had nothing to check; `1` when a check is broken, undecided or was not run,
+or none held; `2` when there is nothing to open (no pages and no app Lantern can start); `3` when the site was not
+started or no browser could be used.
 
 ## Where it runs, and where it never does
 

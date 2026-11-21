@@ -1156,6 +1156,29 @@ first use and keeps in `LANTERN_HOME/seal.key`; it is absent when that folder ca
 usually lies in the project, so a project can bring a `behaviour.json` of its own: without a seal that holds, the
 record counts for nothing. The seal says which Lantern made the record, not that the record is right.
 
+### `browser.json`
+
+Written by `lantern browse PATH` (`lantern/browse.py`, `docs/browser.md`, a firm pass or fail, stage 5): the project's
+own site opened in a real browser, and what each check saw there. Nothing else reads it yet (the report and the
+release decision will, in a later step). It is written whatever came out, through `results.write`.
+
+| Field | Meaning |
+|---|---|
+| `of` | which code: `commit`, `dirty` (`gitfacts.info`) and `lantern`, the version that made it |
+| `ran` | `true` when the pages were opened; `false` with `why_not` (one of `browse.WHY_NOT`'s keys: `not-built`, `no-browser`, `no-browser-sandbox`, `browser-failed`, `no-site`, `not-started`, `no-sandbox`) and `why`, Lantern's own sentence for it |
+| `browser` | `{name, version, own_sandbox, how}`: the browser as it names itself, whether it kept its own sandbox (always `true` in a record with `ran: true`: without it no page is opened) and how that was told; `null` where no browser was started |
+| `site` | `{how, address, pages}`: `pages` (a folder of plain pages served by Lantern's own code) or `app` (the app started in the sealed box), the address it was opened at (`http://localhost:<port>`, where nothing listens) and how many pages the site says it has |
+| `opened` | each page opened: `{path, status, seconds}` (`status` is the answer's status, `null` where none came) |
+| `checks` | one row a check, in the order of `browse.CHECKS`: `{id, outcome, codes, saw, why}`; `outcome` is one of `held`, `broken`, `inconclusive`, `nothing-to-check`, `not-run` (only `held` counts as held), `codes` the codes of `docs/browser.md`, `saw` what the browser saw (at most a few rows a check) |
+| `asked_outside` | every request a page made for another computer, once for each address and page: `{address, host, kind, page, refused}` (`kind` as the browser names it: `script`, `image`, `fetch`, …; `refused` is always `true`: it was refused inside the browser) |
+| `browser_own` | what the browser asked for itself, not its pages (method and host), refused at Lantern's door; not counted for the site |
+| `seconds`, `notes` | how long the run took; at most ten notes about the site (pages left out, a part not read) |
+
+Everything in `opened`, `checks[].saw`, `asked_outside` and `browser_own` comes from the site or the browser: escape
+it like any other value. The command ends with 0 only when a check held and every other check held or had nothing to
+check, 1 when a check is broken, undecided or was not run, or none held, 2 when there is nothing to open, 3 when the
+site was not started or no browser could be used.
+
 ### `change/` (the change receipt, `lantern diff`)
 
 Written by `lantern diff [PATH] [BASE..HEAD]`, by the app's "What changed" (`POST /api/projects/<id>/change`) and by

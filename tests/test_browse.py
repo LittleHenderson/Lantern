@@ -131,6 +131,90 @@ def test_where_a_browser_is_looked_for(tmp_path):
     assert browse.find_browser({"ProgramFiles": "Programs"}, system="win32") is None           # a full path only
 
 
+# The command (`lantern browse`), on every system. What it prints and how it ends come from the record alone, so a
+# record written by hand stands in for a run here; a run itself is tested below, with a real browser.
+
+def _record(outcomes: dict[str, str], saw: list[dict] | None = None) -> dict:
+    checks = []
+    for c in browse.CHECKS:
+        outcome = outcomes.get(c.id, "held")
+        codes = [c.codes[0]] if outcome == "broken" else []
+        checks.append({"id": c.id, "outcome": outcome, "codes": codes,
+                       "saw": (saw or [{"code": c.codes[0], "page": "/"}]) if codes else [],
+                       "why": "test" if outcome == "not-run" else None})
+    return {"of": {"commit": None, "dirty": None, "lantern": "test"}, "ran": True, "why_not": None,
+            "browser": {"name": "Chromium", "version": "1", "own_sandbox": True, "how": "test"},
+            "site": {"how": "pages", "address": "http://localhost:20001", "pages": 1},
+            "opened": [{"path": "/", "status": 200, "seconds": 0.1}], "checks": checks, "asked_outside": [],
+            "browser_own": [], "seconds": 0.5}
+
+
+def _browse(monkeypatch, tmp_path, record) -> tuple[int, Path]:
+    from lantern import cli
+    monkeypatch.setattr(browse, "run", lambda repo, **kw: record)
+    repo = tmp_path / "site"
+    repo.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    return cli.main(["browse", str(repo), "--out", str(out)]), out / browse.RESULT_NAME
+
+
+def test_the_command_ends_with_0_only_when_a_check_held_and_none_failed(tmp_path, monkeypatch, capsys):
+    import json
+    held = _record({"forms": "nothing-to-check", "visitor": "nothing-to-check"})
+    code, written = _browse(monkeypatch, tmp_path, held)
+    said = capsys.readouterr().out
+    assert code == 0, said
+    assert "browse        6 held, 0 broken, 0 undecided, 2 with nothing to check, 0 not run (0.5 s; 1 pages opened)" \
+        in said, said
+    assert json.loads(written.read_text(encoding="utf-8")) == held
+    for outcome in ("broken", "inconclusive", "not-run"):
+        code, written = _browse(monkeypatch, tmp_path, _record({"script": outcome}))
+        said = capsys.readouterr().out
+        assert code == 1, (outcome, said)
+        assert f"{outcome:13} script: " in said, said
+        assert json.loads(written.read_text(encoding="utf-8"))["checks"][1]["outcome"] == outcome
+    code, _ = _browse(monkeypatch, tmp_path, _record({c.id: "nothing-to-check" for c in browse.CHECKS}))
+    assert code == 1, capsys.readouterr().out             # a run that held nothing is no pass
+
+
+def test_what_the_browser_saw_reaches_the_terminal_printable_only(tmp_path, monkeypatch, capsys):
+    planted = {"code": "error", "page": "/‮", "line": "\x1b]0;a title\x07\x1b[2J" + " " + "x\x85y"}
+    code, written = _browse(monkeypatch, tmp_path, _record({"script": "broken"}, saw=[planted]))
+    said = capsys.readouterr().out
+    assert code == 1, said
+    assert "broken        script: " in said, said
+    assert not any(not ch.isprintable() for line in said.splitlines() for ch in line), repr(said)
+    plain = {"code": "error", "page": "/index.html", "line": "Uncaught TypeError: x is not a function"}
+    code, written = _browse(monkeypatch, tmp_path, _record({"script": "broken"}, saw=[plain]))
+    said = capsys.readouterr().out
+    assert "Uncaught TypeError: x is not a function" in said and "/index.html" in said, said   # the twin is said as it is
+
+
+def test_the_command_says_why_nothing_was_opened_and_still_writes_the_record(tmp_path, capsys):
+    import json
+    from lantern import cli
+    assert cli.main(["browse", str(tmp_path / "nothing-here")]) == 2
+    assert "is not a folder" in capsys.readouterr().err
+    repo = browse_sites.write(tmp_path / "s", "pages")
+    out = tmp_path / "o1"
+    assert cli.main(["browse", str(repo), "--out", str(out), "--browser", str(tmp_path / "no-browser-here")]) == 3
+    said = capsys.readouterr().out
+    assert f"not run       {browse.WHY_NOT['no-browser']}" in said, said
+    record = json.loads((out / browse.RESULT_NAME).read_text(encoding="utf-8"))
+    assert (record["ran"], record["why_not"]) == (False, "no-browser")
+    assert {c["outcome"] for c in record["checks"]} == {"not-run"}
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    stand_in = _program(tmp_path / ("chrome.exe" if sys.platform == "win32" else "chrome"))   # never started here
+    out = tmp_path / "o2"
+    code = cli.main(["browse", str(bare), "--out", str(out), "--browser", stand_in])
+    why = json.loads((out / browse.RESULT_NAME).read_text(encoding="utf-8"))["why_not"]
+    if sys.platform.startswith(browse.BUILT_FOR):
+        assert (code, why) == (2, "no-site"), capsys.readouterr()
+    else:
+        assert (code, why) == (3, "not-built"), capsys.readouterr()
+
+
 # With a real browser (LANTERN_TESTS_BROWSER).
 
 @pytest.fixture

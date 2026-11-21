@@ -26,6 +26,9 @@ file. New entries go under `## Unreleased`, on top.
   address answered by Lantern and every other refused there and written down; the browser's one way out is a door
   of Lantern's own that forwards nothing. On the two small sites the safe versions break no check and each of the 25
   planted problems breaks its own check with its own code, and no other. Not yet on macOS and Windows (`not-built`).
+  `lantern browse PATH` runs them and writes what they saw to `browser.json` in the results folder (its shape is in
+  `docs/api.md`), also when nothing could be opened; it ends with 0 only when a check held and none was broken,
+  undecided or not run, and prints what the site showed with anything that is not printable replaced.
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
   inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
   the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own

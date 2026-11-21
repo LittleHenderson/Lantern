@@ -9,6 +9,7 @@
   lantern trace PATH -- python -m pytest -q               record what actually runs
   lantern behave PATH                                     start the app in the sandbox and run its lantern-behaviour.json
   lantern behave PATH --init [--force]                    run nothing: write a first lantern-behaviour.json from the code
+  lantern browse PATH                                     open the project's own site in a real browser and say what it saw
   lantern explain PATH                                    add Three-Lens explanations (Claude Haiku by default)
   lantern login --github | --google                        get a free allowance (sign in once)
   lantern login --token TOKEN                             use a token you already have
@@ -626,6 +627,41 @@ def cmd_behave(a) -> int:
     return 0 if s["held"] and not (s["broken"] or s["inconclusive"] or s["not-run"]) else 1
 
 
+def cmd_browse(a) -> int:
+    """Open the project's own site in a real browser and say what each check saw (docs/browser.md). The record is
+    written as `browser.json` in the results folder whatever came out. 0 only when a check held and every other one
+    held or had nothing to check; 1 when a check is broken, undecided or was not run, or none held; 2 when there is
+    nothing to open; 3 when the site was not started or no browser could be used."""
+    from . import browse, results
+    repo = Path(a.path).resolve()
+    if not repo.is_dir():
+        print(f"error: {a.path} is not a folder", file=sys.stderr)
+        return 2
+    out = _out(repo, a.out)
+    record = browse.run(repo, browser=a.browser, log=lambda line: print(_printable(line), file=sys.stderr))
+    results.write(out / browse.RESULT_NAME, json.dumps(record, indent=2, ensure_ascii=False) + "\n")
+    if not record["ran"]:
+        print(f"not run       {record['why']}")
+        print(f"wrote         {out / browse.RESULT_NAME}")
+        return 2 if record["why_not"] == "no-site" else 3
+    counts = {o: 0 for o in browse.OUTCOMES}
+    for c in record["checks"]:
+        counts[c["outcome"]] += 1
+        if c["outcome"] in ("held", "nothing-to-check"):
+            continue
+        # what the browser saw is the site's own text (a page's address, a console line): printable only
+        saw = "; ".join(_printable(json.dumps(s, ensure_ascii=False)) for s in (c.get("saw") or [])[:3])
+        codes = ", ".join(c.get("codes") or [])
+        print(_printable(f"{c['outcome']:13} {c['id']}: {codes or c.get('why') or ''}"))
+        if saw:
+            print(f"{'':13} {saw}")
+    print(f"browse        {counts['held']} held, {counts['broken']} broken, {counts['inconclusive']} undecided, "
+          f"{counts['nothing-to-check']} with nothing to check, {counts['not-run']} not run "
+          f"({record.get('seconds')} s; {len(record.get('opened') or [])} pages opened)")
+    print(f"wrote         {out / browse.RESULT_NAME}")
+    return 0 if counts["held"] and not (counts["broken"] or counts["inconclusive"] or counts["not-run"]) else 1
+
+
 def cmd_explain(a) -> int:
     from .pipeline import explain, plan_explain
     from .providers import ensure_consent, make_provider, resolve_default
@@ -926,6 +962,13 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--force", action="store_true",
                     help="with --init: write the new plan over a lantern-behaviour.json that is there")
 
+    sp = sub.add_parser("browse", help="open the project's own site in a real browser and say what it saw "
+                                       "(docs/browser.md)")
+    common(sp)
+    sp.add_argument("--browser", metavar="PATH",
+                    help="the full path of the Chrome, Chromium, Edge or Brave to drive (default: LANTERN_BROWSER, "
+                         "else where this system installs one)")
+
     sp = sub.add_parser("explain", help="add Three-Lens explanations")
     common(sp)
     sp.add_argument("--model", help="PROVIDER/MODEL. Default: anthropic/claude-haiku-5-5 with ANTHROPIC_API_KEY, "
@@ -1131,6 +1174,8 @@ def _main(argv: list[str]) -> int:
         return cmd_trace(a, trace_cmd)
     if a.cmd == "behave":
         return cmd_behave(a)
+    if a.cmd == "browse":
+        return cmd_browse(a)
     if a.cmd == "explain":
         return cmd_explain(a)
     if a.cmd == "login":

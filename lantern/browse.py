@@ -85,6 +85,7 @@ BUILT_FOR = ("linux",)   # the systems the checks are built for (sys.platform st
 MOST_PAGES = 50          # pages opened in one run
 MOST_CLICKS = 40         # links and buttons clicked on one page
 PAGE_SECONDS = 20        # how long a page has to answer and settle
+RESULT_NAME = "browser.json"   # the record, in the results folder (`lantern browse`)
 NOT_COMPARED = ("Strict-Transport-Security",)   # sent over HTTPS only; the site is served over plain HTTP in a run
 
 # Where each system installs the browsers Lantern drives (all of the Chromium family, driven alike).
