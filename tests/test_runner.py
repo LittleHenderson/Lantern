@@ -604,6 +604,44 @@ def test_a_projects_tests_run_as_an_ordinary_user_and_the_result_says_how_they_w
 
 
 @needs_the_machine
+def test_the_websites_packing_and_its_reading_of_the_result_go_together_with_the_real_program(machine, tmp_path,
+                                                                                             monkeypatch):
+    """The website's two ends of a check's tests with the machine's own program between them: the project packed by
+    the website's step (`prepare`), its tests run by the program, and the result, as the website keeps it (the
+    program's result and what it ran on, `machines.Machines.run`), read into the check's report (`handed`)."""
+    from lantern import pipeline
+    words = ["python", "-m", "unittest", "-v"]
+    for name, check, code, state in (("passes", "3", 0, "passed"), ("fails", "4", 1, "failed")):
+        project = _project(tmp_path, f"""
+            import unittest
+            from app import add
+            class T(unittest.TestCase):
+                def test_add(self):
+                    self.assertEqual(add(1, 2), {check})
+        """, name)
+        (project / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+        said = runner.prepare(project, tmp_path / f"pack-{name}", words, minutes=2, memory=512, log=lambda line: None)
+        assert said["state"] == "packed", said
+        m = machine()
+        assert m.ask("PUT", "/v1/check", (tmp_path / f"pack-{name}" / runner.ARCHIVE).read_bytes())[0] == 202
+        got = m.result()
+        assert got["state"] == "done", got
+        kept = {**got["result"], "machine": {"image": "registry.example/lantern-runner@sha256:" + "c" * 64,
+                                             "region": "sjc", "cpus": 2, "memory_mb": 4096}}
+        (tmp_path / f"{name}.json").write_text(json.dumps(kept), encoding="utf-8")
+        assert m.ask("POST", "/v1/end")[0] == 202 and m.proc.wait(30) == 0
+        monkeypatch.setenv("LANTERN_CLOUD_RUN", "1")
+        monkeypatch.setenv("LANTERN_TESTS_FROM", str(tmp_path / f"{name}.json"))
+        out = tmp_path / f"out-{name}"
+        pipeline.analyze(project, out, trace_cmd=words, sandbox=True, offline=True, log=lambda line: None)
+        tr = json.loads((out / "run.json").read_text(encoding="utf-8"))["trace"]
+        assert tr["ran"] is True and tr["place"] == "test machine" and tr["returncode"] == code, tr
+        assert tr["observed_edges"] >= 1                   # the call the tests made there, found on this map
+        rd = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
+        assert next(c for c in rd["release"]["criteria"] if c["id"] == "tests")["state"] == state
+
+
+@needs_the_machine
 def test_the_tests_run_on_the_libraries_the_website_fetched_and_on_no_others(machine, tmp_path):
     tests = """
         import unittest

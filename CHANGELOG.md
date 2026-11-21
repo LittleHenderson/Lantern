@@ -9,8 +9,29 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- A website check's tests run on a test machine made for that check, and nowhere else (a firm pass or fail, stage 3,
+  step 5; nothing of the website asks for a check's tests yet: step 6 gives a person the way). A check that asks for
+  its tests (the command, the folder, the minutes and the memory, checked by the test machine's own rules when the run
+  starts) has them packed by a step of the check's own user: the libraries they need are fetched ready-built for the
+  machine's Python 3.12 on Linux (none is built from its source for it), from the stores the website names, and
+  packed with the project, leaving out packages the project brought (`python -m lantern.runner prepare`). The website
+  reads what that step wrote without following any link, copies the archive into a folder only the service may open,
+  hands it to a test machine made for the check and removes its copy. The machine's result goes to the analysis in a
+  file the website makes fresh (`LANTERN_TESTS_FROM`); in a website check the analysis runs no test itself and reads
+  that result by its shape (`runner.handed`): only a result about this check's command and folder, of tests that ran
+  to their end, counts. The report, the release decision, the readiness check and the Evidence Report say where the
+  tests ran, or why they did not run there (the machines are off, the libraries could not be had for the machine, the
+  archive is larger than a machine is handed, the server is short of space). The machine's minutes are not the
+  check's own. New: `lantern analyze --test-cwd DIR`, the folder the tests start in, by the same rule as the
+  website's packing (a folder of the project's own, reached through no link). Fixed on the way, found by the
+  website's first run of the packing step: the test machine's program read every setting written after the folders
+  (`pack P OUT --minutes 3 -- COMMAND`) as part of the test command; it now reads the command after the first `--`.
+  And a test folder called `-x` or `--` reaches the steps as a folder, not as a setting. Tests:
+  `tests/test_cloud_test_runs.py` (25, the whole run with a stand-in machine; each failed on the code before),
+  `tests/test_runner_prepare.py` (45: the packing, the reading of a result, the folder rule, the command line), one
+  more in `tests/test_runner.py` (the packing and the reading with the machine's real program).
 - One test machine of its own for each website check, made and removed by the website (a firm pass or fail, stage 3,
-  step 5; `cloud/lantern_cloud/machines.py`; no check uses it yet). For each check the website makes, in a separate
+  step 5; `cloud/lantern_cloud/machines.py`; used by a check whose tests were asked for, above). For each check the website makes, in a separate
   organization at the hosting company, an app of the check's own on a private network of its own, an outbound rule
   made before the machine, one shared address, and one machine of the runner image named by its fingerprint, given
   the fingerprint of a key made for that check and nothing else; it hands the check's archive over, follows the log,
@@ -48,7 +69,7 @@ file. New entries go under `## Unreleased`, on top.
   itself when nobody comes. Where one of the four walls the design counts on does not stand on the machine (the
   tests' own network, a doorman for every connection, the memory watch, an ordinary user for the tests), no test runs
   and the result says which. The image (`cloud/runner/Dockerfile`) holds Python 3.12 and Node 22 from the pinned images
-  the sandbox names, and Lantern; no pip. The website does not use it yet. Tests: `tests/test_runner.py` (31; the 6
+  the sandbox names, and Lantern; no pip. The website hands it checks since step 5 (above). Tests: `tests/test_runner.py` (31; the 6
   that start the program as its machine does run in CI's second pass as root), `tools/runner_image.py` (8 cases
   against the built image, each on a machine of its own, in CI's new `runner-image` job).
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run

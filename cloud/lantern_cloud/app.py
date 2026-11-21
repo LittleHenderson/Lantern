@@ -198,7 +198,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     Path(s.results_dir).mkdir(parents=True, exist_ok=True)
     store = Store(s.db_path)
     ident = Identity(s.gateway_url, s.identity_ttl, transport=transport)
-    worker = Worker(s, store) if start_worker else None
+    # The test machines (a firm pass or fail, stage 3; `machines.py`): off until their key and image are set (a test
+    # hands its own, with the hosting company stood in for). The worker hands them the tests a check asks for.
+    tm, tm_why = (test_machines, "") if test_machines is not None else s.test_machines()
+    worker = Worker(s, store, machines=tm) if start_worker else None
     gh = s.github_app()     # Connect GitHub (private repositories), or None
     # Everything the service deletes goes through one place, which writes down what it could not remove and tries
     # again: at start, then every hour (`cleanup.py`). The pass also removes runs past the retention time, when the
@@ -208,11 +211,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     cleanup.retention = lambda: sweep(store, s.results_dir, cleanup.days, cleanup)
     upkeep_over = threading.Event()
     threading.Thread(target=cleanup.run_forever, args=(upkeep_over,), name="lantern-upkeep", daemon=True).start()
-    # The test machines (a firm pass or fail, stage 3; `machines.py`): off until their key and image are set (a test
-    # hands its own, with the hosting company stood in for). Their sweep runs beside the clean-up: at the start every
-    # app of this website's (none of its checks is going yet), then what a check left or what is older than any
-    # check can be.
-    tm, tm_why = (test_machines, "") if test_machines is not None else s.test_machines()
+    # The test machines' sweep runs beside the clean-up: at the start every app of this website's (none of its checks
+    # is going yet), then what a check left or what is older than any check can be.
     if tm_why:
         log.warning("test machines: not switched on: %s", tm_why)
     if tm is not None:

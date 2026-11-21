@@ -336,9 +336,9 @@ closes the service's own places again.
 ### The test machine (not live yet)
 
 A check's tests will run on a machine of their own, made from Lantern's runner image for that one check and removed
-after it (a firm pass or fail, stage 3). The website does not use it yet: the next steps make and remove the machines,
-fetch the libraries on the website's side, try it all on a practice copy and, on the owner's word, go live. The image
-is `cloud/runner/Dockerfile`, built from the repository root:
+after it (a firm pass or fail, stage 3). The website's code for it is written (step 5) and nobody can ask for it yet:
+the next steps give the website's page the way to ask, try it all on a practice copy and, on the owner's word, go live.
+The image is `cloud/runner/Dockerfile`, built from the repository root:
 
     docker build -f cloud/runner/Dockerfile --build-arg LANTERN_COMMIT=$(git rev-parse HEAD) -t lantern-runner .
     python tools/runner_image.py lantern-runner      # 8 cases, each on a machine of its own (CI adds a ninth, pytest fetched ready-built, on every push)
@@ -351,7 +351,12 @@ and keeps the result until the website takes it (`docs/api.md`, "The test machin
 
 The website makes and removes those machines itself (stage 3, step 5; `cloud/lantern_cloud/machines.py`), in an
 organization of their own at the hosting company (`lantern-runs`), so nothing of a check is near the website's own
-apps. No check uses them yet (that is the next step), and they stay off until both of these are set on the website:
+apps. A check whose tests were asked for has them packed on the website first, by a step of the check's own user: the
+libraries they need are fetched ready-built for the machine's Python 3.12 on Linux (none is built from its source),
+from the stores `LANTERN_STORE_PYTHON` and `LANTERN_STORE_NPM` name where the website sets them, else from pypi.org and
+registry.npmjs.org; then the archive goes to one of these machines and the analysis reads the machine's result
+(`docs/api.md`, "A check's tests"). Nothing of the website asks for a check's tests yet (step 6), and the machines stay
+off until both of these are set on the website:
 
     LANTERN_CLOUD_TEST_MACHINES_KEY     # a secret: an organization key of lantern-runs, never shown or pasted
     LANTERN_CLOUD_TEST_MACHINES_IMAGE   # the runner image named by its fingerprint: <registry>/<name>@sha256:<64 letters>

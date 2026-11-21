@@ -358,6 +358,23 @@ def libraries_shown(tr) -> dict | None:
     return libraries_clean(tr.get("libraries")) if counted(tr) else None
 
 
+_MACHINE_WORDS = re.compile(r"[0-9A-Za-z.+_@:/ -]{1,300}")
+
+
+def machine_limits(tr: dict) -> list[str]:
+    """Where the tests of a check of the website ran: a test machine made for that check (`runner.handed`), named by
+    what the machine's program and the website said of it, each of a fixed shape."""
+    m = tr.get("machine") if tr.get("place") == "test machine" and isinstance(tr.get("machine"), dict) else None
+    if m is None:
+        return []
+    facts = [f"{w} {m[k]}" for k, w in (("lantern", "Lantern"), ("python", "Python"), ("region", "region"),
+                                        ("image", "image")) if isinstance(m.get(k), str) and _MACHINE_WORDS.fullmatch(m[k])]
+    facts += [f"{m[k]:,} {w}" for k, w in (("cpus", "processors"), ("memory_mb", "MB")) if type(m.get(k)) is int]
+    return ["Where the tests ran. On a test machine made for this check and removed after it (" + ", ".join(facts)
+            + "); the website read its result back by its shape. A check of the website runs no test of a project "
+            "anywhere else."]
+
+
 def libraries_limits(lib: dict | None) -> list[str]:
     """What the libraries the tests ran on leave unproven: versions nobody fixed, libraries nobody fetched."""
     if not lib:
@@ -425,7 +442,14 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
     if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
                    "running are marked observed; everything else is static.")
+        out += machine_limits(tr)
         out += libraries_limits(libraries_shown(tr))
+    elif isinstance(tr, dict) and tr.get("ran") is False and tr.get("not_run_for") == "machine":
+        why = tr.get("unavailable")
+        out.append("Runtime behavior. The project's tests were asked for and were not run on a test machine made for "
+                   "this check, and a check of the website runs them nowhere else"
+                   + (f": {release.reason_words(why[:300])}" if isinstance(why, str) and why.strip() else "")
+                   + ". Every edge is from static analysis.")
     elif isinstance(tr, dict) and tr.get("ran") is False:
         why = tr.get("unavailable")
         out.append("Runtime behavior. The project's tests were asked for and were not run, because "

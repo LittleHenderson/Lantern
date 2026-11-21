@@ -1282,7 +1282,12 @@ and `above` counts the `node_modules` folders above the run's own folder, which 
 ran: false, unavailable: "<why>", returncode: null, observed_edges: 0, …}` when the sandbox could not be set up
 and the tests were not run, with `not_run_for: "libraries"` when the sandbox was there and the libraries the
 project names could not be had (`<why>` then says which library or file; nothing is fetched from a store, a link
-or a folder that the project names itself);
+or a folder that the project names itself); since 2026-11-21 (a firm pass or fail, stage 3, step 5), in a check of the
+website whose tests a test machine made for it ran, `place: "test machine"` and `machine` = `{lantern, python, commit,
+system, image, region, cpus, memory_mb}` (what the machine's program said of itself and what the website said of the
+machine, each taken by its shape: `runner.handed`), with `time_limit`, `memory_limit` and `processes_limit` the
+machine's; where they were not run there, `ran: false` with `not_run_for: "machine"` (or `"libraries"`) and the
+website's reason in `unavailable`;
 `lantern.trace.counted` says whether anything of the run is in the results; tests the person stopped leave no record,
 because a stopped run writes no file), `baseline.json` (first-run findings for "fixed since"),
 `cache/` (explanation cache).
@@ -1424,11 +1429,13 @@ plain sentence (never a traceback or a server path). `summary` (when done) = `{s
 release}`, read from the
 result files (`lanes`: open findings outside tests by `hot_lane`; a finding with no lane is left out; `phone`: the
 platform is a phone app, so the website says Screen and App; `release`: `"Blocked"`, `"Incomplete"`, `"Passed"` or
-null, the run's release decision. The cloud service never runs a project's tests, so a run there reads Incomplete
-at best; a run saved before `lanes` existed gets them on the next
+null, the run's release decision. The cloud service never runs a project's tests itself: a check whose tests were
+asked for has them run on a test machine made for that check (below), and any other run there reads Incomplete at
+best; a run saved before `lanes` existed gets them on the next
 `GET /v1/runs`). `shared` is false until the person clicks Share
-(`POST /v1/runs/{id}/share`). `log_tail`: the last 40 log lines, server paths removed. `explain`: `{status: null|queued|running|done|error, error, summary: {functions, validated, failed, stopped}, log}` (`log`: the explain job's last lines while it runs). `step`: `clone` | `audit` | `analyze` |
-`save` while running (the key of `stage`), else null. `hint`: `"upload"` when the repository could not be opened (private, or no such repository; git asked for a password, or Connect GitHub refused: the person cannot read it, or signed in with Google), so the website offers "Upload your code instead"; `"connect"` when Connect GitHub is on and the app is not installed on that repository, so it offers "Connect GitHub" (`/v1/me` `connect_url`) and Upload; else null. `summary` values are checked when read (score and files whole
+(`POST /v1/runs/{id}/share`). `log_tail`: the last 40 log lines, server paths removed. `explain`: `{status: null|queued|running|done|error, error, summary: {functions, validated, failed, stopped}, log}` (`log`: the explain job's last lines while it runs). `step`: `clone` | `unpack` | `audit` |
+`libraries` | `tests` | `analyze` | `save` while running (the key of `stage`; `libraries` and `tests` only in a check
+whose tests were asked for), else null. `hint`: `"upload"` when the repository could not be opened (private, or no such repository; git asked for a password, or Connect GitHub refused: the person cannot read it, or signed in with Google), so the website offers "Upload your code instead"; `"connect"` when Connect GitHub is on and the app is not installed on that repository, so it offers "Connect GitHub" (`/v1/me` `connect_url`) and Upload; else null. `summary` values are checked when read (score and files whole
 numbers or null, grade A–F or null, counts whole numbers), since a stranger's repository wrote the files.
 
 Retention: with `LANTERN_CLOUD_RETENTION_DAYS` = 0 (the default, the owner's decision) results are kept until the
@@ -1452,15 +1459,54 @@ service from starting, and a failed pass is logged and shown in `last_pass`. Rem
 (shared with the app and the CLI): never through a link, any depth of folders, nothing outside the thing is changed.
 
 What a run does (`cloud/lantern_cloud/worker.py`): clone into a temp folder (size cap before checkout) → dependency
-audits on lock files in the restricted process with the network on → analysis (`lantern analyze --offline`, the
+audits on lock files in the restricted process with the network on → where the check asked for its tests, their
+packing and a test machine made for the check (below) → analysis (`lantern analyze --offline`, the
 audit results passed in through `LANTERN_AUDITS_FROM`) in the restricted process with **no network** and writes only
 in its temp folder → result files copied to the run's folder (plain files of the step's own folder only: the
 service follows no link there and reads no file that has a second name elsewhere; anything else ends the run with
 `error` "Lantern's own step left something that is not a plain file where a result belongs, so nothing of it was
 kept. …") → the temp folder, clone included, removed in every
 case (when the system refuses, the run's log says so, the folder is written down and the hourly pass tries again;
-the run's own result is not changed by that). Nothing from the repository is built, installed or run. A restart
-marks a running run `error` ("start it again"), requeues waiting ones and removes the work folders cut-off runs left.
+the run's own result is not changed by that). Nothing from the repository is built, installed or run on the
+website's own machine. A restart marks a running run `error` ("start it again"), requeues waiting ones and removes the
+work folders cut-off runs left.
+
+A check's tests (a firm pass or fail, stage 3, step 5, 2026-11-21). A run's `tests` (database column; null when no
+tests were asked for) = `{command, cwd, minutes, memory}`; nothing of the website sets it yet (step 6 gives a person
+the way to ask). When the run starts it is checked by the rules the test machine takes (`worker.tests_asked`: those
+four keys and no other, a test command of Python or of npm that `sandbox.check_command` takes, `cwd` folders below the
+project's top joined by `/`, `minutes` 1 to 240, `memory` in MB as the sandbox takes it); anything else ends the run
+with `error` before anything of it starts. Then, after the audits:
+
+* `libraries`: the packing step, `python -P -m lantern.runner prepare <project> <folder> --minutes M --memory MB
+  --cwd=CWD -- COMMAND` (the folder joined to its setting's name, so a folder called `-x` or `--` is a folder), as the
+  check's own user with the network on (`PREPARE_SECONDS` = 900 at most), through the stores
+  `LANTERN_STORE_PYTHON` and `LANTERN_STORE_NPM` name where the service's own settings set them (else the official
+  ones): the libraries the tests need are fetched ready-built for the test machine's Python 3.12 on Linux, none is
+  built from its source, and packages the project brought (`node_modules`) are left out. What it says
+  (`prepared.json`: 64 KB at most, of the shape `runner.prepared` takes, and about the command, folder, minutes and
+  memory asked) and its archive (`check.zip`: at most `LANTERN_CLOUD_TEST_MACHINES_ARCHIVE_MB` MB, and only while
+  the disk keeps 64 MB more free) are opened without following a link, and the archive is copied into a folder only
+  the service may open; the step's own copy is removed.
+* `tests`: one test machine for the check (`machines.Machines.run`, above: made, handed the archive, asked, removed
+  whatever happened), then the archive's copy is removed. A check whose tests are not run there gets the reason in
+  place of a result (the test machines are off, the libraries could not be had for the machine, the archive is
+  larger than a machine is handed, the server is short of space, the packing took too long, something went wrong on
+  Lantern's side), and the rest of the check goes on.
+
+The machine's result, with what the website says of the machine (`machine` = `{image, region, cpus, memory_mb}`), or
+`{version: 1, state: "not_run", why_not, kind: "machine" | "libraries"}`, is written to a new file in a new folder of
+the check's own (`tests/`, a name the service makes; a link or anything else already at that place ends the run with
+`error`), and the analysis is asked for the same tests (`--trace --sandbox --test-cwd=CWD --test-minutes M
+--test-memory MB -- COMMAND`) with `LANTERN_TESTS_FROM` naming that file: it runs no test itself and reads the file
+by its shape (`pipeline._from_machine`, `runner.handed`; a result about another command or folder, of another shape,
+or of tests that did not run to their end is not used, and the reason says so). The machine's minutes do not count
+against the run's own `job_seconds`. The results then say where the tests ran (`run.json` `trace.place` and
+`trace.machine`, above; the release decision's `tests` criterion and readiness's `tests-pass` add "on a test machine
+made for this check", the Evidence Limits name the machine) or why they were not run there (`trace.not_run_for`; the
+`tests` criterion `missing`, `tests-pass` `skip`, an Evidence Limits line). Tests: `tests/test_cloud_test_runs.py`
+(the whole run with a stand-in machine), `tests/test_runner_prepare.py` (the packing step and the reading of a result),
+`tests/test_runner.py` (the packing and the reading with the machine's real program).
 
 `limits` = `{runs_per_day, concurrent_jobs, clone_max_mb, job_seconds, retention_days (null = kept until
 deleted), default_privacy: "structure"}`.
@@ -1470,8 +1516,9 @@ disabled token. A hand-minted token has `account: "token:<16 hex>"`. Never retur
 
 ### The test machine's program (`lantern/runner.py`, `cloud/runner/Dockerfile`)
 
-A firm pass or fail, stage 3, step 4 (2026-11-21). Not used by the website yet: steps 5 to 8 make one machine per
-check from this image, hand it the check, and remove it. The machine starts `python -I -m lantern.runner serve --host
+A firm pass or fail, stage 3, step 4 (2026-11-21). Since step 5 (the same day) the website makes one machine from
+this image for each check whose tests were asked for, hands it the check and removes it (`cloud/lantern_cloud/
+machines.py`, "A check's tests" above); nothing of the website asks for a check's tests yet (step 6). The machine starts `python -I -m lantern.runner serve --host
 0.0.0.0 --port 8080` as root. The website makes a key for the one check and gives the machine only its SHA-256
 fingerprint (`LANTERN_RUNNER_KEY_SHA256`, 64 lowercase hex, taken out of the program's environment when it starts).
 Every request carries `Authorization: Bearer <key>` (letters, digits, `-` and `_`, 512 at most). Without it, or with
@@ -1499,7 +1546,15 @@ is unpacked by the website's own rules (`lantern/archive.py`): no name that leav
 makes in the libraries' `.bin` folders, a file's run bit kept, at most 400,000 entries, sizes counted while writing,
 and at most half of the disk that is free. `python -m lantern.runner pack PROJECT OUT [--libraries DIR --record FILE]
 -- COMMAND` writes one (a link of the project is left out and listed; the folders the sandbox's copy leaves out are
-left out).
+left out). `python -m lantern.runner prepare PROJECT OUT [--cwd DIR] [--minutes N] [--memory MB] -- COMMAND` is the
+website's packing step: it makes the folder OUT (which must not be there) and writes there `check.zip`, with the
+libraries the tests need fetched for the machine (ready-built for its Python 3.12 on Linux, none built from its
+source; the project's `node_modules` left out), and `prepared.json` = `{version: 1, state: "packed", why_not: "",
+kind: "", language, command, cwd, minutes, memory, files, bytes, links, left_out, libraries}`, or `{version: 1, state:
+"not_run", why_not, kind: "machine" | "libraries"}` and no archive where the machine would not run the tests or their
+libraries cannot be had for it (0 when it packed, 3 when it says why not, 2 when it could not begin). For both commands the settings stand before `--` and the
+test command after it (until 2026-11-21 the command was read as the last argument, which also took every setting
+written after the two folders: `--minutes 3` became part of the command).
 
 `result` = `{version: 1, state, why_not, runner, taken, check, tests?}`. `runner` = `{lantern, commit, python, system,
 walls, reach}`, with `walls` five rows `{wall, stands, why}`: the tests' own network, a doorman for every connection,

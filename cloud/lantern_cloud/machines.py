@@ -79,7 +79,7 @@ SWEEP_EVERY = 300.0
 STALE = 4 * SWEEP_EVERY             # a sweep older than this means the sweeps stopped
 MOST_API_ANSWER = 4 << 20
 MOST_DOOR_ANSWER = 128 << 20
-MOST_WHY = 4000                     # characters of a result's `why_not`
+MOST_WHY = runner.MOST_WHY          # characters of a result's `why_not`
 MOST_LINE = 2000                    # characters of one line of the machine's log
 MOST_KEY = 8192
 API_TIMEOUT = 30.0
@@ -158,26 +158,10 @@ def memory_for(memory, most: int = MOST_MB) -> int:
     return mb
 
 
-def taken(result):
-    """The machine's result when it has the shape the machine's program writes (`lantern.runner.check`), as it came;
-    None otherwise. Version 1; a state of `lantern.runner.END_STATES`; `why_not` None or text of at most `MOST_WHY`
-    characters, and some text for every state but done; `runner`, `taken`, `check` and `tests` tables where they are
-    there, and `tests` there when the tests ran."""
-    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1:
-        return None
-    state = result.get("state")
-    if state not in runner.END_STATES or "why_not" not in result:
-        return None
-    why = result["why_not"]
-    if why is not None and (not isinstance(why, str) or len(why) > MOST_WHY):
-        return None
-    if state != DONE and not (isinstance(why, str) and why.strip()):
-        return None
-    if any(part in result and not isinstance(result[part], dict) for part in ("runner", "taken", "check", "tests")):
-        return None
-    if state == DONE and "tests" not in result:
-        return None
-    return result
+# The machine's result when it has the shape the machine's program writes (`lantern.runner.check`), as it came;
+# None otherwise. One rule for the website's two readings of it: here, and the analysis step's
+# (`lantern.runner.handed`).
+taken = runner.shaped
 
 
 def longest(archive_mb: int = ARCHIVE_MB) -> float:

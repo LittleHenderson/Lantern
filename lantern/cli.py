@@ -90,8 +90,16 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
-        found = sandbox.detect(repo)             # started in the folder the app would start them in
-        test_cwd = found.get("cwd", "") if found.get("language") == language else ""
+        if a.test_cwd is not None:               # the folder named, as it is named ("" is the project's top)
+            from . import runner
+            try:
+                test_cwd = runner.test_folder(repo, a.test_cwd)
+            except ValueError as e:
+                print(f"error: --test-cwd: {e}", file=sys.stderr)
+                return 2
+        else:
+            found = sandbox.detect(repo)         # started in the folder the app would start them in
+            test_cwd = found.get("cwd", "") if found.get("language") == language else ""
     out = _out(repo, a.out)
     try:
         res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None, sandbox=a.sandbox,
@@ -883,6 +891,10 @@ def _main(argv: list[str]) -> int:
                     help="with --trace --sandbox: how much memory the tests and everything they start may have in "
                          "use, in megabytes from 128 to 1048576 (default: 2048; LANTERN_TEST_MEMORY_MB sets it for "
                          "every run). Tests stopped for their memory are neither passed nor failed")
+    sp.add_argument("--test-cwd", metavar="DIR",
+                    help="with --trace --sandbox: the folder of the project the tests start in, as folders below "
+                         "its top joined by / (\"\" is the top; default: the folder Lantern finds, as the app "
+                         "does). It must be a folder of the project's own, reached through no link")
     sp.add_argument("--no-scan", action="store_true")
     sp.add_argument("--typecheck", action="store_true",
                     help="also ask the type checkers installed on this computer (the TypeScript compiler, pyright) "
@@ -1104,6 +1116,9 @@ def _main(argv: list[str]) -> int:
             p.error("--test-minutes is the time the tests get: give it with --trace and the test command after --")
     if a.cmd == "analyze" and a.test_memory is not None and not (a.sandbox and a.trace and trace_cmd):
         p.error("--test-memory is the memory the tests get in the sandbox: give it with --trace --sandbox and the "
+                "test command after --")
+    if a.cmd == "analyze" and a.test_cwd is not None and not (a.sandbox and a.trace and trace_cmd):
+        p.error("--test-cwd is the folder the tests start in, in the sandbox: give it with --trace --sandbox and the "
                 "test command after --")
     # A repository link instead of a folder: clone it (shallow) under ~/.lantern/repos and go on from there.
     from . import remote

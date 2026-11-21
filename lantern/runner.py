@@ -9,6 +9,7 @@ Lantern's sandbox as an ordinary user, and holds the result until the website ta
     python -m lantern.runner run ARCHIVE --out FILE                                       # one check, no door
     python -m lantern.runner pack PROJECT OUT [--minutes N] [--memory MB] [--cwd DIR]
                                   [--libraries DIR --record FILE [--fetched-with PYTHON]] -- COMMAND...
+    python -m lantern.runner prepare PROJECT OUT [--minutes N] [--memory MB] [--cwd DIR] -- COMMAND...  # the website's
 
 **The door** (`Door`): one address, and nothing answers there but to the key made for this one check. The machine
 is handed the key's SHA-256 fingerprint, never the key, in `LANTERN_RUNNER_KEY_SHA256` (`KEY_VARIABLE`), which the
@@ -159,6 +160,28 @@ def _folder(cwd) -> str:
     parts = cwd.split("/")
     if any(p in ("", ".", "..") for p in parts):
         raise bad
+    return cwd
+
+
+def test_folder(project: Path, cwd) -> str:
+    """The folder of `project` its tests run in, as parts below its top joined by "/" ("" is the top), where it is a
+    folder of the project's own: written that way, no link on the way, and no folder a copy of the project leaves
+    out (`sandbox.SKIP`, `node_modules`). ValueError with the reason otherwise. One rule for the website's packing of
+    a check (`prepare`) and for the folder a person names (`lantern analyze --test-cwd`)."""
+    try:
+        cwd = _folder(cwd)
+    except Refused:
+        raise ValueError("the folder the tests run in is written as folders below the project's top, joined by "
+                         "\"/\" (\"\" is the top)") from None
+    here = Path(project)
+    try:
+        for part in cwd.split("/") if cwd else ():
+            here = here / part
+            if part in sandbox.SKIP or part == "node_modules" or here.is_symlink() or not here.is_dir():
+                raise ValueError("the folder the tests run in is not a folder of the project's own (one that is "
+                                 "there, reached through no link, and not one a copy of the project leaves out)")
+    except OSError:
+        raise ValueError("the folder the tests run in could not be looked at") from None
     return cwd
 
 
@@ -332,14 +355,16 @@ def take(archive_path: Path, work: Path, free=None) -> dict:
 
 
 def pack(project: Path, out: Path, command: list[str], cwd: str = "", minutes: int = 10, memory: int = 2048,
-         libraries: Path | None = None, record: dict | None = None, fetched_with: str = "") -> dict:
+         libraries: Path | None = None, record: dict | None = None, fetched_with: str = "",
+         leave: frozenset = frozenset()) -> dict:
     """Write a check's archive: the settings, the project and, where they were fetched, its libraries as the fetch
     laid them out (`record` is that fetch's record). Every entry has the same date, a file the mode 0755 when it may
     be run and 0644 otherwise, and nothing is followed through a link: a link of the project is left out (the
     machine makes none there) and a link of the libraries goes in only where npm makes one (else ValueError).
-    Folders the sandbox's copy leaves out (`sandbox.SKIP`) are left out of the project. Returns {files, bytes,
-    links, skipped, left_out}: what went in, and what of the project did not, with why. ValueError (a `Refused`
-    among them) for settings the machine would refuse."""
+    Folders the sandbox's copy leaves out (`sandbox.SKIP`) are left out of the project, and so is every folder of
+    the project named in `leave` (`prepare`: the packages a project brought, `node_modules`), each named in
+    `left_out`. Returns {files, bytes, links, skipped, left_out}: what went in, and what of the project did not, with
+    why. ValueError (a `Refused` among them) for settings the machine would refuse."""
     if libraries is not None and record is None:
         raise ValueError("libraries come with the record of the fetch that made them")
     if record is None:
@@ -365,7 +390,7 @@ def pack(project: Path, out: Path, command: list[str], cwd: str = "", minutes: i
         z.writestr(info, raw)
         counted["files"] += 1
         counted["bytes"] += len(raw)
-        _tree(z, Path(project), "project", counted)
+        _tree(z, Path(project), "project", counted, frozenset(leave))
         if libraries is not None:
             _tree(z, Path(libraries), "libraries", counted)
     counted.pop("entries")
@@ -383,7 +408,10 @@ def _left(counted: dict, rel: str, why: str) -> None:
     counted["left_out"].append({"path": rel, "why": why})
 
 
-def _tree(z: zipfile.ZipFile, top: Path, name: str, counted: dict) -> None:
+LEFT_FOR_THE_FETCH = "packages the project brought: the test machine runs the tests on the ones fetched for them"
+
+
+def _tree(z: zipfile.ZipFile, top: Path, name: str, counted: dict, leave: frozenset = frozenset()) -> None:
     """One folder of the archive (`project` or `libraries`), walked without following a link."""
     if not top.is_dir() or top.is_symlink():
         raise ValueError(f"the {name} folder to pack is not a folder")
@@ -398,6 +426,9 @@ def _tree(z: zipfile.ZipFile, top: Path, name: str, counted: dict) -> None:
                 filenames.append(d)                     # a link to a folder is a link like any other
             elif name == "project" and d in sandbox.SKIP:
                 counted["skipped"] += 1                 # the sandbox's copy leaves it out too
+            elif name == "project" and d in leave:
+                rel = d if rel_dir == "." else f"{rel_dir}/{d}"
+                _left(counted, rel[:300], LEFT_FOR_THE_FETCH)
             else:
                 keep.append(d)
         dirnames[:] = keep
@@ -598,6 +629,381 @@ def check(archive_path: Path, work: Path, log=print, cancel=None, free=None) -> 
     finally:
         if os.path.lexists(work):
             removal.remove(work)
+
+
+# ---------------------------------------------------------------------------- the website's side
+# A check of the website runs a project's tests only on a test machine made for that check
+# (cloud/lantern_cloud/machines.py). Before the machine is made, the website fetches the libraries the project names,
+# for the machine and for nothing else, and packs them with the project (`prepare`, a step of the check's own user,
+# with the network through Lantern's doorkeeper only). After it, the machine's result is read back by its shape into
+# the report (`handed`, in the check's analysis, through LANTERN_TESTS_FROM). Where the tests could not run there,
+# the report says so in Lantern's words and the release decision is Incomplete.
+MACHINE_PYTHON = "3.12"            # the runner image's Python (cloud/runner/Dockerfile)
+MACHINE_WORDS = f"the test machine's Python {MACHINE_PYTHON} on Linux"
+NO_BUILD = "no library is built for the test machine"
+ARCHIVE = "check.zip"              # what `prepare` writes in its folder: the archive,
+PREPARED = "prepared.json"         # and what it says of it (`prepared`)
+MOST_PREPARED = 64 << 10           # bytes of what `prepare` says
+MOST_RESULT = 128 << 20            # bytes of a machine's result the website reads (as much as its door hands over)
+MOST_WHY = 4000                    # characters of a reason
+MOST_COUNT = 1 << 50
+MOST_ROWS = 2_000_000              # calls of one test run
+MOST_NAME = 4096                   # characters of a file's name in a recorded call
+MOST_TAIL = 2000                   # characters of the tests' last output kept
+MOST_ABOUT = 200                   # characters of the machine's own words about itself
+NOT_RUN_KINDS = ("machine", "libraries")
+NOT_HERE = "no result of a test machine came with the check"
+STOPPED_FETCH = "the check was stopped while the project's libraries were fetched"
+_IMAGE = re.compile(r"[a-z0-9][a-z0-9._/:-]{0,250}@sha256:[0-9a-f]{64}")   # as machines.py names the image
+_REGION = re.compile(r"[a-z]{3}")
+_VERSION_WORDS = re.compile(r"[0-9A-Za-z.+_-]{1,40}")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+_BLOCKED_KINDS = ("network", "read", "device", "write")
+
+
+class NotRun(sandbox.Unavailable):
+    """The tests of a check of the website were not run on its test machine, or what came back of them cannot be
+    used. `str()` says why in Lantern's words; `kind` is "machine", or "libraries" where the project's libraries
+    could not be had for the machine. The rest of the check reads the code and goes on (`pipeline.analyze`)."""
+
+    def __init__(self, why: str, kind: str = "machine"):
+        super().__init__(why)
+        self.kind = kind if kind in NOT_RUN_KINDS else "machine"
+
+
+def _one_line(text, most: int = MOST_WHY) -> str:
+    return " ".join(str(text).split())[:most]
+
+
+def not_run(why: str, kind: str = "machine") -> dict:
+    """What is said of tests that were not run on the machine, in the shape `prepared` and `handed` take."""
+    return {"version": 1, "state": "not_run", "why_not": _one_line(why) or "The tests were not run.",
+            "kind": kind if kind in NOT_RUN_KINDS else "machine"}
+
+
+def _said_line(text, most: int = MOST_WHY) -> bool:
+    return isinstance(text, str) and 0 < len(text) <= most and not any(ord(c) < 32 or ord(c) == 127 for c in text)
+
+
+def _json(raw, most: int):
+    """JSON with each name written once and no constant of its own (NaN), or ValueError."""
+    if not isinstance(raw, (bytes, bytearray, str)) or len(raw) > most:
+        raise ValueError("too large")
+    text = raw if isinstance(raw, str) else bytes(raw).decode("utf-8")
+    try:
+        return json.loads(text, object_pairs_hook=_pairs, parse_constant=_no_constant)
+    except RecursionError:
+        raise ValueError("nested too deep") from None
+
+
+def _machine_language(words) -> str:
+    """The language of a test command the machine runs, or ValueError."""
+    if not (isinstance(words, list) and 0 < len(words) <= MOST_WORDS and all(_word(w) for w in words)):
+        raise ValueError("not a list of words")
+    language = sandbox.check_command(list(words))
+    if language not in LANGUAGES or Path(words[0]).name.lower() in ("pnpm", "yarn"):
+        raise ValueError("not a command the test machine runs")
+    return language
+
+
+_PACKED_KEYS = frozenset(("version", "state", "why_not", "kind", "language", "command", "cwd", "minutes", "memory",
+                          "files", "bytes", "links", "left_out", "libraries"))
+_NOT_RUN_KEYS = frozenset(("version", "state", "why_not", "kind"))
+
+
+def prepared(raw) -> dict:
+    """What `prepare` said of the check it packed (its file `PREPARED`), taken by shape: `packed` with the check's
+    settings and what went into the archive, or `not_run` with why. Refused for anything else."""
+    bad = Refused("What the check's packing step said is not of the shape that step writes, so no test machine was "
+                  "asked.")
+    try:
+        said = _json(raw, MOST_PREPARED)
+    except (UnicodeDecodeError, ValueError):
+        raise bad from None
+    if not isinstance(said, dict) or type(said.get("version")) is not int or said["version"] != 1:
+        raise bad
+    if said.get("state") == "not_run":
+        if set(said) != _NOT_RUN_KEYS or said["kind"] not in NOT_RUN_KINDS or not _said_line(said["why_not"]):
+            raise bad
+        return said
+    if said.get("state") != "packed" or set(said) != _PACKED_KEYS or said["why_not"] != "" or said["kind"] != "":
+        raise bad
+    try:
+        language = _machine_language(said["command"])
+        _folder(said["cwd"])
+    except (ValueError, Refused):
+        raise bad from None
+    if said["language"] != language or not _whole(said["minutes"], *sandbox.MINUTES) \
+            or not _whole(said["memory"], *sandbox.MEGABYTES) \
+            or not all(_whole(said[k], 0, MOST_COUNT) for k in ("files", "bytes", "links", "left_out", "libraries")):
+        raise bad
+    return said
+
+
+def shaped(result):
+    """The machine's result when it has the shape the machine's program writes (`check`), as it came; None
+    otherwise. Version 1; a state of `END_STATES`; `why_not` None or text of at most `MOST_WHY` characters, and some
+    text for every state but done; `runner`, `taken`, `check` and `tests` tables where they are there, and `tests`
+    there when the tests ran. (The website takes what its machine hands over by this: `machines.taken`.)"""
+    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1:
+        return None
+    state = result.get("state")
+    if state not in END_STATES or "why_not" not in result:
+        return None
+    why = result["why_not"]
+    if why is not None and (not isinstance(why, str) or len(why) > MOST_WHY):
+        return None
+    if state != "done" and not (isinstance(why, str) and why.strip()):
+        return None
+    if any(part in result and not isinstance(result[part], dict) for part in ("runner", "taken", "check", "tests")):
+        return None
+    if state == "done" and "tests" not in result:
+        return None
+    return result
+
+
+def _named_here(name: str) -> bool:
+    """A file's name as the machine's program writes one of the project (`_relative`): parts below the project's
+    top joined by "/", nothing that could name another place here."""
+    if not (isinstance(name, str) and 0 < len(name) <= MOST_NAME) or name.startswith("/"):
+        return False
+    if any(c in name for c in "\\:") or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return False
+    return not any(part in ("", ".", "..") for part in name.split("/"))
+
+
+def _calls(rows, repo: Path) -> list:
+    """The calls the tests made on the machine, named from the project here: a file of the project (a name below its
+    top) is the same file of this folder; a file outside the project keeps its full name (it is none of this map's);
+    a row of any other shape is no call."""
+    from .trace import _entry
+    if not isinstance(rows, list) or len(rows) > MOST_ROWS:
+        raise NotRun("The test machine's record of the calls the tests made is not of the shape its program writes, "
+                     "so the tests' result was not used.")
+    top = str(repo)
+    kept = []
+    for row in rows:
+        if not (isinstance(row, dict) and _entry(row.get("caller")) and _entry(row.get("callee"))):
+            continue
+        sides = {}
+        for side in ("caller", "callee"):
+            entry = list(row[side])
+            name = entry[0]
+            if _named_here(name):
+                entry[0] = os.path.join(top, *name.split("/"))
+            elif not (name.startswith("/") and len(name) <= MOST_NAME):
+                break
+            sides[side] = entry
+        else:
+            kept.append(sides)
+    return kept
+
+
+def _about(said) -> dict:
+    """The machine's program's words about itself (`about`), taken by shape: every wall stood where the tests ran."""
+    bad = NotRun("The test machine's words about itself are not of the shape its program writes, so the tests' "
+                 "result was not used.")
+    if not isinstance(said, dict):
+        raise bad
+    out = {}
+    for key in ("lantern", "python"):
+        if not (isinstance(said.get(key), str) and _VERSION_WORDS.fullmatch(said[key])):
+            raise bad
+        out[key] = said[key]
+    commit = said.get("commit")
+    if not (isinstance(commit, str) and (commit == "" or _COMMIT.fullmatch(commit))):
+        raise bad
+    out["commit"] = commit
+    if not _said_line(said.get("system"), MOST_ABOUT):
+        raise bad
+    out["system"] = said["system"]
+    walls_said = said.get("walls")
+    if not (isinstance(walls_said, list) and walls_said and all(
+            isinstance(w, dict) and w.get("stands") is True for w in walls_said)):
+        raise bad
+    return out
+
+
+def _machine(said) -> dict:
+    """What the website says of the machine it made (`machines.Machines.run`): image, region, processors, memory."""
+    if not (isinstance(said, dict) and isinstance(said.get("image"), str) and _IMAGE.fullmatch(said["image"])
+            and isinstance(said.get("region"), str) and _REGION.fullmatch(said["region"])
+            and _whole(said.get("cpus"), 1, 256) and _whole(said.get("memory_mb"), 1, 1 << 30)):
+        raise NotRun("What the website wrote of the test machine is not of the shape it writes, so the tests' result "
+                     "was not used.")
+    return {k: said[k] for k in ("image", "region", "cpus", "memory_mb")}
+
+
+_FLAGS = ("timed_out", "over_memory", "over_processes", "own_network", "own_sockets", "off_network", "windows_wall",
+          "traced", "cancelled")
+
+
+def handed(path: Path, repo: Path, command: list[str], cwd: str = "") -> dict:
+    """The result of a check's tests that its test machine ran (the website keeps the machine's result, with what it
+    says of the machine, in a file of the check's own: `path`), read by its shape for this check's analysis of
+    `repo`: the result `sandbox.run` gives, for `trace.merge_trace` and `run.json`, with `time_limit` (seconds),
+    `memory_limit` and `processes_limit` the machine's, and `machine` (what ran them, where). Raises `NotRun` where
+    the tests were not run there (the website's word, with its reason) or what came back cannot be used: a file that
+    is not a plain one, of another shape, or about another command or folder than this check's (`command`, `cwd`),
+    or tests that did not run to their end there. Nothing of the file is run, and no file name in it is followed."""
+    text, why = results.plain(Path(path))
+    if text is None:
+        raise NotRun("The test machine's result could not be read (" + (why or "it is not there") + "), so the tests' "
+                     "result was not used.")
+    try:
+        result = _json(text, MOST_RESULT)
+    except ValueError:
+        raise NotRun("The test machine's result is not JSON the website reads, so the tests' result was not used.") \
+            from None
+    if isinstance(result, dict) and result.get("state") == "not_run":
+        if set(result) != _NOT_RUN_KEYS or type(result["version"]) is not int or result["version"] != 1 \
+                or result["kind"] not in NOT_RUN_KINDS \
+                or not _said_line(result["why_not"]):
+            raise NotRun("What the website said of tests it did not run is not of its shape, so the tests' result "
+                         "was not used.")
+        raise NotRun(result["why_not"], result["kind"])
+    if shaped(result) is None:
+        raise NotRun("The test machine's result is not of the shape its program writes, so the tests' result was not "
+                     "used.")
+    if result["state"] != "done":
+        raise NotRun(_one_line(result["why_not"]))
+    bad = NotRun("The test machine's result is not of the shape its program writes, so the tests' result was not used.")
+    check_said, t = result.get("check"), result["tests"]
+    if not isinstance(check_said, dict):
+        raise bad
+    try:
+        language = _machine_language(check_said.get("command"))
+    except ValueError:
+        raise bad from None
+    if check_said["command"] != list(command):
+        raise NotRun("The test machine ran another command than this check's, so the tests' result was not used.")
+    if check_said.get("cwd") != cwd:
+        raise NotRun("The test machine ran the tests in another folder of the project than this check's, so the "
+                     "tests' result was not used.")
+    if check_said.get("language") != language or not _whole(check_said.get("minutes"), *sandbox.MINUTES) \
+            or not _whole(check_said.get("memory"), *sandbox.MEGABYTES) \
+            or not _whole(check_said.get("processes"), *sandbox.PROCESSES):
+        raise bad
+    if any(type(t.get(k)) is not bool for k in _FLAGS):
+        raise bad
+    if t["cancelled"]:
+        raise NotRun("The tests were stopped part-way on the test machine, so they have no result.")
+    rc = t.get("returncode", "")
+    if not (rc is None or type(rc) is int) or t.get("language") != language or t.get("backend") != "subprocess":
+        raise bad
+    if t.get("memory_limit") != check_said["memory"] or t.get("processes_limit") != check_said["processes"]:
+        raise bad
+    blocked = t.get("blocked")
+    if not (isinstance(blocked, list) and len(blocked) <= 10 and all(
+            isinstance(b, dict) and b.get("kind") in _BLOCKED_KINDS and isinstance(b.get("what"), str)
+            and len(b["what"]) <= 200 for b in blocked)):
+        raise bad
+    left = t.get("not_ended")
+    if not (isinstance(left, list) and len(left) <= 100 and all(_said_line(x, MOST_LINE) for x in left)):
+        raise bad
+    tail = t.get("stderr_tail")
+    if not isinstance(tail, str):
+        raise bad
+    try:
+        record = _record(t.get("libraries"), language)
+    except Refused:
+        raise bad from None
+    data = {k: t[k] for k in _FLAGS}
+    data.update(pairs=_calls(t.get("pairs"), Path(repo)), returncode=rc, language=language, backend="subprocess",
+                blocked=[{"kind": b["kind"], "what": b["what"]} for b in blocked], not_ended=list(left),
+                libraries=record, stderr_tail=tail[-MOST_TAIL:], output_tail=tail[-MOST_TAIL:],
+                memory_limit=check_said["memory"], processes_limit=check_said["processes"],
+                time_limit=sandbox.time_limit(check_said["minutes"]),
+                machine={**_about(result.get("runner")), **_machine(result.get("machine"))})
+    return data
+
+
+def prepare(project: Path, out: Path, words: list[str], cwd: str = "", minutes: int = 10, memory: int = 2048,
+            log=print, cancel=None) -> dict:
+    """A check's tests made ready for its test machine, as a step of the check's own user on the website. The folder
+    `out` is made here (it must not be there) and gets the archive the machine takes (`ARCHIVE`: the settings, the
+    project and the libraries it names, fetched for the machine) and what was done (`PREPARED`, of `prepared`'s
+    shape, which is also returned). The libraries are fetched ready-built for the machine's Python (`MACHINE_PYTHON`,
+    on the runner image's system: `sandbox.image_platforms`) from the person's store, the way a fetch for tests on
+    this computer is made (`libraries.fetch`: through Lantern's doorkeeper only, in the sandbox's launcher), and none
+    is built from its source for the machine (`NO_BUILD`). A project that names no library still gets the test runner
+    its command needs (`libraries.plan(bare=True)`); packages a project brought (`node_modules`) are left out, and
+    the fetched ones go to the machine in their place. Where the machine would not run the tests (a command or a
+    folder it does not take) or the libraries cannot be had for it, nothing is packed and the record says why
+    (`not_run`). `cancel` (a threading.Event) stops a fetch under way."""
+    project, out = Path(project), Path(out)
+    out.mkdir(mode=0o700)
+    said = _prepare(project, out, list(words), cwd, minutes, memory, log, cancel or threading.Event())
+    if said["state"] != "packed":
+        _gone(out / ARCHIVE)                # what was begun of it is no archive of this check
+        log(f"prepare: nothing was packed for the test machine: {said['why_not']}")
+    results.write(out / PREPARED, json.dumps(said, indent=1, ensure_ascii=False) + "\n")
+    return said
+
+
+def _prepare(project: Path, out: Path, words: list[str], cwd: str, minutes: int, memory: int, log, cancel) -> dict:
+    try:
+        language = sandbox.check_command(words)
+    except ValueError:
+        language = "python"                 # `settings` says what is wrong with the command
+    try:
+        settings(json.dumps({"version": 1, "command": words, "minutes": minutes, "memory": memory, "cwd": cwd,
+                             "libraries": {"state": "none", "language": language}}).encode("utf-8"))
+    except Refused as e:
+        return not_run(str(e))
+    if project.is_symlink() or not project.is_dir():
+        return not_run("The project to pack for the test machine is not a folder, so nothing was run.")
+    try:
+        test_folder(project, cwd)
+    except ValueError:
+        return not_run("The folder the tests run in is not a folder of the project the test machine is handed, so "
+                       "nothing was run.")
+    try:
+        found = libraries.plan(project, language, words, cwd, offline=False, bare=True)
+    except sandbox.Unavailable as e:
+        return not_run(str(e), "libraries" if e.kind == "libraries" else "machine")
+    if found.state not in ("none", "fetch"):
+        return not_run("the libraries the project names are not ones the website fetches for the test machine, so its "
+                       "tests were not run", "libraries")
+    if found.fetch and language == "python":
+        found.platforms = sandbox.image_platforms()
+        found.python, found.target, found.no_build = MACHINE_PYTHON, MACHINE_WORDS, NO_BUILD
+        mine = "%d.%d" % sys.version_info[:2]
+        if mine != MACHINE_PYTHON:
+            log(f"prepare: the libraries are fetched for {MACHINE_WORDS}; what the project names for some Pythons "
+                f"only (a marker) is read for this one, Python {mine}")
+    where, record = None, None
+    root = Path(tempfile.mkdtemp(prefix="lantern-prepare-"))
+    try:
+        if found.fetch:
+            app = root / "app"
+            (app / cwd if cwd else app).mkdir(parents=True)
+            try:
+                where = libraries.fetch(found, project, app, root, cwd, log, cancel, memory)
+            except sandbox.Unavailable as e:
+                return not_run(str(e), "libraries" if e.kind == "libraries" else "machine")
+            if where is None:
+                return not_run(STOPPED_FETCH)
+            record = found.record
+        try:
+            counted = pack(project, out / ARCHIVE, words, cwd=cwd, minutes=minutes, memory=memory, libraries=where,
+                           record=record, fetched_with=sys.executable if where is not None and language == "python"
+                           else "", leave=frozenset({"node_modules"}))
+        except (ValueError, OSError) as e:
+            return not_run(f"The project could not be packed for the test machine ({_one_line(e, 300)}), so nothing "
+                           "was run.")
+    finally:
+        removal.remove(root)
+    count = len(record.get("packages") or []) if record else 0
+    log(f"prepare: packed {counted['files']:,} files ({counted['bytes']:,} bytes) and {count} "
+        f"librar{'y' if count == 1 else 'ies'} for the test machine")
+    for row in counted["left_out"][:20]:
+        log(f"prepare:   left out: {row['path']} ({row['why']})")
+    if len(counted["left_out"]) > 20:
+        log(f"prepare:   and {len(counted['left_out']) - 20} more left out")
+    return {"version": 1, "state": "packed", "why_not": "", "kind": "", "language": language, "command": words,
+            "cwd": cwd, "minutes": minutes, "memory": memory, "files": counted["files"], "bytes": counted["bytes"],
+            "links": counted["links"], "left_out": len(counted["left_out"]), "libraries": count}
 
 
 # ---------------------------------------------------------------------------- the program: its state and clock
@@ -1135,8 +1541,6 @@ def _run(a) -> int:
 
 def _pack(a) -> int:
     words = list(a.command)
-    if words[:1] == ["--"]:
-        words = words[1:]
     record = None
     if a.record:
         text, why = results.plain(Path(a.record))
@@ -1160,7 +1564,23 @@ def _pack(a) -> int:
     return 0
 
 
+def _prepare_cli(a) -> int:
+    words = list(a.command)
+    try:
+        said = prepare(Path(a.project), Path(a.out), words, cwd=a.cwd, minutes=a.minutes, memory=a.memory,
+                       log=lambda line: print(line, flush=True))
+    except (OSError, ValueError) as e:
+        print(f"not prepared: {type(e).__name__}: {_one_line(e, 300)}", file=sys.stderr)
+        return 2
+    return 0 if said["state"] == "packed" else 3
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    command: list[str] = []
+    if "--" in argv:    # the test command: every word after the first "--", as written (`pack`, `prepare`)
+        at = argv.index("--")
+        argv, command = argv[:at], argv[at + 1:]
     ap = argparse.ArgumentParser(prog="python -m lantern.runner", description="The test machine's program.")
     sub = ap.add_subparsers(dest="what", required=True)
     s = sub.add_parser("serve", help="open the door and run the one check that comes through it")
@@ -1183,9 +1603,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--libraries")
     p.add_argument("--record")
     p.add_argument("--fetched-with", default="")
-    p.add_argument("command", nargs=argparse.REMAINDER)
+    w = sub.add_parser("prepare", help="the website's step: fetch a check's libraries for the test machine and pack "
+                                       "them with the project")
+    w.add_argument("project")
+    w.add_argument("out", help="a folder to make: the archive and what was done go in it")
+    w.add_argument("--minutes", type=int, default=10)
+    w.add_argument("--memory", type=int, default=2048)
+    w.add_argument("--cwd", default="")
     a = ap.parse_args(argv)
-    return {"serve": _serve, "run": _run, "pack": _pack}[a.what](a)
+    # Until 2026-11-21 the command was the parser's last argument (`argparse.REMAINDER`), which also took every
+    # setting written after the project and the folder: `prepare P OUT --minutes 3 -- CMD` packed `--minutes 3 --
+    # CMD` as the command (found by the website's first run of the packing step, `tests/test_cloud_test_runs.py`).
+    if a.what in ("pack", "prepare") and not command:
+        ap.error(f"{a.what}: the test command goes after --")
+    if a.what not in ("pack", "prepare") and command:
+        ap.error(f"{a.what} takes no command")
+    a.command = command
+    return {"serve": _serve, "run": _run, "pack": _pack, "prepare": _prepare_cli}[a.what](a)
 
 
 if __name__ == "__main__":

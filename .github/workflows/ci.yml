@@ -221,7 +221,8 @@ jobs:
         # and the tests that start the test machine's program the way its machine starts it, as root, which runs a
         # project's tests as an ordinary user (lantern/runner.py, a firm pass or fail, stage 3), and the tests of the
         # limit on the programs those tests run at once, which holds only a user of the tests' own (tests/
-        # test_sandbox_processes.py, step 5).
+        # test_sandbox_processes.py, step 5), and the tests of the website's run of a check whose tests were asked
+        # for, whose packing step runs as the check's user there (tests/test_cloud_test_runs.py, step 5).
         # Here the files run as root, and no test may be skipped. A check's user is none of this machine's users, and
         # the twins run Lantern's own analysis as that user, which reads Lantern's code from this checkout as it
         # reads it from the website's image: the folders above the checkout are opened for passing through (not for
@@ -233,7 +234,7 @@ jobs:
           d="$GITHUB_WORKSPACE"
           while [ "$d" != "/" ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
           sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" PYTHONDONTWRITEBYTECODE=1 \
-            python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py tests/test_cloud_switcher.py tests/test_runner.py tests/test_sandbox_processes.py | tee "$RUNNER_TEMP/step-user.log"
+            python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py tests/test_cloud_switcher.py tests/test_runner.py tests/test_sandbox_processes.py tests/test_cloud_test_runs.py | tee "$RUNNER_TEMP/step-user.log"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/step-user.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached

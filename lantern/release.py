@@ -288,6 +288,13 @@ def _dependencies(sec: dict | None, files: list[str]) -> dict:
                  "is ranked like any other.")
 
 
+def reason_words(why: str) -> str:
+    """A reason written as a sentence of its own ("The test machines are off.") as the end of another one: on one
+    line, no full stop at its end, and a small first letter where it begins with an ordinary word."""
+    why = " ".join(str(why).split()).rstrip(".")
+    return why[0].lower() + why[1:] if why[:1].isupper() and why[1:2].islower() else why
+
+
 def _tests(tests_exist: bool, run_meta: dict) -> dict:
     tr = run_meta.get("trace") if isinstance(run_meta.get("trace"), dict) else None
     how = ("Run them under Lantern: `lantern analyze PATH --trace -- <your test command>`, or “Watch my tests "
@@ -299,6 +306,12 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
     if not tr:
         return _crit("tests", "missing", "The tests were not run in this check. Lantern runs a project's code only "
                                          "when asked, and tests that were not run prove nothing.", how)
+    if tr.get("ran") is False and tr.get("not_run_for") == "machine":
+        return _crit("tests", "missing", "The tests were not run: a check of the website runs a project's tests only on "
+                                         "a test machine made for that check, and no test machine ran them for this "
+                                         "one. Tests that were not run prove nothing.",
+                     "The check's log says why. Run the check again; or run the tests on your own computer: "
+                     "`lantern analyze PATH --trace --sandbox -- <your test command>`.")
     if tr.get("ran") is False and tr.get("not_run_for") == "libraries":
         return _crit("tests", "missing", "The tests were not run: the libraries the project names could not be had "
                                          "for them, and tests run on other libraries say nothing about this "
@@ -310,8 +323,9 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
         return _crit("tests", "missing", "The tests were not run: the sandbox they run in could not be set up on "
                                          "this computer.", how)
     rc = tr.get("returncode")
+    where = ", on a test machine made for it," if tr.get("place") == "test machine" else ""
     if rc == 0:
-        return _crit("tests", "passed", "The tests ran in this check and ended with 0 (passed).")
+        return _crit("tests", "passed", f"The tests ran in this check{where} and ended with 0 (passed).")
     if rc is None:
         from . import sandbox
         if tr.get("over_processes") is True:
@@ -355,7 +369,7 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
                      "The check's log says which libraries were left out and why, and which tests failed. Name "
                      "optional libraries the official store has ready-built for this system, or have the tests that "
                      "need one say so and be skipped without it, then run them again.")
-    return _crit("tests", "failed", f"The tests ran in this check and ended with {rc} (failed).",
+    return _crit("tests", "failed", f"The tests ran in this check{where} and ended with {rc} (failed).",
                  "Fix the failing tests, then run them again under Lantern.")
 
 

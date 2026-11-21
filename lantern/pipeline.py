@@ -93,7 +93,8 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     # they did when every scanner ran after the tests.
     # And how a file reads is kept between runs (`lantern/kept.py`), so a file that has not changed is not read
     # again; the run counts what it took from there and what it worked out anew, and says so.
-    in_its_folder = bool(trace_cmd) and not sandbox
+    # a check of the website runs no test of a project itself (`_from_machine`)
+    in_its_folder = bool(trace_cmd) and not sandbox and os.environ.get("LANTERN_CLOUD_RUN") != "1"
     from . import sandbox as sbx
     limit = None                # seconds for the tests; None: the older way's own (`trace.DEFAULT_TIMEOUT`)
     if test_minutes is not None or (trace_cmd and (sandbox or sbx.time_asked())):
@@ -110,6 +111,23 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
             if early is not None:
                 early.close()   # whatever is still going is ended: a run that stops or fails leaves nothing behind
             kept.tidy()         # at most once a day: what nobody asked for in a month goes, the folder stays bounded
+
+
+def _from_machine(repo: Path, trace_cmd: list[str], test_cwd: str) -> dict:
+    """A check of the website runs no test of a project itself: a test machine made for the check ran them
+    (cloud/lantern_cloud/machines.py), and the website hands its result to this analysis in a file of the check's
+    own, named by LANTERN_TESTS_FROM (cloud/lantern_cloud/worker.py). Read by its shape (`runner.handed`); where there
+    is none, or the tests were not run there, `runner.NotRun` (a `sandbox.Unavailable`) says why."""
+    from . import runner
+    handed = os.environ.get("LANTERN_TESTS_FROM", "")
+    if not handed:
+        raise runner.NotRun(runner.NOT_HERE)
+    return runner.handed(Path(handed), Path(repo).resolve(), trace_cmd, test_cwd)
+
+
+def _machine_words(m: dict) -> str:
+    return (f"Lantern {m['lantern']} on Python {m['python']}, {m['cpus']} processor{'s' if m['cpus'] != 1 else ''} "
+            f"and {m['memory_mb']:,} MB, in region {m['region']}")
 
 
 def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log: Log, offline: bool, sandbox: bool,
@@ -149,23 +167,29 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
     left = remote.skipped(repo) if remote.is_clone(repo) else None
     if left:   # the clone left out files Lantern does not read, to stay under the size cap (remote._checkout)
         run_meta["skipped"] = {k: left.get(k) for k in ("files", "mb", "kept_mb", "cap_mb", "examples")}
-    if os.environ.get("LANTERN_CLOUD_RUN") == "1":   # set only by Lantern's cloud worker (cloud/lantern_cloud/worker.py)
+    website = os.environ.get("LANTERN_CLOUD_RUN") == "1"   # set only by Lantern's cloud worker (cloud/lantern_cloud/worker.py)
+    if website:
         run_meta["place"] = "cloud"
     if trace_cmd:
         t = time.perf_counter()
         extra: dict = {}
-        if sandbox:
+        if sandbox or website:
             nothing = {"returncode": None, "observed_edges": 0, "recall": None, "runtime_only": 0}
             try:
-                data = sbx.run(repo, trace_cmd, log=log, timeout=limit, cwd_rel=test_cwd, cancel=cancel, memory=room,
-                               offline=offline)
+                if website:
+                    data = _from_machine(repo, trace_cmd, test_cwd)
+                else:
+                    data = sbx.run(repo, trace_cmd, log=log, timeout=limit, cwd_rel=test_cwd, cancel=cancel,
+                                   memory=room, offline=offline)
             except sbx.Unavailable as e:   # no sandbox, no tests; reading the code needs neither
                 data = None
                 extra = {"ran": False, "unavailable": str(e)}
                 if e.kind != "sandbox":    # the sandbox was there; the project's libraries could not be had
                     extra["not_run_for"] = e.kind
                 m = dict(nothing)
-                log(f"trace   the tests were not run: {e}. The rest of the check reads the code and goes on.")
+                from .release import reason_words
+                log(f"trace   the tests were not run: {reason_words(str(e))}. The rest of the check reads the code "
+                    "and goes on.")
             if data is not None:
                 if data.get("cancelled"):   # stopped part-way: what was recorded until then is not a test run
                     log("trace   the tests were stopped before they ended; the results are left as they were")
@@ -174,9 +198,13 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
                                                   "own_network", "own_sockets", "off_network", "libraries",
                                                   "windows_wall")}
                 extra["ran"] = True
-                extra["time_limit"] = limit
+                extra["time_limit"] = data["time_limit"] if website else limit
                 extra["over_memory"] = bool(data.get("over_memory"))
-                extra["memory_limit"] = room
+                extra["memory_limit"] = data["memory_limit"] if website else room
+                if website:                         # what ran them, and where (`runner.handed`)
+                    extra["place"] = "test machine"
+                    extra["machine"] = data["machine"]
+                    log(f"trace   the tests ran on a test machine made for this check: {_machine_words(data['machine'])}")
                 if data.get("processes_limit"):     # the test machine's own limit (`sandbox.run(processes=)`)
                     extra["over_processes"] = bool(data.get("over_processes"))
                     extra["processes_limit"] = data.get("processes_limit")

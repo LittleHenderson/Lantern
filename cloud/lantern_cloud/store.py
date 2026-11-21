@@ -34,7 +34,9 @@ create table if not exists runs (
   share_slug text unique,            -- null until the person clicks Share (off by default)
   explain_status text,               -- null | queued | running | done | error (plain-words explanations)
   explain_error text, explain_summary text,    -- summary: JSON {functions, validated, failed, stopped}
-  workspace text);                   -- null: the owner's alone; else every member of that workspace can read it
+  workspace text,                    -- null: the owner's alone; else every member of that workspace can read it
+  tests text);                       -- null: no tests asked; else JSON {command, cwd, minutes, memory}, which a test
+                                     -- machine made for the check runs (worker.tests_asked)
 create index if not exists runs_by_account on runs (account, created);
 create table if not exists daily (
   day text, account text, runs integer default 0, primary key (day, account));
@@ -71,7 +73,8 @@ ACTIVE = ("queued", "running")
 FINISHED = ("done", "error", "blocked")
 RUN_FIELDS = ("id", "account", "link", "host", "privacy", "status", "stage", "error", "created", "started", "finished",
               "commit_sha", "summary", "log_tail", "share_slug", "explain_status", "explain_error", "explain_summary",
-              "workspace")
+              "workspace", "tests")
+JSON_FIELDS = ("summary", "explain_summary", "tests")    # kept as JSON text, handed out as tables
 
 
 class LimitReached(Exception):
@@ -102,7 +105,7 @@ class Store:
         self.db.execute("pragma journal_mode=wal")
         self.db.executescript(SCHEMA)
         cols = {r[1] for r in self.db.execute("pragma table_info(runs)")}
-        for col in ("log_tail", "explain_status", "explain_error", "explain_summary", "workspace"):   # an earlier database
+        for col in ("log_tail", "explain_status", "explain_error", "explain_summary", "workspace", "tests"):   # an earlier database
             if col not in cols:
                 self.db.execute(f"alter table runs add column {col} text")
         if "ai_consent" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
@@ -191,8 +194,9 @@ class Store:
 
     # ---- runs ----
     def create_run(self, account: str, link: str, host: str, privacy: str, *, per_day: int, global_per_day: int,
-                   per_user_active: int) -> str:
-        """Check the limits and create a queued run in one step (so two quick requests cannot both slip under)."""
+                   per_user_active: int, tests: dict | None = None) -> str:
+        """Check the limits and create a queued run in one step (so two quick requests cannot both slip under).
+        `tests`: what the check asks of its tests (`worker.tests_asked`), or None."""
         day = today()
         with self.lock:
             q = self.db.execute
@@ -206,8 +210,9 @@ class Store:
             if act >= per_user_active:
                 raise LimitReached("You already have a run going. Wait for it to finish, then start the next one.")
             rid = secrets.token_urlsafe(12)
-            q("insert into runs (id, account, link, host, privacy, status, stage, created) "
-              "values (?, ?, ?, ?, ?, 'queued', 'waiting for a free worker', ?)", (rid, account, link[:500], host, privacy, now()))
+            q("insert into runs (id, account, link, host, privacy, status, stage, created, tests) "
+              "values (?, ?, ?, ?, ?, 'queued', 'waiting for a free worker', ?, ?)",
+              (rid, account, link[:500], host, privacy, now(), None if tests is None else json.dumps(tests)))
             q("insert into daily (day, account, runs) values (?, ?, 1) "
               "on conflict(day, account) do update set runs = runs + 1", (day, account))
             q("insert into global_daily (day, runs) values (?, 1) "
@@ -219,7 +224,7 @@ class Store:
         bad = set(fields) - set(RUN_FIELDS[4:])
         if bad:
             raise ValueError(f"not a run field: {bad}")
-        for k in ("summary", "explain_summary"):
+        for k in JSON_FIELDS:
             if isinstance(fields.get(k), dict):
                 fields[k] = json.dumps(fields[k])
         with self.lock:
@@ -375,7 +380,7 @@ class Store:
     @staticmethod
     def _run_dict(row) -> dict:
         d = dict(zip(RUN_FIELDS, row))
-        for k in ("summary", "explain_summary"):
+        for k in JSON_FIELDS:
             try:
                 d[k] = json.loads(d[k]) if d[k] else None
             except ValueError:
