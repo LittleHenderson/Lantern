@@ -96,6 +96,10 @@ def main(argv: list[str]) -> None:
         # and network connections, and it is not in this Python: Python leaves a folder it cannot read out of its
         # path without a word. No test runs without it.
         _not_set_up("guard")
+    if os.environ.get("LANTERN_SANDBOX_CONTAINER") and getattr(sys, "lantern_sandbox_wall", None) != "on":
+        # The tests were to run inside a wall of Windows' own made for this run (lantern.wincontainer), and the
+        # guard does not find this Python inside it. No test runs outside the wall it was promised.
+        _not_set_up("container")
     if os.environ.get("LANTERN_SANDBOX_LIBRARIES") == "fetched" and \
             getattr(sys, "lantern_sandbox_libraries", None) != "fetched":
         # The tests were to run on the libraries fetched for them and on no others (lantern.libraries), and the

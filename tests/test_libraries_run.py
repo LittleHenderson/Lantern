@@ -112,12 +112,14 @@ def test_where_no_whole_python_can_be_made_on_windows_the_older_one_stands_and_s
         tmp_path, monkeypatch, pystore):
     """A whole Python of the run's own cannot be made of every Python (an embeddable one, whose path a file of its
     own decides): there the older one stands, and its line says what the bare name `python` then starts. Elsewhere
-    a whole Python is never asked for."""
+    a whole Python is never asked for. Of such a Python no wall of Windows' own is made either (`wall_here`): a
+    run promised that wall starts no test without a whole Python (tests/test_sandbox_container.py)."""
     _online(monkeypatch, python=pystore)
 
     def refuse(home, named, timeout=120):
         raise OSError(22, "this computer's Python is an embeddable one")
     monkeypatch.setattr(sandbox, "_whole_python", refuse)
+    monkeypatch.setattr(sandbox, "_WALL_HERE", [sandbox.NO_WALL_SHAPE])
     lines: list[str] = []
     res = sandbox.run(_starts(tmp_path / "proj", SECOND["handed the tests' environment"]), UNITTEST, log=lines.append,
                       backend="subprocess")
@@ -133,9 +135,11 @@ def test_where_no_whole_python_can_be_made_on_windows_the_older_one_stands_and_s
 def test_where_no_python_of_the_runs_own_can_be_made_the_guard_still_keeps_to_the_fetched_libraries(
         tmp_path, monkeypatch, pystore):
     """The older way stays as the second net: the guard takes this computer's libraries off the path of every
-    Python that is handed the tests' environment, and the log says which way it is."""
+    Python that is handed the tests' environment, and the log says which way it is. (On a Windows that makes a
+    wall of its own for such tests, a run promised it starts no test without a whole Python: here it makes none.)"""
     import venv
     _online(monkeypatch, python=pystore)
+    monkeypatch.setattr(sandbox, "_WALL_HERE", ["this computer makes no wall of Windows' own"])
 
     def refuse(self, folder):
         raise OSError(28, "no room")

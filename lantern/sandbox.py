@@ -549,7 +549,9 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
             det.insert(1, WINDOWS_PYTHON if _windows_rule() else
                        "writing outside the copy and its temp folder and opening network connections are refused")
         at = 2 if language == "python" else 1
-        det[at:at] = _no_network_words(no_own, language)
+        det[at:at] = _no_network_words(no_own, language, _walled(language, bool(fetched)))
+    if _walled(language, bool(fetched)):
+        det.insert(1, WALL_LINE)
     if sys.platform == "win32":
         det.insert(1, "inside a Windows job, which nothing it starts can leave")
     if _LINUX or sys.platform == "win32":
@@ -690,15 +692,16 @@ def _windows_rule() -> bool:
     return sys.platform == "win32" and not _LINUX
 
 
-def _no_network_words(why: str, language: str) -> list[str]:
+def _no_network_words(why: str, language: str, walled: bool = False) -> list[str]:
     """What the sheet and the log say about a run with no network of its own: one sentence, and for Python's
     tests a second where nothing below Python holds the programs they start. On Windows the first says what the
-    guard's own rule there lets through (`WINDOWS_NET`)."""
+    guard's own rule there lets through (`WINDOWS_NET`), and inside a wall of Windows' own (`walled`) the second
+    says what the wall holds instead (`WALL_BESIDE`)."""
     first = (WINDOWS_NET if _windows_rule() else NO_OWN_NETWORK).format(why=why)
     if held_below_python():
         return [first]
     if language == "python":
-        return [first, NOT_HELD_BESIDE.format(how=not_held_how())]
+        return [first, WALL_BESIDE if walled else NOT_HELD_BESIDE.format(how=not_held_how())]
     return [NOT_HELD.format(why=why, how=not_held_how())]
 
 
@@ -712,6 +715,64 @@ def tests_off_the_network(language: str) -> bool:
     """Would the tests of a project in `language` run with the network off in this system's sandbox? For the
     sheet; a run says it of itself (`off_network` in its result)."""
     return _was_off_network(backend_for(language), language, not own_network())
+
+
+# ---------------------------------------------------------------------------- a wall of Windows' own
+# Windows (a firm pass or fail, stage 4, 2026-11-20): a project's own Python tests on the libraries fetched for them
+# run inside an AppContainer made for the run (`lantern.wincontainer`), with which Windows itself keeps every
+# program they start, Python or not, from the person's files, from the internet and from connections to the other
+# programs of this computer. They run on a whole Python of the run's own (`_whole_python`), which lies in the run's
+# folder, where the wall may read it; a Python without the fetch is this computer's own, which it may not. Tests
+# that are not Python stay outside it: the programs most of their runners start hang there (Node waits for each
+# through a pipe of a kind Windows lets no program inside make), so their words stay as they were.
+WALL_LINE = ("inside a wall of Windows' own made for this run (an AppContainer, deleted after the run): every "
+             "program the tests start, Python or not, is kept from your files, from the internet and from "
+             "connections to your other programs")
+WALL_BESIDE = ("a program the tests start that is not Python is held there by that wall and not by Lantern's guard, "
+               "and not every way it could send something out is closed")
+WALL_ASK = ("On this system a program the tests start that is not Python is kept by a wall of Windows' own made "
+            "for this run from your files, from the internet and from connections to your other programs, but not "
+            "every way it could send something out is closed: this run does not keep it from that.")
+NO_WALL_PYTHON = ("the tests were to run inside a wall of Windows' own made for this run, which can hold them only "
+                  "on a whole Python of the run's own, and none could be made")
+NO_WALL = "the tests were to run inside a wall of Windows' own made for this run, and Windows did not make it"
+NO_WALL_SHAPE = ("this computer's Python is not of the shape a whole Python of the run's own is copied from, and the "
+                 "wall can hold the tests only on such a Python")
+_WALL_HERE: list[str] = []            # the answer of `wall_here`, asked once
+
+
+def wall_here() -> str:
+    """Can a project's Python tests be put inside a wall of Windows' own here? "" when they can, else why not, in
+    words for a person. Asked once: Windows is asked to make one and delete it again, and this Python must be of the
+    shape a whole Python of the run's own is copied from (`_whole_python`)."""
+    if _WALL_HERE:
+        return _WALL_HERE[0]
+    if sys.platform != "win32":
+        why = "a wall of Windows' own is made on Windows only"
+    else:
+        base = Path(sys.base_prefix)
+        try:
+            embeddable = any(n.lower().endswith("._pth") for n in os.listdir(base))
+        except OSError:
+            embeddable = True
+        if not (base / "python.exe").is_file() or not (base / "Lib" / "os.py").is_file() or embeddable:
+            why = NO_WALL_SHAPE
+        else:
+            from . import wincontainer
+            try:
+                wincontainer.Container().close()
+                why = ""
+            except (wincontainer.ContainerError, OSError) as e:
+                why = f"Windows does not make one for Lantern here (error {getattr(e, 'code', 0) or 0:#x})"
+    _WALL_HERE.append(why)
+    return why
+
+
+def _walled(language: str, fetched: bool) -> bool:
+    """Would a run of a project's tests in `language` be put inside a wall of Windows' own: Python's tests on the
+    libraries fetched for them (`fetched`), in the restricted process, where this system makes one (`wall_here`).
+    `reach` asks it and the run asks it, so the sentence a person agrees to is the one the run keeps."""
+    return language == "python" and fetched and backend_for(language) == "subprocess" and not wall_here()
 
 
 # ---------------------------------------------------------------------------- what a run is kept from, in one line
@@ -732,16 +793,20 @@ def reach(language: str, fetched: bool = False) -> dict:
     "python" (Python code only, by Lantern's guard: a program the tests start that is not Python is not held)
     or "none". `words` is the line. `ask` is the sentence the person has to agree to before such tests are
     started (`server.reach_asked`), "" where every program is held. It reads the answers `describe` reads
-    (`backend_for`, `held_below_python`, `landlock_abi`), so the line cannot promise what the list does not.
-    `fetched`: the project's libraries would be fetched first, so their names do leave this computer."""
+    (`backend_for`, `held_below_python`, `landlock_abi`, `_walled`), so the line cannot promise what the list does
+    not. `fetched`: the project's libraries would be fetched first, so their names do leave this computer, and on
+    Windows its Python tests would run inside a wall of Windows' own (`WALL_ASK`)."""
     python = language == "python"
+    walled = _walled(language, fetched)
     if backend_for(language) == "docker":
         network = files = "all"
     else:
         network = "all" if held_below_python() else "python" if python else "none"
-        files = "all" if _LINUX and landlock_abi() >= 1 else "python" if python else "none"
+        files = "all" if (_LINUX and landlock_abi() >= 1) or walled else "python" if python else "none"
     if network == files == "all":
         return {"network": network, "files": files, "words": NAMES_LEAVE if fetched else NOTHING_LEAVES, "ask": ""}
+    if walled:          # a whole Python of the run's own: the bare name `python` is that one too
+        return {"network": network, "files": files, "words": NO_WAY_OUT[network] + WALL_ASK, "ask": WALL_ASK}
     # as root the tests run as the user nobody: what they can read and change is what every user can
     whose = "every user of this computer" if _LINUX and hasattr(os, "geteuid") and os.geteuid() == 0 else "you"
     can = " and ".join(x for x in (REACH_NETWORK if network != "all" else "",
@@ -1065,6 +1130,16 @@ _NET = {getattr(_socket, "AF_INET", 2), getattr(_socket, "AF_INET6", 10)}
 _UNIX = getattr(_socket, "AF_UNIX", None)
 _WIN = _sys.platform == "win32"
 _STREAM, _DGRAM = getattr(_socket, "SOCK_STREAM", 1), getattr(_socket, "SOCK_DGRAM", 2)
+# Windows, inside a wall of Windows' own around the run (lantern.wincontainer, a firm pass or fail, stage 4,
+# 2026-11-20): the wall's name (its SID), which this program's token must carry (`_in_wall`, below), and the pipe
+# through which the launcher, outside the wall, says whose a port of this computer is (`_asked`), made by the
+# program LANTERN_SANDBOX_BROKER_PID.
+_WALL = _os.environ.get("LANTERN_SANDBOX_CONTAINER", "") if _WIN else ""
+_IN_WALL = False
+_BROKER = _os.environ.get("LANTERN_SANDBOX_BROKER", "") if _WALL else ""
+_BROKER_PIPE = _BROKER[9:].lower() if _BROKER[:9] == "\\\\.\\pipe\\" else ""
+_BROKER_PID = _os.environ.get("LANTERN_SANDBOX_BROKER_PID", "")
+_BROKER_PID = int(_BROKER_PID) if _BROKER_PID.isascii() and _BROKER_PID.isdigit() and len(_BROKER_PID) < 11 else None
 try:
     _SELF = (_socket.gethostname(),)
 except OSError:
@@ -1427,8 +1502,11 @@ def _winplace(name):
     return "local", None
 def _pipe_pid(name):
     # The program that made a pipe, by the name Python gives the pipes it makes (multiprocessing: pyc-<pid>-...,
-    # asyncio: python-pipe-<pid>-...); None for any other name.
+    # asyncio: python-pipe-<pid>-...); None for any other name. Inside the wall such a pipe is among the wall's own
+    # names (`_local`), so there that name has `LOCAL\` in front.
     low = name.lower()
+    if _IN_WALL and low.startswith("local\\"):
+        name, low = name[6:], low[6:]
     for head in ("pyc-", "python-pipe-"):
         if low.startswith(head) and "\\" not in name:
             digits, dash, _ = name[len(head):].partition("-")
@@ -1446,6 +1524,8 @@ def _windows_place(name, made=False):
     if kind == "quiet":
         return None, True
     if kind == "pipe":
+        if _BROKER_PIPE and not made and pipe.lower() == _BROKER_PIPE:
+            return None, True
         pid = _pipe_pid(pipe)
         if pid is not None and (pid == _os.getpid() if made else pid in _run_pids()):
             return None, True
@@ -1475,6 +1555,92 @@ if _WIN:
                 _drives)
     except Exception:
         _LIB = None
+def _in_wall(sid):
+    # Is this program inside the wall named `sid`: does Windows say that its token is an AppContainer's, and that
+    # container's? Every program the tests start is in it, as every program a job's member starts is in the job.
+    if _LIB is None or not sid:
+        return False
+    ct = _LIB[0]
+    try:
+        a, k = ct.WinDLL("advapi32", use_last_error=True), ct.WinDLL("kernel32", use_last_error=True)
+        k.GetCurrentProcess.restype = ct.c_void_p
+        k.CloseHandle.argtypes = k.LocalFree.argtypes = (ct.c_void_p,)
+        a.OpenProcessToken.argtypes = (ct.c_void_p, ct.c_uint32, ct.POINTER(ct.c_void_p))
+        a.GetTokenInformation.argtypes = (ct.c_void_p, ct.c_int, ct.c_void_p, ct.c_uint32, ct.POINTER(ct.c_uint32))
+        a.ConvertSidToStringSidW.argtypes = (ct.c_void_p, ct.POINTER(ct.c_void_p))
+        h = ct.c_void_p()
+        if not a.OpenProcessToken(k.GetCurrentProcess(), 0x0008, ct.byref(h)):       # TOKEN_QUERY
+            return False
+        try:
+            flag, got = ct.c_uint32(), ct.c_uint32()
+            if not a.GetTokenInformation(h, 29, ct.byref(flag), 4, ct.byref(got)) or not flag.value:
+                return False                                                        # TokenIsAppContainer
+            room = ct.create_string_buffer(256)
+            if not a.GetTokenInformation(h, 31, room, 256, ct.byref(got)):          # TokenAppContainerSid
+                return False
+            text = ct.c_void_p()
+            if not a.ConvertSidToStringSidW(ct.cast(room, ct.POINTER(ct.c_void_p))[0], ct.byref(text)):
+                return False
+            try:
+                return ct.wstring_at(text.value) == sid
+            finally:
+                k.LocalFree(text)
+        finally:
+            k.CloseHandle(h)
+    except Exception:
+        return False
+_server_pid = None
+if _WALL:
+    import time as _time
+    _IN_WALL = _in_wall(_WALL)
+    if _IN_WALL:
+        try:
+            _server_pid = _LIB[0].WinDLL("kernel32", use_last_error=True).GetNamedPipeServerProcessId
+            _server_pid.argtypes = (_LIB[0].c_void_p, _LIB[0].POINTER(_LIB[0].c_ulong))
+        except Exception:
+            _server_pid = None
+if not _IN_WALL:
+    _BROKER = _BROKER_PIPE = ""
+def _asked(dgram, port):
+    # Inside the wall Windows does not show a program its tables of this computer's sockets, so the launcher,
+    # outside it and in the run's job, is asked whether every socket at this port is one of the run's own programs.
+    # Its answer is taken only from an end of its own pipe, made by its own program, and only a yes counts.
+    import _winapi as w
+    h = None
+    for _ in range(40):
+        try:
+            h = w.CreateFile(_BROKER, 0x00100083, 0, 0, 3, 0, 0)        # to read and write; OPEN_EXISTING
+            break
+        except OSError as e:
+            if getattr(e, "winerror", None) != 231:     # ERROR_PIPE_BUSY: every end is answering another question
+                return False
+            try:
+                w.WaitNamedPipe(_BROKER, 250)
+            except OSError:
+                _time.sleep(0.02)
+    if h is None:
+        return False
+    try:
+        pid = _LIB[0].c_ulong(0)
+        if _server_pid is None or _BROKER_PID is None or not _server_pid(h, _LIB[0].byref(pid)) \
+                or pid.value != _BROKER_PID:
+            return False
+        w.WriteFile(h, (b"u" if dgram else b"t") + port.to_bytes(2, "big"))
+        got, _ = w.ReadFile(h, 1)
+        return got == b"1"
+    except (OSError, ValueError, OverflowError):
+        return False
+    finally:
+        w.CloseHandle(h)
+_PIPES = ("\\\\.\\pipe\\", "\\\\?\\pipe\\")
+def _local(name):
+    # Inside the wall Windows lets a program make a pipe only among the wall's own names (`\\.\pipe\LOCAL\...`), and
+    # finds it there for the wall's programs alone: a pipe a program of the run names, in either way of writing a
+    # pipe's name, is put there, where the program that made it is found too. The launcher's pipe stays as it is.
+    if type(name) is str and name[:9].lower() in _PIPES and name[9:15].lower() != "local\\" \
+            and name[9:].lower() != _BROKER_PIPE:
+        return "\\\\.\\pipe\\LOCAL\\" + name[9:]
+    return name
 # (datagram, family) -> (a row's size, where its port is, where its program is): MIB_TCPROW_OWNER_PID,
 # MIB_TCP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID, MIB_UDP6ROW_OWNER_PID
 _ROWS = {(False, 2): (24, 8, 20), (False, 23): (56, 20, 52), (True, 2): (12, 4, 8), (True, 23): (28, 20, 24)}
@@ -1534,6 +1700,8 @@ def _run_pids():
             pids |= more
     return pids
 def _runs_port(dgram, port):
+    if _BROKER:
+        return _asked(dgram, port)
     owners = _owners(port, dgram)
     return bool(owners) and owners <= _run_pids()
 def _loopback(host):
@@ -2116,6 +2284,16 @@ if _WIN:
                     return down(existing_file_name, new_file_name, flags, progress_routine)
                 return _same(CopyFile2, down, "CopyFile2")
             _wa.CopyFile2 = _copies(_wa.CopyFile2)
+    if _IN_WALL:
+        def _locally(down, name):
+            def call(first, /, *rest):
+                return down(_local(first), *rest)
+            return _same(call, down, name)
+        if _wa is not None:
+            for _n in ("CreateNamedPipe", "CreateFile", "WaitNamedPipe"):
+                setattr(_wa, _n, _locally(getattr(_wa, _n), _n))
+        if _ovl is not None:
+            _ovl.ConnectPipe = _locally(_ovl.ConnectPipe, "ConnectPipe")
     def _placed(down, quiet):
         # A call that looks at a name. Another computer's, a device or another program's pipe is refused and named
         # before the system is asked; a call that only answers yes or no answers no, and the name is said once.
@@ -2153,6 +2331,8 @@ if _WIN:
 _sys.addaudithook(_hook)
 _sys.addaudithook = _add
 _sys.lantern_sandbox_guard = "on"   # lantern.tracehook looks for this before it runs a test (LANTERN_SANDBOX_GUARD)
+if _IN_WALL:
+    _sys.lantern_sandbox_wall = "on"   # ... and for this where the run promised the wall (LANTERN_SANDBOX_CONTAINER)
 '''
 
 
@@ -3212,7 +3392,8 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
     socket file outside their own folders was out of reach for programs that are not Python too; `own_sockets()`
     says why not), `off_network` (this run's own walls kept the tests from the network: Docker, a network of the
     run's own, Python's tests through the guard, or any other program where `held_below_python()`; False for tests
-    that are not Python where nothing of Lantern's holds them, and the log then says why), `output_tail`,
+    that are not Python where nothing of Lantern's holds them, and the log then says why), `windows_wall` (every
+    program of the tests was inside a wall of Windows' own made for this run: `WALL_LINE`), `output_tail`,
     `stderr_tail`. `memory`: the megabytes for this run (`memory_limit`; ValueError for
     anything that is no such number). `cancel`: a threading.Event; once set, the tests and everything they
     started are ended. Raises `Unavailable` when the sandbox cannot be set up: the tests were then not run.
@@ -3252,6 +3433,7 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
                libraries=found.record)
     res.setdefault("own_network", False)
     res.setdefault("own_sockets", False)
+    res.setdefault("windows_wall", False)
     res["off_network"] = _was_off_network(backend, language, bool(res["own_network"]))
     res.setdefault("over_memory", False)
     res["cancelled"] = res.get("returncode") is None and not res.get("timed_out") and not res.get("over_memory")
@@ -3489,12 +3671,14 @@ def _whole_python(home: Path, named: list[str], timeout: float = 120) -> str:
     return str(exe)
 
 
-def _runs_own_python(root: Path, libs: Path, app: Path, log) -> tuple[str, list[str], str | None] | None:
+def _runs_own_python(root: Path, libs: Path, app: Path, log,
+                     whole: bool = False) -> tuple[str, list[str], str | None] | None:
     """The Python of the run's own for tests on fetched libraries: (its program, the files it is made of that say
     where its libraries are, the folder of the environment it is or None for a whole Python), or None where none
     could be made (the guard then keeps to the fetched libraries for every Python handed the tests' environment).
     On Windows a whole Python (`_whole_python`), and where that cannot be made the older one (`_own_python`), whose
-    line says what the bare name `python` then starts (`_own_python_words`)."""
+    line says what the bare name `python` then starts (`_own_python_words`). `whole`: a whole Python or none (the
+    tests are to run inside a wall of Windows' own, which can read no other)."""
     if sys.platform == "win32":
         home = root / OWN_PYTHON
         src = app / "src"
@@ -3506,6 +3690,8 @@ def _runs_own_python(root: Path, libs: Path, app: Path, log) -> tuple[str, list[
             _rm(home)
         else:
             return exe, [exe, str(home / "Lib" / "site-packages" / "lantern.pth")], None
+    if whole:
+        return None
     own = _own_python(root, libs, app, log)
     if own is None:
         return None
@@ -3609,6 +3795,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
     out_json = tmp / ("behave.observed.json" if inside is not None else "trace.json")
     pkg_root = str(Path(__file__).resolve().parent.parent)
     made_of: list[str] = []         # what the tests' user must be able to read, or the launcher starts nothing
+    walled = False
     if language == "python" and libs is not None:
         # On the fetched libraries and no others: the guard takes the libraries installed beside this Python off
         # the path (`_only_fetched`), and the recorder runs from its own file, not from Lantern's folder.
@@ -3622,7 +3809,12 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         env["LANTERN_SANDBOX_SITE"] = os.pathsep.join([str(libs), *([str(src)] if src.is_dir() else [])])
         env["LANTERN_SANDBOX_GUARD"] = "required"
         env["LANTERN_SANDBOX_LIBRARIES"] = "fetched"
-        python, own = sys.executable, _runs_own_python(root, libs, app, log)
+        # Windows: every program of these tests inside a wall of Windows' own made for this run (`_walled`), on a
+        # whole Python of the run's own, which the wall can read
+        walled = theirs and _walled(language, True)
+        python, own = sys.executable, _runs_own_python(root, libs, app, log, whole=walled)
+        if walled and (own is None or own[2] is not None):
+            raise Unavailable(NO_WALL_PYTHON)
         if own is not None:     # a Python of the run's own, where the only libraries are the fetched
             python = own[0]
             made_of += own[1]
@@ -3697,7 +3889,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         cmd[2:4] = ["-c", f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])"]
     log(f"sandbox: restricted process, running {' '.join(words)}")
     if no_own and inside is None:
-        first, *more = _no_network_words(no_own, language)
+        first, *more = _no_network_words(no_own, language, walled)
         log("sandbox: the tests have no network of their own (" + first + ")")
         for line in more:
             log("sandbox: " + line)
@@ -3722,8 +3914,22 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
     def job():
         jobs.append(_windows_job(memory))
         return jobs[-1]
-    rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=job, cancel=cancel,
-                                    ask=_jail.ASK if _LINUX else 0.0, left=left)
+    box = _wall_for(root, tmp, app) if walled else None     # `Unavailable` where Windows does not make it
+    try:
+        if box is not None:
+            from . import wincontainer
+            # The command is started inside the wall by Lantern's launcher (in the run's job, outside the wall),
+            # which answers the guard there whose a port is, through a pipe of a name chosen here.
+            env["LANTERN_SANDBOX_CONTAINER"] = box.text
+            env[wincontainer.BROKER_VARIABLE] = wincontainer.BROKER_PREFIX + os.urandom(16).hex()
+            cmd = [sys.executable, "-I", "-c", f"import sys; sys.path.insert(0, {pkg_root!r}); "
+                   "from lantern.wincontainer import main; main(sys.argv[1:])", box.text, "--", *cmd]
+            log("sandbox: the tests run " + WALL_LINE)
+        rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=job, cancel=cancel,
+                                        ask=_jail.ASK if _LINUX else 0.0, left=left)
+    finally:
+        if box is not None:
+            _wall_down(box, log)
     why = _unavailable(rc, output)
     if why:
         raise Unavailable(why)
@@ -3746,10 +3952,40 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
     data = _recorded(out_json)
     _map_pairs(data, str(app), repo)
     # `own_network` and `own_sockets` are what the launcher was told to make: a launcher that could not make
-    # them starts nothing
+    # them starts nothing; and a wall the tests' Python is not inside runs no test (`lantern.tracehook`)
     return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, over_memory=over,
                   output_tail=output[-6000:], _full=output, not_ended=left, own_network=not no_own,
-                  own_sockets=_LINUX and not no_doorman)
+                  own_sockets=_LINUX and not no_doorman, windows_wall=box is not None)
+
+
+def _wall_for(root: Path, tmp: Path, app: Path):
+    """A wall of Windows' own for one run (`lantern.wincontainer.Container`): the run's folder given to it to read
+    and run what is there (the whole Python of the run's own, the guard, the fetched libraries), and the copy and
+    the temp folder to change too; those rights go with the run's folder. Raises `Unavailable` where Windows does
+    not make it or will not give it the folders: the tests were promised the wall, and are not run without it."""
+    from . import wincontainer
+    box = None
+    try:
+        box = wincontainer.Container()
+        box.grant(root)
+        box.grant(tmp, change=True)
+        box.grant(app, change=True)
+        return box
+    except Exception as e:  # noqa: BLE001 - ContainerError, OSError, and a system that makes no such wall at all
+        if box is not None:
+            _wall_down(box, lambda line: None)
+        code = getattr(e, "code", 0)
+        raise Unavailable(NO_WALL + (f" (error {code:#x})" if isinstance(code, int) and code else "")) from e
+
+
+def _wall_down(box, log) -> None:
+    """The wall's profile deleted after the run (`Container.close`); where Windows keeps it, the log says so."""
+    try:
+        box.close()
+    except Exception as e:  # noqa: BLE001 - ContainerError, and anything else: the run's own result stands
+        code = getattr(e, "code", 0)
+        log(f"sandbox: Windows did not delete the record of the wall it made for this run ({box.name}"
+            + (f", error {code:#x}" if isinstance(code, int) and code else "") + ")")
 
 
 def _site_dirs() -> list[str]:

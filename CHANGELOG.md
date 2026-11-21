@@ -9,6 +9,22 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
+  inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
+  the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own
+  files and not the person's, reaches the tests' own servers and not another program's, and gets no connection to
+  another computer; the wall is granted the run's folders only and is deleted with the run. The guard inside it asks
+  the run's launcher, outside it, whose a port is, through a pipe that only programs of that wall may ask, because
+  Windows shows a program inside such a wall no table of this computer's ports. Where the wall cannot be made for such
+  tests, or no whole Python of the run's own can be, the tests are not started and the run says why. The sheet, the
+  log and the app say before the run what the wall holds and what it does not (not every way such a program could
+  send something out is closed), and such tests start only after the person's word on that; `run.json` says whether
+  the tests were inside it (`windows_wall`). Tests that are not Python, Python tests with no libraries fetched for
+  them, and apps started for the behaviour checks run as before (JavaScript test runners wait for ever inside such a
+  wall: Node makes the pipes through which it reads a program's output under names the wall refuses), and the sheet
+  goes on saying that their network and the person's files are not held there. Tests: `tests/test_sandbox_container.py`
+  (on Windows, each beside a twin it must not stop), `tests/test_wincontainer.py` (the wall, and the launcher's pipe
+  with stand-ins on every system), `tests/test_sheet_promise.py` (a pretend Windows that makes the wall).
 - Completing the guard's coverage on Windows: a Python that a project's tests start by the bare name `python` is the
   run's own there, as on every other system. The Python of the run's own on Windows is now a whole Python
   (`sandbox._whole_python`: a copy of this computer's Python without the libraries installed on it, 1,097 files,

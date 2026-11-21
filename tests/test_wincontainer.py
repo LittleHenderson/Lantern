@@ -338,6 +338,319 @@ def test_the_whole_python_is_a_python_of_its_own_with_the_runs_libraries_only(tm
     assert said.stdout.splitlines() == [os.path.realpath(tmp_path / "py"), "fetched", "True"], said.stdout
 
 
+# ---------------------------------------------------------------------------- the launcher's pipe, with stand-ins
+class Tables:
+    """Windows' tables of this computer's sockets and the list of the job's programs, as `wincontainer.owners` and
+    `job_pids` ask for them. `rows`: (datagram, family) -> [(port, program)]; a table grows by one row between the
+    first answer of its size and the next (`grows`), as a busy computer's do; `no_six`: this computer has no IPv6;
+    `refuse`: every table is refused with that number; `short`: a table says it has a row more than it holds."""
+
+    def __init__(self, rows=None, grows=True, no_six=False, refuse=0, short=False, pids=(), job_refuse=0,
+                 job_short=False):
+        self.rows = {k: list(v) for k, v in (rows or {}).items()}
+        self.grows, self.no_six, self.refuse, self.short = grows, no_six, refuse, short
+        self.pids, self.job_refuse, self.job_short = list(pids), job_refuse, job_short
+        self.asked: dict = {}
+        self.local = threading.local()
+
+    def last_error(self) -> int:
+        return getattr(self.local, "error", 0)
+
+    def _table(self, dgram, room, size, family):
+        if self.refuse:
+            return self.refuse
+        if family == 23 and self.no_six:
+            return wincontainer.NOT_SUPPORTED
+        row, at, who = wincontainer.ROWS[(dgram, family)]
+        rows = self.rows.get((dgram, family), [])
+        n = self.asked[(dgram, family)] = self.asked.get((dgram, family), 0) + 1
+        if self.grows and n > 1:
+            rows = rows + [(1, 1)]           # a socket of somebody else's at port 1, made in between
+        raw = bytearray(4 + row * len(rows))
+        raw[:4] = (len(rows) + (1 if self.short else 0)).to_bytes(4, "little")
+        for i, (port, pid) in enumerate(rows):
+            o = 4 + i * row
+            raw[o + at:o + at + 2] = port.to_bytes(2, "big")
+            raw[o + who:o + who + 4] = pid.to_bytes(4, "little")
+        if len(room) < len(raw):
+            size._obj.value = len(raw)
+            return wincontainer.INSUFFICIENT_BUFFER
+        ctypes.memmove(room, bytes(raw), len(raw))
+        return 0
+
+    def GetExtendedTcpTable(self, room, size, order, family, kind, reserved):
+        assert (order, kind, reserved) == (False, wincontainer.TCP_LISTENERS, 0)
+        return self._table(False, room, size, family)
+
+    def GetExtendedUdpTable(self, room, size, order, family, kind, reserved):
+        assert (order, kind, reserved) == (False, wincontainer.UDP_OWNERS, 0)
+        return self._table(True, room, size, family)
+
+    def QueryInformationJobObject(self, job, kind, room, size, returned):
+        assert (job, kind, returned) == (None, wincontainer.JOB_PROCESS_IDS, None) and size == len(room)
+        if self.job_refuse:
+            self.local.error = self.job_refuse
+            return 0
+        ptr = ctypes.sizeof(ctypes.c_void_p)
+        if (size - 8) // ptr < len(self.pids):
+            self.local.error = wincontainer.MORE_DATA
+            return 0
+        listed = len(self.pids) + (1 if self.job_short else 0)
+        raw = len(self.pids).to_bytes(4, "little") + listed.to_bytes(4, "little")
+        raw += b"".join(pid.to_bytes(ptr, "little") for pid in self.pids)
+        ctypes.memmove(room, raw, len(raw))
+        if self.job_short:
+            listed = (size - 8) // ptr + 1
+            ctypes.memmove(ctypes.addressof(room) + 4, listed.to_bytes(4, "little"), 4)
+        return 1
+
+
+TCP4, TCP6, UDP4 = (False, 2), (False, 23), (True, 2)
+
+
+def test_whose_a_port_is_is_read_from_both_families_of_windows_tables():
+    api = Tables({TCP4: [(5000, 10), (80, 4), (5001, 99)], TCP6: [(5000, 11)], UDP4: [(5000, 20)]})
+    assert wincontainer.owners(api, 5000, False) == {10, 11}
+    assert wincontainer.owners(api, 5000, True) == {20}
+    assert wincontainer.owners(api, 6000, False) == set()           # nobody's: no program to name
+    assert api.asked[TCP4] >= 3                                     # asked again while the table grew
+    # a computer with no IPv6: its table is not there, and the other family still decides
+    assert wincontainer.owners(Tables({TCP4: [(5000, 10)]}, no_six=True), 5000, False) == {10}
+
+
+@pytest.mark.parametrize("how", [{"refuse": 5}, {"short": True}])
+def test_where_windows_does_not_say_whose_a_port_is_nobody_is_named(how):
+    assert wincontainer.owners(Tables({TCP4: [(5000, 10)]}, **how), 5000, False) is None
+
+
+def test_a_rows_port_and_program_are_read_where_windows_puts_them():
+    row, at, who = wincontainer.ROWS[TCP4]
+    raw = (2).to_bytes(4, "little") + b"".join(
+        bytes(at) + port.to_bytes(2, "big") + bytes(who - at - 2) + pid.to_bytes(4, "little") + bytes(row - who - 4)
+        for port, pid in ((443, 7), (8080, 9)))
+    assert wincontainer.rows_at(raw, row, at, who, 8080) == {9}
+    assert wincontainer.rows_at(raw[:-1], row, at, who, 8080) is None    # cut short
+
+
+def test_the_programs_of_the_launchers_job_are_read_from_windows_list_however_many():
+    many = list(range(4, 4 + 4 * 100, 4))
+    assert wincontainer.job_pids(Tables(pids=many)) == set(many)     # more than the first list holds
+    assert wincontainer.job_pids(Tables(pids=[8])) == {8}
+    assert wincontainer.job_pids(Tables(pids=[8], job_refuse=5)) is None
+    assert wincontainer.job_pids(Tables(pids=[8], job_short=True)) is None
+
+
+@pytest.mark.parametrize("question, owners, pids, said", [
+    (b"t\x13\x88", {10, 11}, {10, 11, 12}, wincontainer.YES),
+    (b"u\x13\x88", {10}, {10}, wincontainer.YES),
+    (b"t\x13\x88", {10, 99}, {10, 11}, wincontainer.NO),         # one of them is somebody else's
+    (b"t\x13\x88", set(), {10}, wincontainer.NO),                # nobody's: nothing of the run's to reach
+    (b"t\x13\x88", None, {10}, wincontainer.NO),                 # Windows did not say
+    (b"t\x13\x88", {10}, None, wincontainer.NO),
+    (b"t\x13\x88", {10}, set(), wincontainer.NO),
+    (b"t\x00\x00", {10}, {10}, wincontainer.NO),                 # port 0
+    (b"x\x13\x88", {10}, {10}, wincontainer.NO),                 # no such kind
+    (b"t\x13", {10}, {10}, wincontainer.NO),                     # too short
+    (b"t\x13\x88\x00", {10}, {10}, wincontainer.NO),             # too long
+    (b"", {10}, {10}, wincontainer.NO),
+])
+def test_the_broker_says_yes_only_where_every_socket_at_the_port_is_one_of_the_runs(question, owners, pids, said):
+    asked = []
+
+    def owners_of(port, dgram):
+        asked.append((port, dgram))
+        return owners
+    assert wincontainer.answer(question, owners_of, lambda: pids) == said
+    if said == wincontainer.YES:
+        assert asked == [(5000, question[:1] == b"u")]
+
+
+@pytest.mark.parametrize("name, ok", [
+    (wincontainer.BROKER_PREFIX + "0123456789abcdef" * 2, True),
+    (wincontainer.BROKER_PREFIX + "0123456789ABCDEF" * 2, False),
+    (wincontainer.BROKER_PREFIX + "0123456789abcdef", False),
+    (wincontainer.BROKER_PREFIX + "0123456789abcdef" * 2 + "0", False),
+    (wincontainer.BROKER_PREFIX + "0123456789abcdef" * 2 + "\\x", False),
+    ("\\\\.\\pipe\\LOCAL\\lantern-broker-" + "0123456789abcdef" * 2, False),
+    ("\\\\?\\pipe\\lantern-broker-" + "0123456789abcdef" * 2, False),
+    ("", False),
+])
+def test_only_a_name_the_sandbox_chose_is_a_brokers_name(name, ok):
+    assert wincontainer.broker_name(name) is ok
+
+
+def test_the_brokers_rights_let_the_wall_ask_and_do_nothing_more():
+    """The container may read and write an end that is there, and wait on it: not make an end of its own (for a
+    pipe FILE_APPEND_DATA is FILE_CREATE_PIPE_INSTANCE), not change the pipe's rights or owner. The guard opens an
+    end with exactly those rights, and the question's shape is the broker's."""
+    assert f"(A;;{wincontainer.BROKER_OPEN:#x};;;{{sid}})" in wincontainer.BROKER_RIGHTS
+    assert wincontainer.BROKER_RIGHTS.startswith("D:P(") and "S:(ML;;NW;;;LW)" in wincontainer.BROKER_RIGHTS
+    assert wincontainer.BROKER_OPEN == 0x00100000 | 0x80 | 0x2 | 0x1   # SYNCHRONIZE, read attributes, write, read
+    for right in (0x4, 0x10, 0x100, 0x10000, 0x40000, 0x80000, 0x10000000, 0x40000000):
+        assert not wincontainer.BROKER_OPEN & right
+    assert f"CreateFile(_BROKER, {wincontainer.BROKER_OPEN:#010x}, 0, 0, 3, 0, 0)" in sandbox.SITECUSTOMIZE
+    assert '(b"u" if dgram else b"t") + port.to_bytes(2, "big")' in sandbox.SITECUSTOMIZE
+    assert wincontainer.QUESTION == 3 and wincontainer.BROKER_PREFIX.startswith("\\\\.\\pipe\\")
+    assert 'got == b"1"' in sandbox.SITECUSTOMIZE and wincontainer.YES == b"1" and wincontainer.NO != wincontainer.YES
+
+
+class PipeCalls(Tables):
+    """kernel32 and advapi32 as the broker calls them. The first end is asked the questions of `script`, one after
+    the other (each written in the pieces given; "gone": a caller that left before the broker waited for it;
+    "early": one that came before); every other end, and the first once its questions are done, is refused at
+    once, which stops it after `Broker.GIVE_UP` refusals. `fail_at`: that end is not made (error 231)."""
+
+    def __init__(self, script=(), fail_at=0, **tables):
+        super().__init__(**tables)
+        self.script, self.fail_at, self.lock = list(script), fail_at, threading.Lock()
+        self.made: list = []
+        self.freed: list = []
+        self.closed: list = []
+        self.said: list = []
+        self.flushed = 0
+        self.ended = 0
+        self.pending: list = []
+        self.rights = None
+
+    def ConvertStringSecurityDescriptorToSecurityDescriptorW(self, text, revision, out, size):
+        self.rights = (text, revision, size)
+        out._obj.value = 0x8100
+        return 1
+
+    def LocalFree(self, what):
+        self.freed.append(what.value if isinstance(what, ctypes.c_void_p) else what)
+
+    def CreateNamedPipeW(self, name, mode, pipe_mode, most, out, into, wait, attributes):
+        a = attributes._obj
+        with self.lock:
+            self.made.append((name, mode, pipe_mode, most, out, into, wait, a.nLength, a.lpSecurityDescriptor,
+                              a.bInheritHandle))
+            n = len(self.made)
+        if n == self.fail_at:
+            self.local.error = 231
+            return wincontainer.INVALID_HANDLE
+        return 0x9000 + n
+
+    def ConnectNamedPipe(self, h, overlapped):
+        assert overlapped is None
+        with self.lock:
+            step = self.script.pop(0) if h == 0x9001 and self.script else None
+        if step is None:
+            self.local.error = 6                # ERROR_INVALID_HANDLE
+            return 0
+        if step[0] == "gone":
+            self.local.error = wincontainer.NO_DATA
+            return 0
+        self.pending = list(step[1])
+        if step[0] == "early":
+            self.local.error = wincontainer.PIPE_CONNECTED
+            return 0
+        return 1
+
+    def ReadFile(self, h, room, n, got, overlapped):
+        if not self.pending:
+            self.local.error = 109              # ERROR_BROKEN_PIPE: the caller wrote no more
+            return 0
+        piece = self.pending.pop(0)
+        assert len(piece) <= n
+        ctypes.memmove(room, piece, len(piece))
+        got._obj.value = len(piece)
+        return 1
+
+    def WriteFile(self, h, out, n, wrote, overlapped):
+        self.said.append(out.raw[:n])
+        wrote._obj.value = n
+        return 1
+
+    def FlushFileBuffers(self, h):
+        self.flushed += 1
+        return 1
+
+    def DisconnectNamedPipe(self, h):
+        if h == 0x9001:
+            self.ended += 1
+        return 1
+
+    def CloseHandle(self, h):
+        self.closed.append(h)
+        return 1
+
+
+def _broker(monkeypatch, api) -> wincontainer.Broker:
+    monkeypatch.setattr(wincontainer.Broker, "PAUSE", 0.0)
+    broker = wincontainer.Broker(wincontainer.BROKER_PREFIX + "ab" * 16, SID_TEXT, api=api)
+    for t in broker.threads:
+        t.join(30)
+        assert not t.is_alive()
+    return broker
+
+
+def test_the_broker_answers_each_question_on_an_end_of_its_own_pipe_and_makes_it_ready_for_the_next(monkeypatch):
+    api = PipeCalls(script=[("ask", [b"t", b"\x13\x88"]), ("gone",), ("early", [b"u\x13\x88"]),
+                            ("ask", [b"x\x13\x88"]), ("ask", [b"t"])],
+                    rows={TCP4: [(5000, 10)], TCP6: [(5000, 11)], UDP4: [(5000, 20)]}, pids=[10, 11, 12])
+    broker = _broker(monkeypatch, api)
+    name = wincontainer.BROKER_PREFIX + "ab" * 16
+    assert api.rights == (wincontainer.BROKER_RIGHTS.format(sid=SID_TEXT), wincontainer.SDDL_REVISION_1, None)
+    assert len(api.made) == len(broker.ends) == len(broker.threads) == wincontainer.BROKER_ENDS
+    for i, (made_name, mode, pipe_mode, most, out, into, wait, length, described, inherit) in enumerate(api.made):
+        assert made_name == name and pipe_mode == wincontainer.REJECT_REMOTE_CLIENTS and most == wincontainer.BROKER_ENDS
+        assert mode == wincontainer.PIPE_ACCESS_DUPLEX | (wincontainer.FIRST_PIPE_INSTANCE if i == 0 else 0)
+        assert (length, described, inherit) == (ctypes.sizeof(wincontainer.SecurityAttributes), 0x8100, False)
+        assert (out, into, wait) == (64, 64, 0)         # room for an answer and a question; Windows' own wait
+    # a listener of the run's own programs; a datagram socket of somebody else's; a question of no known kind; a
+    # question cut short: one yes, three noes, and every caller's end made ready for the next one
+    assert api.said == [wincontainer.YES, wincontainer.NO, wincontainer.NO, wincontainer.NO]
+    assert api.flushed == 4 and api.ended == 5
+
+
+def test_a_pipe_windows_will_not_make_whole_is_said_and_nothing_of_it_is_left(monkeypatch):
+    api = PipeCalls(fail_at=2)
+    with pytest.raises(wincontainer.ContainerError) as e:
+        _broker(monkeypatch, api)
+    assert (e.value.call, e.value.code) == ("CreateNamedPipeW", 231)
+    assert api.closed == [0x9001] and 0x8100 in api.freed
+
+
+def test_the_launcher_answers_through_its_pipe_while_the_command_runs_and_tells_it_who_made_the_pipe(monkeypatch):
+    name = wincontainer.BROKER_PREFIX + "ab" * 16
+    made, started = [], []
+    monkeypatch.setenv(wincontainer.BROKER_VARIABLE, name)
+    monkeypatch.setenv(wincontainer.BROKER_PID_VARIABLE, "1")       # what the launcher was handed is not kept
+    monkeypatch.setattr(wincontainer, "Broker", lambda n, sid, api=None: made.append((n, sid)))
+    monkeypatch.setattr(wincontainer, "start", lambda container, cmd, api=None: started.append(
+        (container, cmd, os.environ.get(wincontainer.BROKER_PID_VARIABLE))) or 4)
+    with pytest.raises(SystemExit) as e:
+        wincontainer.main([SID_TEXT, "--", "python.exe", "-m", "x"])
+    assert e.value.code == 4 and made == [(name, SID_TEXT)]
+    assert started == [(SID_TEXT, ["python.exe", "-m", "x"], str(os.getpid()))]
+
+
+@pytest.mark.parametrize("name", [wincontainer.BROKER_PREFIX + "AB" * 16, "\\\\.\\pipe\\other-" + "ab" * 16,
+                                  wincontainer.BROKER_PREFIX + "ab" * 16 + "\\x"])
+def test_a_pipe_the_sandbox_did_not_name_starts_nothing(monkeypatch, capsys, name):
+    monkeypatch.setenv(wincontainer.BROKER_VARIABLE, name)
+    monkeypatch.setattr(wincontainer, "Broker", lambda *a, **k: pytest.fail("no pipe is made"))
+    monkeypatch.setattr(wincontainer, "start", lambda *a, **k: pytest.fail("nothing is started"))
+    with pytest.raises(SystemExit) as e:
+        wincontainer.main([SID_TEXT, "--", "python.exe"])
+    assert e.value.code == wincontainer.UNAVAILABLE
+    assert capsys.readouterr().out.strip() == f"{wincontainer.MARK} container 123"
+
+
+def test_a_pipe_windows_refuses_the_launcher_starts_nothing_and_says_why(monkeypatch, capsys):
+    def refused(name, sid, api=None):
+        raise wincontainer.ContainerError("CreateNamedPipeW", 231)
+    monkeypatch.setenv(wincontainer.BROKER_VARIABLE, wincontainer.BROKER_PREFIX + "ab" * 16)
+    monkeypatch.setattr(wincontainer, "Broker", refused)
+    monkeypatch.setattr(wincontainer, "start", lambda *a, **k: pytest.fail("nothing is started"))
+    with pytest.raises(SystemExit) as e:
+        wincontainer.main([SID_TEXT, "--", "python.exe"])
+    said = capsys.readouterr().out
+    assert e.value.code == wincontainer.UNAVAILABLE and said.strip() == f"{wincontainer.MARK} container 231"
+    assert sandbox._unavailable(e.value.code, said) == _jail.REASONS["container"] + " (error 231)"
+
+
 # ---------------------------------------------------------------------------- what Windows does, tried on Windows
 TOOLS = r'''
 import _winapi, asyncio, ctypes, json, multiprocessing, os, re, socket, subprocess, sys, threading, time

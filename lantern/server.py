@@ -751,7 +751,8 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
             language = sandbox.check_command(cmd)
         except ValueError as e:
             raise TerminalRefused(f"trace: {e}") from None
-        ask = reach_asked(app.store, p["id"], " ".join(cmd), language, True if anyway else None)
+        ask = reach_asked(app.store, p["id"], " ".join(cmd), language, True if anyway else None,
+                          fetched=fetches(repo, language))
         if ask:
             raise TerminalRefused(f"trace: {ask} To run them anyway, type: trace --anyway -- {' '.join(cmd)}")
         app.store.confirm_test(p["id"], " ".join(cmd))   # typed in full by the user: that is the confirmation
@@ -936,15 +937,25 @@ def reach_mark(command: str, ask: str) -> str:
     return hashlib.sha256(f"{command}\n{ask}".encode()).hexdigest()[:32]
 
 
-def reach_asked(store, pid: str, command: str, language: str, said=None) -> str:
+def fetches(repo: Path, language: str) -> bool:
+    """Would a run of this project's tests fetch the libraries it names first? Asked the one way the sheet asks it
+    (`libraries.described`), by the sheet, the terminal and the route alike: on Windows a project's Python tests on
+    fetched libraries run inside a wall of Windows' own (`sandbox.reach`), so the sentence a person agrees to on
+    the sheet has to be the one the run is held to."""
+    from . import libraries
+    return bool(libraries.described(Path(repo), language))
+
+
+def reach_asked(store, pid: str, command: str, language: str, said=None, fetched: bool = False) -> str:
     """"" when a run of `command` may start as far as the person's word goes, else the sentence they have to agree
     to first. Where this run's walls do not hold every program of the tests (`sandbox.reach`), the person has to
     have said so for this project, this command and these words: `said` is the sentence the sheet showed them, or
     True for `--anyway` typed in the terminal, and what was said once is kept (`Store.accept_reach`). A
     confirmation of the command alone is no such word (review stage, 2026-11-15: until then the sheet's last line
-    promised the same on every system, so a confirmation given under it says nothing about this)."""
+    promised the same on every system, so a confirmation given under it says nothing about this). `fetched`: the
+    project's libraries are fetched for the run first (`fetches`)."""
     from . import sandbox
-    ask = sandbox.reach(language)["ask"]
+    ask = sandbox.reach(language, fetched=fetched)["ask"]
     if not ask:
         return ""
     mark = reach_mark(command, ask)
@@ -969,14 +980,14 @@ def detect_test_command(repo: Path, minutes: int | None = None, memory: int | No
     memory (`memory_mb`, `memory_range`, in megabytes). `leaves` is the sheet's last line and `reach` what stands
     behind it (`sandbox.reach`: what this run keeps the tests from, and the sentence to agree to where it does
     not hold every program of theirs)."""
-    from . import libraries, sandbox
+    from . import sandbox
     d = sandbox.detect(repo)
     d["sandbox"] = sandbox.describe(repo, d["language"], minutes=minutes, memory=memory)
     d["minutes"] = sandbox.time_limit(minutes) // 60
     d["minutes_range"] = list(sandbox.MINUTES)
     d["memory_mb"] = sandbox.memory_limit(memory)
     d["memory_range"] = list(sandbox.MEGABYTES)
-    said = sandbox.reach(d["language"], fetched=bool(libraries.described(Path(repo), d["language"])))
+    said = sandbox.reach(d["language"], fetched=fetches(repo, d["language"]))
     d["leaves"] = said["words"]
     d["reach"] = {k: said[k] for k in ("network", "files", "ask")}
     return d
@@ -1509,10 +1520,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(409, "confirm this command first: the sheet shows what will run and where")
             # Tests this system's sandbox does not hold start only after the person agreed to exactly that sentence
             # (`reach`: the sentence the sheet showed); the answer carries it, for a sheet made for other tests.
-            ask = reach_asked(app.store, p["id"], canon, language, b.get("reach") if isinstance(b.get("reach"), str) else None)
+            fetched = fetches(repo, language)
+            ask = reach_asked(app.store, p["id"], canon, language, b.get("reach") if isinstance(b.get("reach"), str) else None,
+                              fetched=fetched)
             if ask:
                 return self._json({"error": f"{ask} Say on the sheet that you have read this, and the tests are run.",
-                                   "reach": {"ask": ask, "words": sandbox.reach(language)["words"]}}, 409)
+                                   "reach": {"ask": ask, "words": sandbox.reach(language, fetched=fetched)["words"]}}, 409)
             app.store.confirm_test(p["id"], canon)
             if b.get("minutes") is not None and app.store.settings().get("test_minutes") != minutes:
                 app.store.save_settings({**app.store.settings(), "test_minutes": minutes})   # remembered for the next run

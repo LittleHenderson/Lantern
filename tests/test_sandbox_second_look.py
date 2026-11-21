@@ -374,7 +374,9 @@ NO_DOORMAN = "this system does not let Lantern put a doorman between the tests' 
 CLOSED_WORDS = ("network connections refused", "nothing on this computer is let through")
 
 
-def _system(monkeypatch, linux=True, network="", doorman="", landlock=7, windows=False):
+def _system(monkeypatch, linux=True, network="", doorman="", landlock=7, windows=False, wall=False):
+    """A pretend system. `wall`: it makes a wall of Windows' own for a project's Python tests on fetched libraries
+    (`sandbox.wall_here`); a pretend system makes none unless it says so, whatever system the test runs on."""
     monkeypatch.delenv("LANTERN_SANDBOX", raising=False)
     monkeypatch.setattr(sandbox, "docker_ok", lambda: False)
     monkeypatch.setattr(sandbox, "_LINUX", linux)
@@ -383,6 +385,7 @@ def _system(monkeypatch, linux=True, network="", doorman="", landlock=7, windows
     monkeypatch.setattr(sandbox, "_OWN_SOCKETS", [doorman if linux else "the doorman is made on Linux only"])
     monkeypatch.setattr(sandbox, "_OWN_MEMORY", [""])
     monkeypatch.setattr(sandbox, "landlock_abi", lambda: landlock if linux else 0)
+    monkeypatch.setattr(sandbox, "_WALL_HERE", ["" if wall else "this pretend system makes no wall of Windows' own"])
 
 
 @pytest.mark.parametrize("held, system", [
