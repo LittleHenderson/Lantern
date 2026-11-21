@@ -340,7 +340,7 @@ def test_the_whole_python_is_a_python_of_its_own_with_the_runs_libraries_only(tm
 
 # ---------------------------------------------------------------------------- what Windows does, tried on Windows
 PROBE = r'''
-import asyncio, ctypes, json, multiprocessing, os, socket, subprocess, sys, threading, time
+import _winapi, asyncio, ctypes, json, multiprocessing, os, socket, subprocess, sys, threading, time
 from ctypes import wintypes
 
 
@@ -399,9 +399,48 @@ def job_pids():
     return out.assigned
 
 
-def tcp_table():
-    size = wintypes.DWORD(0)
-    return [ctypes.WinDLL("iphlpapi").GetExtendedTcpTable(None, ctypes.byref(size), False, 2, 5, 0), size.value]
+def tables():
+    """What Windows answers when asked how large its tables of this computer's sockets are, in the forms Lantern's
+    guard asks for them (with the program of each): 122 is "a larger buffer", 5 is "access denied"."""
+    ip = ctypes.WinDLL("iphlpapi")
+    out = {}
+    for name, call, family, form in (("tcp4", ip.GetExtendedTcpTable, 2, 5), ("tcp6", ip.GetExtendedTcpTable, 23, 5),
+                                     ("udp4", ip.GetExtendedUdpTable, 2, 1)):
+        size = wintypes.DWORD(0)
+        out[name] = call(None, ctypes.byref(size), False, family, form, 0)
+    return out
+
+
+def token():
+    """Whether this program's token is an AppContainer's, and whether it is the one the run made (`given["sid"]`)."""
+    a = ctypes.WinDLL("advapi32", use_last_error=True)
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.GetCurrentProcess.restype = wintypes.HANDLE
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.LocalFree.argtypes = [ctypes.c_void_p]
+    a.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    a.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                      ctypes.POINTER(wintypes.DWORD)]
+    a.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    h = wintypes.HANDLE()
+    if not a.OpenProcessToken(k.GetCurrentProcess(), 0x0008, ctypes.byref(h)):      # TOKEN_QUERY
+        raise OSError(ctypes.get_last_error(), "OpenProcessToken")
+    try:
+        flag, got = wintypes.DWORD(), wintypes.DWORD()
+        if not a.GetTokenInformation(h, 29, ctypes.byref(flag), 4, ctypes.byref(got)):      # TokenIsAppContainer
+            raise OSError(ctypes.get_last_error(), "GetTokenInformation")
+        buf = ctypes.create_string_buffer(256)
+        if not a.GetTokenInformation(h, 31, buf, 256, ctypes.byref(got)):                # TokenAppContainerSid
+            raise OSError(ctypes.get_last_error(), "GetTokenInformation")
+        text = wintypes.LPWSTR()
+        if not a.ConvertSidToStringSidW(ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.byref(text)):
+            raise OSError(ctypes.get_last_error(), "ConvertSidToStringSidW")
+        try:
+            return {"container": bool(flag.value), "same": text.value == given["sid"]}
+        finally:
+            k.LocalFree(text)
+    finally:
+        k.CloseHandle(h)
 
 
 def own_server():
@@ -519,10 +558,111 @@ def lookup(name):
     return lambda: len(socket.getaddrinfo(name, 443))
 
 
+def datagrams_to(host, port):
+    def go():
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            for _ in range(3):
+                s.sendto(b"u", (host, port))
+        return "sent"
+    return go
+
+
+PLAIN = "\\\\.\\pipe\\"
+LOCAL = PLAIN + "LOCAL\\"
+
+
+def pipe_pair(prefix):
+    """A pipe made and its other end opened the way multiprocessing makes one, under a name of the given form."""
+    name = prefix + "pyc-%d-probe-%d" % (os.getpid(), time.monotonic_ns())
+    h1 = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_DUPLEX | _winapi.FILE_FLAG_FIRST_PIPE_INSTANCE,
+                                 _winapi.PIPE_TYPE_MESSAGE | _winapi.PIPE_READMODE_MESSAGE | _winapi.PIPE_WAIT,
+                                 1, 4096, 4096, _winapi.NMPWAIT_WAIT_FOREVER, _winapi.NULL)
+    try:
+        _winapi.CloseHandle(_winapi.CreateFile(name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
+                                               _winapi.OPEN_EXISTING, 0, _winapi.NULL))
+    finally:
+        _winapi.CloseHandle(h1)
+    return True
+
+
+def local(name):
+    if (isinstance(name, str) and name[:len(PLAIN)].lower() == PLAIN.lower()
+            and not name[len(PLAIN):].upper().startswith("LOCAL\\")):
+        return LOCAL + name[len(PLAIN):]
+    return name
+
+
+def local_names():
+    """What a guard inside the container would do: every pipe name of this program put under the container's own
+    part of the names (`\\\\.\\pipe\\LOCAL\\`), at each call Python's own modules name a pipe with."""
+    import _overlapped
+    for module, attrs in ((_winapi, ("CreateNamedPipe", "CreateFile", "WaitNamedPipe")), (_overlapped, ("ConnectPipe",))):
+        for attr in attrs:
+            def wrapped(name, *rest, _real=getattr(module, attr)):
+                return _real(local(name), *rest)
+            setattr(module, attr, wrapped)
+
+
+if os.environ.get("PROBE_LOCAL_PIPES") == "1":      # the programs multiprocessing starts read this file first
+    local_names()
+
+
+def mp_pipe():
+    from multiprocessing.connection import Pipe
+    a, b = Pipe()
+    a.send("p")
+    got = b.recv()
+    a.close()
+    b.close()
+    return got
+
+
+def mp_listener():
+    from multiprocessing.connection import Client, Listener
+    with Listener(family="AF_PIPE") as srv:
+        box = {}
+        th = threading.Thread(target=lambda: box.update(c=srv.accept()), daemon=True)
+        th.start()
+        c = Client(srv.address, family="AF_PIPE")
+        th.join(10)
+        c.send("l")
+        got = box["c"].recv()
+        c.close()
+        box["c"].close()
+        return got
+
+
+def manager():
+    with multiprocessing.Manager() as m:
+        d = m.dict()
+        d["k"] = "m"
+        return d["k"]
+
+
+def loop_subprocess():
+    async def main():
+        p = await asyncio.create_subprocess_exec(sys.executable, "-I", "-c", "print('a')",
+                                                 stdout=asyncio.subprocess.PIPE)
+        out, _ = await p.communicate()
+        return out.decode().strip()
+    return asyncio.run(main())
+
+
+def other_pipe_by_name():
+    _winapi.CloseHandle(_winapi.CreateFile(given["pipe"], _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0,
+                                           _winapi.NULL, _winapi.OPEN_EXISTING, 0, _winapi.NULL))
+
+
 NODE_CONNECT = ("const s = require('net').connect(9, process.argv[1]); s.setTimeout(6000, () => { console.log('timeout'); "
                 "process.exit(3) }); s.on('connect', () => { console.log('connected'); process.exit(0) }); "
                 "s.on('error', e => { console.log(e.code); process.exit(2) })")
 NODE_READ = "require('fs').readFileSync(process.argv[1]); console.log('read')"
+NODE_WRITE = "require('fs').writeFileSync(process.argv[1], 'x'); console.log('wrote')"
+NODE_OWN_SERVER = ("const net = require('net'); const srv = net.createServer(c => c.end('n')); "
+                   "srv.listen(0, '127.0.0.1', () => { const c = net.connect(srv.address().port, '127.0.0.1'); "
+                   "c.on('data', () => { console.log('ok'); process.exit(0) }); "
+                   "c.on('error', e => { console.log(e.code); process.exit(2) }) }); "
+                   "setTimeout(() => { console.log('timeout'); process.exit(3) }, 6000)")
 
 
 if __name__ == "__main__":
@@ -533,7 +673,7 @@ if __name__ == "__main__":
     facts = {"prefix_is_copy": here(sys.prefix) == copy, "executable_is_copy": here(os.path.dirname(sys.executable)) == copy,
              "cwd_is_app": here(os.getcwd()) == here(given["app"]),
              "base_on_path": any(here(p) == base or here(p).startswith(base + os.sep) for p in sys.path if p)}
-    for name, fn in (("in_job", in_job), ("job_pids", job_pids), ("tcp_table", tcp_table), ("loop", loop),
+    for name, fn in (("in_job", in_job), ("job_pids", job_pids), ("tables", tables), ("token", token), ("loop", loop),
                      ("socketpair", pair), ("own_server", own_server), ("loop_server", loop_server),
                      ("datagrams", datagrams)):
         facts[name] = bounded(fn, 20)
@@ -549,6 +689,12 @@ if __name__ == "__main__":
     facts["lookup_outside"] = bounded(lookup("lantern-probe.invalid"), 15)
     facts["lookup_self"] = bounded(lookup("localhost"), 15)
     facts["other_listener"] = bounded(connect("127.0.0.1", given["listener"]), 15)
+    if given.get("listener6"):
+        facts["other_listener_v6"] = bounded(connect("::1", given["listener6"]), 15)
+    facts["any_listener_loopback"] = bounded(connect("127.0.0.1", given["any"]), 15)
+    if given.get("own"):
+        facts["own_address"] = bounded(connect(given["own"], given["any"]), 15)
+    facts["other_datagram"] = bounded(datagrams_to("127.0.0.1", given["udp"]), 15)
     facts["other_pipe"] = bounded(pipe(given["pipe"]), 15)
     facts["person_read"] = attempt(read(given["person_file"]))
     facts["person_list"] = attempt(listing(given["person"]))
@@ -560,26 +706,96 @@ if __name__ == "__main__":
     facts["share_outside"] = bounded(listing("\\\\192.0.2.1\\share"), 25)
     facts["share_here"] = bounded(listing("\\\\localhost\\C$"), 25)
     if given.get("curl"):
-        facts["curl_outside"] = program([given["curl"], "-sS", "--max-time", "8", "http://192.0.2.1:9/"])
-        facts["curl_file"] = program([given["curl"], "-sS", "-o", "NUL", "file:///" + given["person_file"].replace("\\", "/")])
+        curl = given["curl"]
+        facts["curl_outside"] = program([curl, "-sS", "--max-time", "8", "http://192.0.2.1:9/"])
+        facts["curl_file"] = program([curl, "-sS", "-o", "NUL", "file:///" + given["person_file"].replace("\\", "/")])
+        facts["curl_other_listener"] = program([curl, "-sS", "--max-time", "8", f"http://127.0.0.1:{given['listener']}/"])
+        if given.get("own"):
+            facts["curl_own_address"] = program([curl, "-sS", "--max-time", "8", f"http://{given['own']}:{given['any']}/"])
     if given.get("node"):
         facts["node_start"] = program([given["node"], "-e", "console.log(process.version)"])
-        facts["node_outside"] = program([given["node"], "-e", NODE_CONNECT, "192.0.2.1"], word=True)
-        facts["node_other_listener"] = program([given["node"], "-e", NODE_CONNECT.replace("connect(9,", "connect("
-                                                + str(given["listener"]) + ","), "127.0.0.1"], word=True)
-        facts["node_read"] = program([given["node"], "-e", NODE_READ, given["person_file"]], word=True)
+        facts["node_system_read"] = attempt(read(given["node"]))
+    if given.get("node_copy"):
+        node = given["node_copy"]
+        facts["node_copy_start"] = program([node, "-e", "console.log(process.version)"])
+        facts["node_copy_own_server"] = program([node, "-e", NODE_OWN_SERVER], word=True)
+        facts["node_copy_outside"] = program([node, "-e", NODE_CONNECT, "192.0.2.1"], word=True)
+        facts["node_copy_other_listener"] = program([node, "-e", NODE_CONNECT.replace("connect(9,", "connect("
+                                                     + str(given["listener"]) + ","), "127.0.0.1"], word=True)
+        facts["node_copy_read"] = program([node, "-e", NODE_READ, given["person_file"]], word=True)
+        facts["node_copy_write"] = program([node, "-e", NODE_WRITE, os.path.join(given["person"], "node.txt")],
+                                           word=True)
+        if given.get("npm_cli"):
+            facts["npm_version"] = program([node, given["npm_cli"], "--version"], seconds=90)
+    # the pipes: Windows' answer to each kind of name, then what multiprocessing and the event loop do once every
+    # name is put under the container's own part (as a guard inside it would put them)
+    facts["pipe_plain"] = bounded(lambda: pipe_pair(PLAIN), 15)
+    facts["pipe_local"] = bounded(lambda: pipe_pair(LOCAL), 15)
+    facts["loop_subprocess"] = bounded(loop_subprocess, 30)
+    os.environ["PROBE_LOCAL_PIPES"] = "1"
+    local_names()
+    facts["mp_pipe_local"] = bounded(mp_pipe, 15)
+    facts["mp_listener_local"] = bounded(mp_listener, 20)
+    facts["pool_local"] = bounded(pool, 60)
+    facts["manager_local"] = bounded(manager, 60)
+    facts["loop_subprocess_local"] = bounded(loop_subprocess, 30)
+    facts["other_pipe_local"] = bounded(other_pipe_by_name, 15)
     print("FACTS " + json.dumps(facts), flush=True)
     sys.stdout.flush()
     os._exit(0)
 '''
 LAUNCH = "import sys; sys.path.insert(0, {root!r}); from lantern.wincontainer import main; main(sys.argv[1:])"
-# What an honest test does, which must still work inside the container
-HONEST = ("loop", "socketpair", "own_server", "loop_server", "datagrams", "second_program", "pool", "cmd",
-          "write_tmp", "write_app", "in_job", "lookup_self")
-# What lies outside the run, which must be refused inside it, and refused by Windows: not left to time out
-REFUSED = ("outside_v4", "outside_v6", "other_listener", "other_pipe", "person_read", "person_list", "write_outside",
-           "checkout_read", "share_outside", "share_here")
-REFUSED_PROGRAMS = ("curl_outside", "curl_file", "node_outside", "node_other_listener", "node_read")
+# What an honest test does, which must still work inside the container (a pipe, a pool of processes, a manager and
+# the event loop's programs once their pipes are named under the container's own part of the names)
+HONEST = ("loop", "socketpair", "own_server", "loop_server", "datagrams", "second_program", "cmd", "write_tmp",
+          "write_app", "in_job", "lookup_self", "pipe_local", "mp_pipe_local", "mp_listener_local", "pool_local",
+          "manager_local", "loop_subprocess_local")
+# What lies outside the run, which must be refused inside it, and refused by Windows at once: not left to time out
+REFUSED = ("outside_v4", "outside_v6", "lookup_outside", "other_pipe", "other_pipe_local", "person_read", "person_list",
+           "write_outside", "checkout_read", "base_python_read", "share_outside", "share_here")
+# Another program of this computer that waits at an address: Windows drops what the container sends there without
+# a word, so the try may wait; what counts is that nothing reached that program (which listens for it, `reached`)
+UNREACHED = {"other_listener": "tcp", "other_listener_v6": "tcp6", "any_listener_loopback": "any",
+             "own_address": "any", "other_datagram": "udp"}
+REFUSED_PROGRAMS = {"curl_outside": None, "curl_file": None, "curl_other_listener": "tcp", "curl_own_address": "any",
+                    "node_copy_outside": None, "node_copy_other_listener": "tcp", "node_copy_read": None,
+                    "node_copy_write": None}
+HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "npm_version")
+
+
+def _own_address() -> str:
+    """This computer's own address on its network (not its loopback one), by its own name: no packet is sent."""
+    try:
+        found = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        return ""
+    return next((a[4][0] for a in found if not a[4][0].startswith("127.")), "")
+
+
+def _place(path: str) -> str:
+    """Where a program lies, in one word (never the path)."""
+    here = os.path.normcase(os.path.realpath(path))
+    for word, variable in (("program-files", "ProgramFiles"), ("program-files-x86", "ProgramFiles(x86)"),
+                           ("tool-cache", "RUNNER_TOOL_CACHE"), ("home", "USERPROFILE")):
+        base = os.environ.get(variable)
+        if base and here.startswith(os.path.normcase(os.path.realpath(base)) + os.sep):
+            return word
+    return "other"
+
+
+def _take(srv, kind: str, reached: list) -> None:
+    """Every connection or datagram that reaches one of the programs outside the run, counted until it is closed."""
+    while True:
+        try:
+            if kind == "udp":
+                srv.recvfrom(64)
+            else:
+                srv.accept()[0].close()
+        except (TimeoutError, socket.timeout):
+            continue
+        except OSError:
+            return
+        reached.append(kind)
 
 
 def _count(folder: Path) -> tuple[int, int]:
@@ -606,6 +822,9 @@ def tried(tmp_path_factory):
     box = wincontainer.Container()
     costs["make"] = round(time.monotonic() - t, 2)
     listener = socket.socket()
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    every = socket.socket()
+    listener6 = None
     pipe = None
     try:
         t = time.monotonic()
@@ -623,19 +842,49 @@ def tried(tmp_path_factory):
         box.grant(root / "py")          # what a grant costs over a folder that is full already
         costs["grant_full"] = round(time.monotonic() - t, 2)
         (root / "probe.py").write_text(PROBE, encoding="utf-8")
+        node = shutil.which("node") or ""
+        node_copy = npm_cli = ""
+        if node:
+            costs["node_place"] = _place(node)
+        if node.lower().endswith(".exe"):          # not a script that starts it (a version manager's)
+            t = time.monotonic()
+            (root / "node").mkdir()
+            node_copy = shutil.copy2(node, root / "node" / "node.exe")
+            npm = Path(node).resolve().parent / "node_modules" / "npm"
+            if (npm / "bin" / "npm-cli.js").is_file():
+                shutil.copytree(npm, root / "node" / "node_modules" / "npm", symlinks=True)
+                npm_cli = str(root / "node" / "node_modules" / "npm" / "bin" / "npm-cli.js")
+            costs["copy_node"] = round(time.monotonic() - t, 2)
+            costs["node_files"], costs["node_bytes"] = _count(root / "node")
+        reached: list = []
         listener.bind(("127.0.0.1", 0))
         listener.listen()
-        reached: list = []
-        threading.Thread(target=lambda: reached.append(listener.accept()), daemon=True).start()
+        threading.Thread(target=_take, args=(listener, "tcp", reached), daemon=True).start()
+        every.bind(("0.0.0.0", 0))
+        every.listen()
+        threading.Thread(target=_take, args=(every, "any", reached), daemon=True).start()
+        udp.bind(("127.0.0.1", 0))
+        udp.settimeout(0.5)
+        threading.Thread(target=_take, args=(udp, "udp", reached), daemon=True).start()
+        try:
+            listener6 = socket.socket(socket.AF_INET6)
+            listener6.bind(("::1", 0))
+            listener6.listen()
+            threading.Thread(target=_take, args=(listener6, "tcp6", reached), daemon=True).start()
+        except OSError:
+            listener6 = None
         from multiprocessing.connection import Listener
         pipe = Listener(family="AF_PIPE")
-        threading.Thread(target=lambda: reached.append(pipe.accept()), daemon=True).start()
+        threading.Thread(target=lambda: reached.append(pipe.accept() and "pipe"), daemon=True).start()
         curl = Path(os.environ.get("SYSTEMROOT", "C:\\Windows")) / "System32" / "curl.exe"
         given = {"listener": listener.getsockname()[1], "pipe": pipe.address, "person": str(person),
                  "person_file": str(person / "secret.txt"), "checkout_file": str(Path(__file__).resolve().parents[1] / "pyproject.toml"),
                  "base_python": str(Path(sys.base_prefix) / "python.exe"), "tmp": str(tmp), "app": str(app),
-                 "copy": str(root / "py"), "base": sys.base_prefix,
-                 "curl": str(curl) if curl.is_file() else "", "node": shutil.which("node") or ""}
+                 "copy": str(root / "py"), "base": sys.base_prefix, "sid": box.text,
+                 "udp": udp.getsockname()[1], "any": every.getsockname()[1], "own": _own_address(),
+                 "listener6": listener6.getsockname()[1] if listener6 is not None else 0,
+                 "curl": str(curl) if curl.is_file() else "", "node": node, "node_copy": str(node_copy),
+                 "npm_cli": npm_cli}
         (root / "given.json").write_text(json.dumps(given), encoding="utf-8")
         env = sandbox._env_base(tmp)
         env["PATH"] = os.pathsep.join([os.path.dirname(exe), env.get("PATH", "")])
@@ -647,11 +896,15 @@ def tried(tmp_path_factory):
         rc, output, timed_out = sandbox._stream(cmd, app, env, 400, lines.append,
                                                 job=lambda: sandbox._windows_job(2048))
         costs["probe"] = round(time.monotonic() - t, 2)
+        time.sleep(1)                   # a datagram on its way is counted too
         costs["rc"], costs["timed_out"], costs["reached_outside"] = rc, timed_out, len(reached)
+        costs["reached"] = {kind: reached.count(kind) for kind in ("tcp", "tcp6", "any", "udp", "pipe")}
         said = [line for line in output.splitlines() if line.startswith("FACTS ")]
         facts = json.loads(said[-1][len("FACTS "):]) if said else {"no facts": output[-3000:]}
     finally:
-        listener.close()
+        for s in (listener, udp, every, listener6):
+            if s is not None:
+                s.close()
         if pipe is not None:
             pipe.close()
         t = time.monotonic()
@@ -688,20 +941,62 @@ def test_what_an_honest_test_does_still_works_in_the_container(tried, name):
 
 
 @ONLY_WINDOWS
+def test_windows_refuses_a_pipe_named_outside_the_containers_own_part_of_the_names(tried):
+    """Why a pool of processes, a manager and the event loop's programs need their pipes named under `LOCAL\\`
+    inside a container: Windows refuses to make a pipe under any other name there ("access denied", 5)."""
+    facts, _ = tried
+    for name in ("pipe_plain", "pool", "loop_subprocess"):
+        assert not facts[name].get("ok") and facts[name].get("number") == 5, (name, facts[name])
+    assert facts["pipe_local"].get("ok"), facts["pipe_local"]
+
+
+@ONLY_WINDOWS
+def test_inside_the_container_a_program_can_tell_it_is_in_the_runs_own(tried):
+    """What a guard inside the container needs before it leaves this computer's own address to Windows."""
+    facts, _ = tried
+    assert facts["token"].get("ok") and facts["token"]["value"] == {"container": True, "same": True}, facts["token"]
+
+
+@ONLY_WINDOWS
 @pytest.mark.parametrize("name", REFUSED)
 def test_what_lies_outside_the_run_is_refused_by_windows_in_the_container(tried, name):
     facts, costs = tried
     fact = facts[name]
     assert not fact.get("ok") and fact.get("error") not in ("TimeoutError", "still waiting"), fact
-    if name in ("other_listener", "other_pipe"):
-        assert costs["reached_outside"] == 0, costs
+    assert costs["reached"]["pipe"] == 0, costs
 
 
 @ONLY_WINDOWS
-@pytest.mark.parametrize("name", REFUSED_PROGRAMS)
+@pytest.mark.parametrize("name", sorted(UNREACHED))
+def test_another_program_of_this_computer_is_not_reached_from_the_container(tried, name):
+    facts, costs = tried
+    if name not in facts:
+        pytest.skip("this computer has no IPv6 loopback" if name.endswith("v6") else "this computer has no address "
+                    "of its own on a network")
+    assert name == "other_datagram" or not facts[name].get("ok"), facts[name]
+    assert costs["reached"][UNREACHED[name]] == 0, costs
+
+
+@ONLY_WINDOWS
+@pytest.mark.parametrize("name", sorted(REFUSED_PROGRAMS))
 def test_a_program_that_is_not_python_is_refused_too(tried, name):
+    facts, costs = tried
+    if name not in facts:
+        pytest.skip("Node is not installed on this computer" if name.startswith("node") else
+                    "no curl.exe in System32" if name in ("curl_outside", "curl_file", "curl_other_listener") else
+                    "this computer has no address of its own on a network")
+    fact, kind = facts[name], REFUSED_PROGRAMS[name]
+    assert not fact.get("ok") and fact.get("rc") is not None, fact
+    if kind is None:
+        assert fact.get("rc") != 28 and fact.get("word") != "timeout", fact
+    else:
+        assert costs["reached"][kind] == 0, costs
+
+
+@ONLY_WINDOWS
+@pytest.mark.parametrize("name", HONEST_PROGRAMS)
+def test_a_program_that_is_not_python_does_its_honest_work_in_the_container(tried, name):
     facts, _ = tried
     if name not in facts:
-        pytest.skip("Node is not installed on this computer" if name.startswith("node") else "no curl.exe in System32")
-    fact = facts[name]
-    assert not fact.get("ok") and fact.get("rc") not in (None, 28) and fact.get("word") != "timeout", fact
+        pytest.skip("Node is not installed on this computer" if name.startswith("node") else "Node came without npm")
+    assert facts[name].get("ok"), facts[name]
