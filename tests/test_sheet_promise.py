@@ -248,8 +248,8 @@ def test_the_command_line_says_what_its_sandbox_keeps_only_where_it_does(capsys)
 # ---------------------------------------------------------------------------- Windows, where it makes a wall of its own
 def test_where_windows_makes_a_wall_the_sheet_asks_only_for_what_the_wall_does_not_hold(monkeypatch):
     """A project's own Python tests on the libraries fetched for them run inside a wall of Windows' own made for
-    the run: every program they start is kept from the person's files and from the internet by Windows itself, so
-    only what the wall does not close is asked about, in the wall's own words (`WALL_ASK`). Tests on this
+    the run: every program they start is kept from the person's files and from connections to the internet by
+    Windows itself, so only what the wall does not close is asked about, in the wall's own words (`WALL_ASK`). Tests on this
     computer's Python and tests that are not Python are not put inside it, and are asked about as before."""
     _system(monkeypatch, **WALLED)
     r = sandbox.reach("python", fetched=True)

@@ -409,7 +409,7 @@ jobs:
   windows-box:
     # The sealed box's tests for Windows alone, the tests of the wall of Windows' own around a project's Python tests
     # (tests/test_sandbox_container.py), the tests of such a container and of what Windows does in one
-    # (tests/test_wincontainer.py, which writes out what it found), the older tests of what the box lets a test
+    # (tests/test_wincontainer.py), the older tests of what the box lets a test
     # do on this computer (its own servers and event loops, process pools, moving its files between its folders, the
     # memory a run gets, the job that holds a run, the links of a project in the tests' copy), the tests of how
     # Lantern meets a link where it reads or writes its own files, and the behaviour checks' tests, which start apps

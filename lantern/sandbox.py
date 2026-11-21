@@ -720,18 +720,18 @@ def tests_off_the_network(language: str) -> bool:
 # ---------------------------------------------------------------------------- a wall of Windows' own
 # Windows (a firm pass or fail, stage 4, 2026-11-20): a project's own Python tests on the libraries fetched for them
 # run inside an AppContainer made for the run (`lantern.wincontainer`), with which Windows itself keeps every
-# program they start, Python or not, from the person's files, from the internet and from connections to the other
-# programs of this computer. They run on a whole Python of the run's own (`_whole_python`), which lies in the run's
+# program they start, Python or not, from the person's files and from connections to the internet and to the other
+# programs of this computer (not every way such a program could send something out is closed). They run on a whole Python of the run's own (`_whole_python`), which lies in the run's
 # folder, where the wall may read it; a Python without the fetch is this computer's own, which it may not. Tests
 # that are not Python stay outside it: the programs most of their runners start hang there (Node waits for each
 # through a pipe of a kind Windows lets no program inside make), so their words stay as they were.
 WALL_LINE = ("inside a wall of Windows' own made for this run (an AppContainer, deleted after the run): every "
-             "program the tests start, Python or not, is kept from your files, from the internet and from "
-             "connections to your other programs")
+             "program the tests start, Python or not, is kept from your files and from connections to the internet "
+             "and to your other programs")
 WALL_BESIDE = ("a program the tests start that is not Python is held there by that wall and not by Lantern's guard, "
                "and not every way it could send something out is closed")
 WALL_ASK = ("On this system a program the tests start that is not Python is kept by a wall of Windows' own made "
-            "for this run from your files, from the internet and from connections to your other programs, but not "
+            "for this run from your files and from connections to the internet and to your other programs, but not "
             "every way it could send something out is closed: this run does not keep it from that.")
 NO_WALL_PYTHON = ("the tests were to run inside a wall of Windows' own made for this run, which can hold them only "
                   "on a whole Python of the run's own, and none could be made")
