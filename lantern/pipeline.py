@@ -113,7 +113,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
             kept.tidy()         # at most once a day: what nobody asked for in a month goes, the folder stays bounded
 
 
-def _from_machine(repo: Path, trace_cmd: list[str], test_cwd: str) -> dict:
+def _from_machine(repo: Path, trace_cmd: list[str] | None, test_cwd: str) -> dict:
     """A check of the website runs no test of a project itself: a test machine made for the check ran them
     (cloud/lantern_cloud/machines.py), and the website hands its result to this analysis in a file of the check's
     own, named by LANTERN_TESTS_FROM (cloud/lantern_cloud/worker.py). Read by its shape (`runner.handed`); where there
@@ -170,7 +170,9 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
     website = os.environ.get("LANTERN_CLOUD_RUN") == "1"   # set only by Lantern's cloud worker (cloud/lantern_cloud/worker.py)
     if website:
         run_meta["place"] = "cloud"
-    if trace_cmd:
+    # A check of the website that asked for its tests and has no command to run (its packing step found none, or no
+    # test machine could be asked) still says so: the website hands why in the file, with no test command.
+    if trace_cmd or (website and os.environ.get("LANTERN_TESTS_FROM")):
         t = time.perf_counter()
         extra: dict = {}
         if sandbox or website:

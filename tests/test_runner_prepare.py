@@ -195,6 +195,90 @@ def test_the_packing_steps_command_line_takes_its_settings_and_the_command_after
         assert e.value.code == 2
 
 
+# ---------------------------------------------------------------------------- a check that names no command (step 6)
+# The website's tick box names no command: the packing step finds it in the project the way the app does
+# (`sandbox.detect`), and starts no machine where there are no tests to run.
+def _files(folder: Path, files: dict[str, str]) -> Path:
+    for name, text in files.items():
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_text(text, encoding="utf-8")
+    return folder
+
+
+SCRIPT = json.dumps({"name": "p", "version": "1.0.0", "scripts": {"test": "node add.test.js"}})
+
+
+@linux
+def test_a_python_projects_command_is_found_and_its_runner_fetched(tmp_path, monkeypatch):
+    with PyStore() as store:
+        store.add("pytest", "8.3.0", {"pytest/__init__.py": "", "pytest/__main__.py": "raise SystemExit(0)\n"})
+        _online(monkeypatch, python=store)
+        project = _files(tmp_path / "p", {"app.py": "X = 1\n", "test_it.py": "def test_it():\n    assert True\n"})
+        lines: list[str] = []
+        said = runner.prepare(project, tmp_path / "pack", None, log=lines.append, minutes=3, memory=512, find=True)
+    assert said["state"] == "packed", said
+    assert (said["command"], said["cwd"]) == (["python", "-m", "pytest", "-q"], "")
+    s = _packed(tmp_path / "pack", tmp_path / "work")["settings"]
+    assert (s["command"], s["cwd"], s["minutes"], s["memory"]) == (["python", "-m", "pytest", "-q"], "", 3, 512)
+    assert s["libraries"]["added"] == ["pytest"]
+    assert "prepare: the tests' command, found in the project: python -m pytest -q" in lines
+
+
+@linux
+@pytest.mark.parametrize("files, cwd", [
+    ({"README.md": "x\n", "web/package.json": SCRIPT, "web/add.test.js": "console.log(1)\n"}, "web"),
+    ({"package.json": SCRIPT, "add.test.js": "console.log(1)\n"}, "")], ids=["in a folder", "at the top"])
+def test_a_javascript_projects_test_script_is_found_with_its_folder(tmp_path, files, cwd):
+    project = _files(tmp_path / "p", files)
+    lines: list[str] = []
+    said = runner.prepare(project, tmp_path / "pack", None, log=lines.append, minutes=3, memory=512, find=True)
+    assert said["state"] == "packed", said
+    assert (said["command"], said["cwd"]) == (["npm", "test"], cwd)
+    s = _packed(tmp_path / "pack", tmp_path / "work")["settings"]
+    assert (s["command"], s["cwd"], s["language"]) == (["npm", "test"], cwd, "node")
+    assert any(ln.startswith("prepare: the tests' command, found in the project: npm test") for ln in lines)
+
+
+@linux
+@pytest.mark.parametrize("lock", ["pnpm-lock.yaml", "yarn.lock"])
+def test_a_test_script_meant_for_pnpm_or_yarn_is_run_with_npm(tmp_path, lock):
+    # the machine has npm, which runs the same test script; the explicit command keeps its refusal (the twin)
+    project = _files(tmp_path / "p", {"package.json": SCRIPT, "add.test.js": "console.log(1)\n", lock: "# lock\n"})
+    said = runner.prepare(project, tmp_path / "pack", None, log=QUIET, minutes=3, memory=512, find=True)
+    assert said["state"] == "packed" and said["command"] == ["npm", "test"], said
+    said, _ = _prepare(project, tmp_path / "pack2", [lock.split("-")[0].split(".")[0], "test"])
+    assert said["state"] == "not_run" and "npm" in said["why_not"], said
+
+
+@pytest.mark.parametrize("files, why", [
+    ({"app.py": "X = 1\n", "requirements.txt": ""}, "NO_TESTS"),
+    ({"composer.json": "{}", "src/User.php": "<?php\n", "tests/UserTest.php": "<?php\n"}, "NO_WAY"),
+    ({"go.mod": "module x\n\ngo 1.22\n", "x.go": "package x\n", "x_test.go": "package x\n"},
+     "The test machine runs the tests of Python and JavaScript projects for now, so nothing was run.")],
+    ids=["no tests", "tests it does not start", "go"])
+def test_where_there_is_nothing_to_start_no_machine_is_asked_for_and_the_reason_is_said(tmp_path, monkeypatch,
+                                                                                       pystore, files, why):
+    why = getattr(runner, why) if why.isupper() else why       # the program's own sentence, by its name
+    _online(monkeypatch, python=pystore)
+    project = _files(tmp_path / "p", files)
+    said = runner.prepare(project, tmp_path / "pack", None, log=QUIET, minutes=3, memory=512, find=True)
+    assert (said["state"], said["why_not"]) == ("not_run", why), said
+    assert pystore.seen == [] and not (tmp_path / "pack" / runner.ARCHIVE).exists()
+
+
+def test_the_packing_steps_find_takes_neither_a_command_nor_a_folder(tmp_path, capsys):
+    project = _files(tmp_path / "p", {"package.json": SCRIPT, "add.test.js": "console.log(1)\n"})
+    base = ["prepare", str(project), str(tmp_path / "out"), "--minutes", "3", "--memory", "512", "--find"]
+    for argv in (base + ["--", *UNITTEST], base + ["--cwd=web"], base + ["--cwd", ""]):
+        with pytest.raises(SystemExit) as e:
+            runner.main(argv)
+        assert e.value.code == 2
+    assert not (tmp_path / "out").exists()
+    assert runner.main(base) == 0                   # the twin: alone, it finds the command and packs
+    said = json.loads((tmp_path / "out" / runner.PREPARED).read_text(encoding="utf-8"))
+    assert (said["state"], said["command"], said["cwd"]) == ("packed", ["npm", "test"], "")
+
+
 # ---------------------------------------------------------------------------- the record of a prepared check
 GOOD = {"version": 1, "state": "packed", "why_not": "", "kind": "", "language": "python", "command": UNITTEST,
         "cwd": "", "minutes": 3, "memory": 512, "files": 3, "bytes": 100, "links": 0, "left_out": 0, "libraries": 1}

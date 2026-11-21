@@ -77,11 +77,46 @@ def clone_from(monkeypatch, origin):
 
 
 def _done(settings: dict, **tests) -> dict:
-    """What a machine's program answers for tests that ran, about the check it was handed."""
+    """What a machine's program answers for tests that ran, about the check it was handed (the language by the
+    machine's own rule: tests that are not Python run there untraced)."""
+    language = runner._machine_language(settings["command"])
+    if language != "python":
+        tests = {"pairs": [], "traced": False, "language": language,
+                 "libraries": {"state": "none", "language": language}, **tests}
     r = _machine_result(**{"memory_limit": settings["memory"], **tests})
     r["check"].update(command=settings["command"], cwd=settings["cwd"], minutes=settings["minutes"],
-                      memory=settings["memory"])
+                      memory=settings["memory"], language=language)
     return r
+
+
+# A check that names no command (the website's tick box): the packing step finds it in the project.
+FIND = {"command": None, "cwd": None, "minutes": 3, "memory": 512}
+JS = {"package.json": json.dumps({"name": "adder", "version": "1.0.0", "private": True,
+                                  "scripts": {"test": "node add.test.js"}}) + "\n",
+      "add.js": "module.exports = function add(a, b) { return a + b; };\n",
+      "add.test.js": "const add = require('./add');\nif (add(1, 2) !== 3) { process.exit(1); }\n"}
+
+
+@pytest.fixture
+def project(monkeypatch, tmp_path):
+    """`project(files)`: the clone step copies a repository of these files, made for the test."""
+    def uses(files: dict[str, str]) -> Path:
+        src = tmp_path / f"origin{len(list(tmp_path.glob('origin*')))}"
+        src.mkdir()
+        for name, text in files.items():
+            (src / name).parent.mkdir(parents=True, exist_ok=True)
+            (src / name).write_text(text, encoding="utf-8")
+        git("init", "-q", "-b", "main", cwd=src)
+        git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "-A", cwd=src)
+        git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x", cwd=src)
+
+        def fake_clone(link, dest, log):
+            git("clone", "-q", "--depth", "1", src.as_uri(), str(dest), cwd=dest.parent)
+            remote._mark(dest)
+            return dest
+        monkeypatch.setattr(worker_mod, "clone_repo", fake_clone)
+        return src
+    return uses
 
 
 class StandIn:
@@ -220,6 +255,7 @@ def test_a_check_that_asks_for_its_tests_has_them_run_on_a_test_machine(website,
     assert tr["ran"] is True and tr["place"] == "test machine" and tr["returncode"] == 0, tr
     assert tr["command"] == UNITTEST and tr["observed_edges"] >= 1
     assert _release_tests(Path(worker.results) / r["id"])["state"] == "passed"
+    assert r["summary"]["tests"]["state"] == "passed"     # the result card's tests line
     assert "Running your tests on a test machine made for this check" in r["log_tail"]
 
 
@@ -238,6 +274,7 @@ def test_a_check_that_asks_for_no_tests_hands_nothing_to_a_machine(website, clon
     assert machines.got == [] and "lantern.runner" not in [s["module"] for s in steps]
     assert "trace" not in run or not run["trace"], run.get("trace")
     assert all("LANTERN_TESTS_FROM" not in s["env"] for s in steps)
+    assert "tests" not in r["summary"]                  # no tests line on the card of a check that asked for none
 
 
 def test_the_machines_minutes_are_not_the_checks_own(website, clone_from, monkeypatch):
@@ -262,6 +299,80 @@ def test_a_test_folder_whose_name_begins_with_a_dash_is_a_folder_and_no_setting(
     assert got["settings"]["cwd"] == folder and got["settings"]["command"] == UNITTEST
     tr = run["trace"]                                # the analysis read the machine's result as this check's
     assert tr["ran"] is True and tr["place"] == "test machine", tr
+
+
+# ---------------------------------------------------------------------------- a check that names no command
+@pytest.mark.parametrize("folder", ["", "web"])
+def test_a_check_that_names_no_command_has_the_one_its_project_holds_run(website, project, steps, folder):
+    # the website's tick box: Lantern finds the command and its folder in the project, as the app does
+    project({(f"{folder}/{name}" if folder else name): text for name, text in JS.items()})
+    machines = StandIn()
+    worker, store = website(machines)
+    r, run = _check(worker, store, tests=FIND)
+    assert r["status"] == "done", (r["error"], r["log_tail"])
+    assert r["tests"] == FIND                        # what the check asked, kept as it was asked
+    (got,) = machines.got
+    assert (got["settings"]["command"], got["settings"]["cwd"]) == (["npm", "test"], folder)
+    assert (got["minutes"], got["memory"]) == (3, 512)
+    tr = run["trace"]                                # the analysis was told the command the machine was handed
+    assert tr["ran"] is True and tr["place"] == "test machine" and tr["command"] == ["npm", "test"], tr
+    assert _release_tests(Path(worker.results) / r["id"])["state"] == "passed"
+    assert r["summary"]["tests"]["state"] == "passed" and r["summary"]["tests"]["fix"] == ""
+    assert "found in the project: npm test" in r["log_tail"]
+
+
+NO_TESTS_HERE = {"app.py": APP}
+PHP_TESTS = {"composer.json": "{}\n", "src/App.php": "<?php\nfunction add($a, $b) { return $a + $b; }\n",
+             "tests/AppTest.php": "<?php\nclass AppTest { function testAdd() { assert(add(1, 2) === 3); } }\n"}
+
+
+@pytest.mark.parametrize(("files", "why", "card"), [
+    (NO_TESTS_HERE, "NO_TESTS", "The project has no tests."),
+    (PHP_TESTS, "NO_WAY", "NO_WAY")])
+def test_where_lantern_finds_nothing_to_start_no_machine_is_made_and_the_card_says_why(website, project, files, why,
+                                                                                       card):
+    why, card = getattr(runner, why), getattr(runner, card) if card.isupper() else card   # the program's own words
+    project(files)
+    machines = StandIn()
+    worker, store = website(machines)
+    r, run = _check(worker, store, tests=FIND)
+    assert r["status"] == "done", (r["error"], r["log_tail"])
+    assert machines.got == []
+    tr = run["trace"]
+    assert tr["ran"] is False and tr["not_run_for"] == "machine" and tr["unavailable"] == why, tr
+    assert "command" not in tr or not tr["command"]  # no command was handed to anything
+    crit = _release_tests(Path(worker.results) / r["id"])
+    assert crit["state"] == "missing"
+    line = r["summary"]["tests"]
+    assert line["state"] == "not run" and line["why"] == card, line
+    if files is NO_TESTS_HERE:                       # which tests to write (the owner's card C)
+        assert line["fix"] == crit["fix"] and line["fix"].startswith("Write tests for the most important flows")
+
+
+def test_with_the_machines_off_a_check_that_names_no_command_says_why(website, clone_from, steps):
+    worker, store = website(None)
+    r, run = _check(worker, store, tests=FIND)
+    assert r["status"] == "done", r["error"]
+    assert "lantern.runner" not in [s["module"] for s in steps]
+    tr = run["trace"]
+    assert tr["ran"] is False and tr["unavailable"] == worker_mod.MACHINES_OFF, tr
+    assert r["summary"]["tests"] == {"state": "not run", "why": worker_mod.MACHINES_OFF,
+                                     "fix": _release_tests(Path(worker.results) / r["id"])["fix"]}
+
+
+# ---------------------------------------------------------------------------- every step with its time
+@pytest.mark.parametrize(("tests", "keys"), [
+    (ASKED, ["clone", "libraries", "tests", "analyze", "save"]),
+    (None, ["clone", "analyze", "save"])])
+def test_each_step_of_a_check_is_kept_with_the_time_it_began(website, clone_from, tests, keys):
+    worker, store = website(StandIn())
+    r, _run = _check(worker, store, tests=tests)
+    assert r["status"] == "done", r["error"]
+    assert [s["key"] for s in r["steps"]] == keys
+    assert all(set(s) == {"key", "at"} for s in r["steps"])
+    times = [r["created"], *(s["at"] for s in r["steps"]), r["finished"]]
+    assert times == sorted(times), times               # one clock, written the same way: each after the one before
+    assert all(worker_mod.STAGES[k] for k in keys)
 
 
 # ---------------------------------------------------------------------------- where the tests do not run there
@@ -404,9 +515,18 @@ def test_what_a_check_asks_of_its_tests_is_taken_by_shape():
     for bad in ([UNITTEST], "python -m unittest", {**ASKED, "more": 1}, {k: v for k, v in ASKED.items() if k != "cwd"},
                 {**ASKED, "command": ["python", "app.py"]}, {**ASKED, "command": ["pnpm", "test"]},
                 {**ASKED, "command": "python -m unittest"}, {**ASKED, "minutes": 0}, {**ASKED, "minutes": True},
-                {**ASKED, "memory": 64}, {**ASKED, "cwd": "../up"}, {**ASKED, "cwd": "/etc"}):
+                {**ASKED, "memory": 64}, {**ASKED, "cwd": "../up"}, {**ASKED, "cwd": "/etc"},
+                # a command to find and a folder given, or the other way round; the limits are still checked
+                {**ASKED, "command": None}, {**ASKED, "cwd": None}, {**FIND, "cwd": ""}, {**FIND, "minutes": 0},
+                {**FIND, "minutes": 241}, {**FIND, "memory": 64}, {**FIND, "memory": "512"}):
         with pytest.raises(worker_mod.RunFailed):
             worker_mod.tests_asked({"tests": bad})
+
+
+def test_a_check_may_leave_the_command_and_its_folder_to_lantern():
+    assert worker_mod.tests_asked({"tests": dict(FIND)}) == FIND
+    assert worker_mod.finds(FIND) and not worker_mod.finds(ASKED) and not worker_mod.finds(None)
+    assert worker_mod.tests_words(None) == []        # nothing found: the analysis is told of no command
 
 
 def test_a_check_whose_tests_are_asked_in_another_shape_runs_nothing(website, clone_from, steps):
@@ -463,3 +583,49 @@ def test_the_website_hands_its_test_machines_to_its_worker(tmp_path):
     finally:
         shutil.rmtree(w, ignore_errors=True)
 
+
+
+# ---------------------------------------------------------------------------- the result card's tests line
+def _rd(state: str, why: str = "Why.", fix: str = "Fix.", exist: bool = True) -> dict:
+    """The parts of readiness.json the card's line reads: the release decision's `tests` criterion and the check
+    `tests-exist`."""
+    return {"release": {"criteria": [{"id": "deps", "state": "passed"},
+                                     {"id": "tests", "state": state, "why": why, "fix": fix}]},
+            "categories": [{"id": "testing", "checks": [{"id": "tests-exist", "status": "pass" if exist else "fail"}]}]}
+
+
+@pytest.mark.parametrize(("rd", "trace", "line"), [
+    (_rd("passed", "They passed."), {"ran": True}, {"state": "passed", "why": "They passed.", "fix": ""}),
+    (_rd("failed"), {"ran": True}, {"state": "failed", "why": "Why.", "fix": "Fix."}),
+    # not run: the reason the run recorded, Lantern's sentence
+    (_rd("missing"), {"ran": False, "unavailable": "The machines are off."},
+     {"state": "not run", "why": "The machines are off.", "fix": "Fix."}),
+    # not run because there are none: the decision's words say which tests to write
+    (_rd("missing", "The project has no tests.", exist=False), {"ran": False, "unavailable": "Nothing found."},
+     {"state": "not run", "why": "The project has no tests.", "fix": "Fix."}),
+    # they ran and did not end by themselves: no result
+    (_rd("missing", "Stopped at the time limit."), {"ran": True, "timed_out": True},
+     {"state": "no result", "why": "Stopped at the time limit.", "fix": "Fix."}),
+    # a reason of another shape is not shown; the decision's words are
+    (_rd("missing"), {"ran": False, "unavailable": ["not", "text"]}, {"state": "not run", "why": "Why.", "fix": "Fix."})])
+def test_the_cards_tests_line_is_said_in_the_release_decisions_words(rd, trace, line):
+    assert worker_mod.tests_line(rd, {"trace": trace}) == line
+
+
+@pytest.mark.parametrize(("rd", "run"), [
+    (_rd("passed"), {}),                                    # the check asked for no tests: no line
+    (_rd("passed"), {"trace": None}), (_rd("passed"), {"trace": "ran"}), (_rd("passed"), []),
+    ({}, {"trace": {"ran": True}}), ([], {"trace": {"ran": True}}),
+    ({"release": {"criteria": "tests"}}, {"trace": {"ran": True}}),
+    ({"release": {"criteria": [{"id": "tests", "state": "unknown"}]}}, {"trace": {"ran": True}}),
+    ({"release": [{"id": "tests", "state": "passed"}]}, {"trace": {"ran": True}})])
+def test_no_tests_line_where_there_is_none_to_say(rd, run):
+    assert worker_mod.tests_line(rd, run) is None
+
+
+def test_the_cards_tests_line_is_cut_short_and_on_one_line():
+    long = "word " * 400
+    line = worker_mod.tests_line(_rd("failed", "a\nb\t c", long), {"trace": {"ran": True}})
+    assert line["why"] == "a b c" and len(line["fix"]) == worker_mod.MOST_TESTS_WORDS
+    assert worker_mod.tests_line(_rd("failed", 7, ["x"]), {"trace": {"ran": True}}) == {"state": "failed", "why": "",
+                                                                                         "fix": ""}

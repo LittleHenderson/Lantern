@@ -355,7 +355,7 @@ apps. A check whose tests were asked for has them packed on the website first, b
 libraries they need are fetched ready-built for the machine's Python 3.12 on Linux (none is built from its source),
 from the stores `LANTERN_STORE_PYTHON` and `LANTERN_STORE_NPM` name where the website sets them, else from pypi.org and
 registry.npmjs.org; then the archive goes to one of these machines and the analysis reads the machine's result
-(`docs/api.md`, "A check's tests"). Nothing of the website asks for a check's tests yet (step 6), and the machines stay
+(`docs/api.md`, "A check's tests"). A person asks for a check's tests on the website once they have agreed to its words (step 6), and the machines stay
 off until both of these are set on the website:
 
     LANTERN_CLOUD_TEST_MACHINES_KEY     # a secret: an organization key of lantern-runs, never shown or pasted

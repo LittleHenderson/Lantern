@@ -9,8 +9,28 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- A person can have a website check run their tests, once they have agreed to where the tests run (a firm pass or
+  fail, stage 3, step 6). The words come from the server and are the test machine's program's own (`GET /v1/tests`,
+  `runner.ask()`: where the tests run and what that machine keeps them from, where their libraries are fetched from,
+  and one fingerprint of both); each part of them rests on a wall the program puts up (`runner.walls()`), and the
+  program starts no test where one of those walls does not stand. The person's yes is kept for their account with
+  that fingerprint (`POST /v1/tests/consent`; "Take it back" in Settings), so words that change are asked again. A
+  check asks for its tests by link (`POST /v1/repos`, `tests`) or by upload (`POST /v1/uploads?tests=`, read before a
+  byte of the body): `true` for the tick box, or the command, its folder, the minutes and the memory, in the shape the
+  test machine takes; it is refused while the test machines are off (409), until the yes (412) and in another shape
+  (400). Where a check names no command, the packing step finds the one the project holds (`runner prepare --find`);
+  where the project has no tests, or none Lantern starts on a test machine, no machine is made and the result card says
+  why (with no tests: which to write first). Every step of a check is kept with the time it began (`steps`), and the
+  result card has a line for the tests: passed, failed, not run or no result, with why and what to do
+  (`summary.tests`, `worker.tests_line`). On the page: one tick line in Simple, shown only where the test machines are
+  on; the sheet with the server's words and no words of the page's own; the minutes and the memory in Advanced; each
+  step with its time; the card's tests line; answers on the help page. A store address the website names for libraries
+  is shown by its host alone, and one with any user part in it, an empty one too, is refused. Tests:
+  `tests/test_cloud_test_ask.py` (59), 24 more in `tests/test_cloud_test_runs.py` and 9 more in
+  `tests/test_runner_prepare.py`: on the code before, 87 of these 92 failed, and the 5 that passed check the walls of
+  the test machine's program that the words rest on.
 - A website check's tests run on a test machine made for that check, and nowhere else (a firm pass or fail, stage 3,
-  step 5; nothing of the website asks for a check's tests yet: step 6 gives a person the way). A check that asks for
+  step 5; how a person asks for them is the entry above). A check that asks for
   its tests (the command, the folder, the minutes and the memory, checked by the test machine's own rules when the run
   starts) has them packed by a step of the check's own user: the libraries they need are fetched ready-built for the
   machine's Python 3.12 on Linux (none is built from its source for it), from the stores the website names, and

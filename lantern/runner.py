@@ -62,6 +62,7 @@ import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -539,6 +540,40 @@ def walls() -> list[dict]:
     return rows
 
 
+# ---------------------------------------------------------------------------- what a person agrees to first
+# Before a person's first check of the website that runs their tests (a firm pass or fail, stage 3, step 6), the
+# website shows these words and starts such a check only after their yes (`lantern_cloud.app`, `/v1/tests`). They are
+# this program's, as the walls they speak of are: no test runs on a machine where one of `walls()` does not stand.
+# `tests/test_cloud_test_ask.py` ties each part to its wall: a wall taken away, or a new one, changes the words.
+MACHINE_ASK = ("Your tests run on a test machine made for this check alone, at the company that hosts Lantern: it gets "
+               "a copy of your code and the libraries your tests need, runs the tests as an ordinary user in a network "
+               "of their own with no other computer on it, within the minutes and memory you choose, hands back only "
+               "their result and their output, and is removed when they end.")
+
+
+def libraries_ask() -> str:
+    """Where the website fetches the tests' libraries from, named by host only (`libraries.Store`: the website's own
+    setting, else the official stores), and that none is built from its source for the machine (`NO_BUILD`)."""
+    hosts = []
+    for language, words in (("python", "Python"), ("node", "JavaScript")):
+        try:
+            host = libraries.Store(language).host
+        except sandbox.Unavailable:     # a setting no fetch would take: the fetch says so in the check
+            host = ""
+        hosts.append(f"{host or 'the store the website names'} ({words})")
+    return (f"The libraries your tests need are fetched for them from {hosts[0]} or {hosts[1]}, ready-built for that "
+            "machine; a library that would have to be built from its source is not built, and the tests then do not "
+            "run.")
+
+
+def ask() -> dict:
+    """The words a person agrees to before their first check with tests (`ask`, `libraries`) and their fingerprint
+    (`digest`): a yes is kept for these words and asked again when they change."""
+    libs = libraries_ask()
+    return {"ask": MACHINE_ASK, "libraries": libs,
+            "digest": hashlib.sha256(f"{MACHINE_ASK}\n{libs}".encode("utf-8")).hexdigest()}
+
+
 def _commit() -> str:
     from . import _build
     return _build.COMMIT if isinstance(_build.COMMIT, str) and re.fullmatch(r"[0-9a-f]{40}", _build.COMMIT) else ""
@@ -838,7 +873,7 @@ _FLAGS = ("timed_out", "over_memory", "over_processes", "own_network", "own_sock
           "traced", "cancelled")
 
 
-def handed(path: Path, repo: Path, command: list[str], cwd: str = "") -> dict:
+def handed(path: Path, repo: Path, command: list[str] | None, cwd: str = "") -> dict:
     """The result of a check's tests that its test machine ran (the website keeps the machine's result, with what it
     says of the machine, in a file of the check's own: `path`), read by its shape for this check's analysis of
     `repo`: the result `sandbox.run` gives, for `trace.merge_trace` and `run.json`, with `time_limit` (seconds),
@@ -875,7 +910,9 @@ def handed(path: Path, repo: Path, command: list[str], cwd: str = "") -> dict:
         language = _machine_language(check_said.get("command"))
     except ValueError:
         raise bad from None
-    if check_said["command"] != list(command):
+    # `command` None: the check named no command and its packing step found none to run (`prepare(find=True)`), so
+    # no result of a machine can be this check's.
+    if command is None or check_said["command"] != list(command):
         raise NotRun("The test machine ran another command than this check's, so the tests' result was not used.")
     if check_said.get("cwd") != cwd:
         raise NotRun("The test machine ran the tests in another folder of the project than this check's, so the "
@@ -919,7 +956,7 @@ def handed(path: Path, repo: Path, command: list[str], cwd: str = "") -> dict:
 
 
 def prepare(project: Path, out: Path, words: list[str], cwd: str = "", minutes: int = 10, memory: int = 2048,
-            log=print, cancel=None) -> dict:
+            log=print, cancel=None, find: bool = False) -> dict:
     """A check's tests made ready for its test machine, as a step of the check's own user on the website. The folder
     `out` is made here (it must not be there) and gets the archive the machine takes (`ARCHIVE`: the settings, the
     project and the libraries it names, fetched for the machine) and what was done (`PREPARED`, of `prepared`'s
@@ -930,10 +967,13 @@ def prepare(project: Path, out: Path, words: list[str], cwd: str = "", minutes: 
     its command needs (`libraries.plan(bare=True)`); packages a project brought (`node_modules`) are left out, and
     the fetched ones go to the machine in their place. Where the machine would not run the tests (a command or a
     folder it does not take) or the libraries cannot be had for it, nothing is packed and the record says why
-    (`not_run`). `cancel` (a threading.Event) stops a fetch under way."""
+    (`not_run`). `cancel` (a threading.Event) stops a fetch under way. `find`: the check names no command (the
+    website's tick box), and the command and its folder are found in the project as the app finds them
+    (`sandbox.detect`; `words` and `cwd` are then empty); a project with no tests, or none Lantern knows how to
+    start, is packed for no machine (`NO_TESTS`, `NO_WAY`)."""
     project, out = Path(project), Path(out)
     out.mkdir(mode=0o700)
-    said = _prepare(project, out, list(words), cwd, minutes, memory, log, cancel or threading.Event())
+    said = _prepare(project, out, list(words or ()), cwd, minutes, memory, log, cancel or threading.Event(), find)
     if said["state"] != "packed":
         _gone(out / ARCHIVE)                # what was begun of it is no archive of this check
         log(f"prepare: nothing was packed for the test machine: {said['why_not']}")
@@ -941,7 +981,42 @@ def prepare(project: Path, out: Path, words: list[str], cwd: str = "", minutes: 
     return said
 
 
-def _prepare(project: Path, out: Path, words: list[str], cwd: str, minutes: int, memory: int, log, cancel) -> dict:
+NO_TESTS = ("Lantern found no tests in the project, so no test machine was started. Write tests for the most important "
+            "flows first (sign-in, payments, changes to data).")
+NO_WAY = ("Lantern found tests in the project but no way it starts them on a test machine: it starts Python tests with "
+          "pytest, and JavaScript tests with the test script of package.json, Jest, Vitest or Mocha. So no test "
+          "machine was started.")
+
+
+def _found(project: Path) -> tuple[list[str], str, str]:
+    """The test command of a check that names none, and the folder it starts in, found in the project the way the
+    app finds them (`sandbox.detect`): (words, cwd, ""), or ([], "", why) where there is nothing to start. Tests of a
+    language the machine does not run come back as found, so the machine's own rule says so (`settings`). Otherwise
+    a project with no test files, by the rule the release decision counts them with (`readiness.test_files`), gets
+    no machine: its decision says "The project has no tests" whatever a machine would have run."""
+    if project.is_symlink() or not project.is_dir():
+        return [], "", "The project to pack for the test machine is not a folder, so nothing was run."
+    found = sandbox.detect(project)
+    words, cwd = sandbox.split(found.get("command") or ""), found.get("cwd") or ""
+    cwd = "" if cwd == "." else cwd
+    if found.get("supported") and found.get("language") not in ("python", "node"):
+        return words, cwd, ""
+    from . import readiness
+    if not readiness.test_files(readiness.Repo(project))[1]:
+        return [], "", NO_TESTS
+    if not found.get("supported") or not words:
+        return [], "", NO_WAY
+    if words in (["pnpm", "test"], ["yarn", "test"]):
+        words = ["npm", "test"]     # the machine has npm, which runs the same test script of package.json
+    return words, cwd, ""
+
+
+def _prepare(project: Path, out: Path, words: list[str], cwd: str, minutes: int, memory: int, log, cancel,
+             find: bool = False) -> dict:
+    if find:
+        words, cwd, why = _found(project)
+        if why:
+            return not_run(why)
     try:
         language = sandbox.check_command(words)
     except ValueError:
@@ -958,6 +1033,9 @@ def _prepare(project: Path, out: Path, words: list[str], cwd: str, minutes: int,
     except ValueError:
         return not_run("The folder the tests run in is not a folder of the project the test machine is handed, so "
                        "nothing was run.")
+    if find:        # written only once the settings and the folder were taken: words of the project's own files
+        log(f"prepare: the tests' command, found in the project: {shlex.join(words)}"
+            + (f" (in the folder {cwd})" if cwd else ""))
     try:
         found = libraries.plan(project, language, words, cwd, offline=False, bare=True)
     except sandbox.Unavailable as e:
@@ -1567,8 +1645,8 @@ def _pack(a) -> int:
 def _prepare_cli(a) -> int:
     words = list(a.command)
     try:
-        said = prepare(Path(a.project), Path(a.out), words, cwd=a.cwd, minutes=a.minutes, memory=a.memory,
-                       log=lambda line: print(line, flush=True))
+        said = prepare(Path(a.project), Path(a.out), words, cwd=a.cwd or "", minutes=a.minutes, memory=a.memory,
+                       log=lambda line: print(line, flush=True), find=a.find)
     except (OSError, ValueError) as e:
         print(f"not prepared: {type(e).__name__}: {_one_line(e, 300)}", file=sys.stderr)
         return 2
@@ -1609,12 +1687,17 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("out", help="a folder to make: the archive and what was done go in it")
     w.add_argument("--minutes", type=int, default=10)
     w.add_argument("--memory", type=int, default=2048)
-    w.add_argument("--cwd", default="")
+    w.add_argument("--cwd", default=None, help="the folder below the project's top the tests start in (none: the top)")
+    w.add_argument("--find", action="store_true", help="the check names no command: find it, and the folder it "
+                                                        "starts in, in the project")
     a = ap.parse_args(argv)
     # Until 2026-11-21 the command was the parser's last argument (`argparse.REMAINDER`), which also took every
     # setting written after the project and the folder: `prepare P OUT --minutes 3 -- CMD` packed `--minutes 3 --
     # CMD` as the command (found by the website's first run of the packing step, `tests/test_cloud_test_runs.py`).
-    if a.what in ("pack", "prepare") and not command:
+    if getattr(a, "find", False):
+        if command or a.cwd is not None:       # an empty folder given is a folder given too
+            ap.error("prepare --find: the command and its folder are found in the project, so neither is given")
+    elif a.what in ("pack", "prepare") and not command:
         ap.error(f"{a.what}: the test command goes after --")
     if a.what not in ("pack", "prepare") and command:
         ap.error(f"{a.what} takes no command")

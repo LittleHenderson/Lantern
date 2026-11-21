@@ -119,22 +119,32 @@ class ShutDown(RunFailed):
 def tests_asked(r: dict) -> dict | None:
     """What a check asked of its tests (`runs.tests`: the command, the folder below the project's top it starts in,
     its minutes and its memory), in the shape the test machine takes (`lantern.runner.settings`); None where the
-    check asked for none. `RunFailed` with the reason for a record of another shape: nothing of that check runs."""
+    check asked for none. A command and a folder that are both None: Lantern finds them in the project (the
+    website's tick box; `runner.prepare(find=True)`). `RunFailed` with the reason for a record of another shape:
+    nothing of that check runs."""
     asked = r.get("tests")
     if asked is None:
         return None
     if not isinstance(asked, dict) or set(asked) != TESTS_KEYS:
         raise RunFailed(TESTS_ODD)
+    probe = dict(asked)
+    if asked["command"] is None and asked["cwd"] is None:
+        probe.update(command=["python", "-m", "pytest"], cwd="")    # only the limits are the check's own to take
     try:
-        language = runner._machine_language(asked["command"])
+        language = runner._machine_language(probe["command"])
     except ValueError:
         language = "python"                         # `settings` says what is wrong with the command
     try:
-        runner.settings(json.dumps({"version": 1, **asked, "libraries": {"state": "none", "language": language}})
+        runner.settings(json.dumps({"version": 1, **probe, "libraries": {"state": "none", "language": language}})
                         .encode("utf-8"))
     except runner.Refused as e:
         raise RunFailed(str(e)) from None
     return {k: asked[k] for k in sorted(TESTS_KEYS)}
+
+
+def finds(asked: dict | None) -> bool:
+    """The check names no test command: Lantern finds it in the project."""
+    return asked is not None and asked["command"] is None
 
 
 def tests_words(asked: dict | None) -> list[str]:
@@ -371,8 +381,11 @@ class Worker:
                 line = line.replace(p + os.sep, "").replace(p, "")
             self.logs.add(rid, line)
 
+        steps: list[dict] = []          # every step with the time it began, for the website's progress
+
         def stage(key: str) -> None:
-            self.store.update_run(rid, stage=STAGES[key])
+            steps.append({"key": key, "at": _now()})
+            self.store.update_run(rid, stage=STAGES[key], steps=steps)
             log("· " + STAGES[key])
 
         start = time.monotonic()
@@ -410,16 +423,18 @@ class Worker:
                 if not audits.is_file():
                     log("the dependency audit did not finish; the report will say so")
                     audits = None
-            handed = None
+            handed, used = None, None
             if asked is not None:
-                handed, took = self._tests(rid, root, repo, asked, log, stage)
+                handed, took, used = self._tests(rid, root, repo, asked, log, stage)
                 start += took       # the tests have limits of their own; the check's own minutes are for its own steps
             stage("analyze")
             out = tmp / "out"
             out.mkdir()
             # With the audit file in hand the analysis is "online" as far as the report and `lantern verify` are
             # concerned (dependencies were checked); it still has no network, and reads the audits from the file.
-            cmd = self.analyze_cmd(repo, out, r["privacy"], offline=audits is None) + tests_words(asked)
+            # `used`: the command the machine was handed (the one the packing step found, where the check named
+            # none); None where there was none to hand, and the analysis then reads only why from the file.
+            cmd = self.analyze_cmd(repo, out, r["privacy"], offline=audits is None) + tests_words(used)
             rc, output, timed_out = self._jailed(rid, root, cmd, cwd=tmp, net=False, log=log,
                                                  timeout=self._left(start), audits=audits,
                                                  extra={"LANTERN_TESTS_FROM": str(handed)} if handed else None)
@@ -489,24 +504,27 @@ class Worker:
         return self.uploads / f"{rid}.zip"
 
     # ------------------------------------------------------------------ the check's tests, on a test machine
-    def _tests(self, rid: str, root: Path, repo: Path, asked: dict, log, stage) -> tuple[Path, float]:
+    def _tests(self, rid: str, root: Path, repo: Path, asked: dict, log, stage) -> tuple[Path, float, dict | None]:
         """The tests a check asked for, on a test machine made for that check and removed after it (a firm pass or
         fail, stage 3, step 5). Returns the file of the machine's result for the analysis, or of why the tests did
-        not run there (`_hand`), and the seconds this took."""
+        not run there (`_hand`), the seconds this took, and the settings the machine was handed (`_on_a_machine`)."""
         began = time.monotonic()
+        used: dict = {} if finds(asked) else dict(asked)
         try:
-            result = self._on_a_machine(rid, root, repo, asked, log, stage)
+            result = self._on_a_machine(rid, root, repo, asked, log, stage, used)
             if self.stopping.is_set():
                 raise ShutDown()
-            return _hand(root, result), time.monotonic() - began
+            return _hand(root, result), time.monotonic() - began, used or None
         except NotPlain:
             raise RunFailed(NOT_PLAIN) from None
 
-    def _on_a_machine(self, rid: str, root: Path, repo: Path, asked: dict, log, stage) -> dict:
+    def _on_a_machine(self, rid: str, root: Path, repo: Path, asked: dict, log, stage, used: dict) -> dict:
         """The libraries the project names fetched for the test machine and the project packed with them, by a step
         of the check's own user with the network (`lantern.runner prepare`, as the audits get it); the archive read
         from that step's folder held open, never through a link, into a folder of the service's own; handed to a
-        test machine (`machines.Machines.run`) and removed. The machine's result, or why the tests were not run."""
+        test machine (`machines.Machines.run`) and removed. The machine's result, or why the tests were not run.
+        Where the check names no command (`finds`), the packing step finds it, and `used` gets the settings the
+        machine was handed, which the analysis is told of; it stays empty where none was found."""
         if self.machines is None:
             log("tests   " + MACHINES_OFF)
             return runner.not_run(MACHINES_OFF)
@@ -514,7 +532,8 @@ class Worker:
         tmp = root / "tmp"
         pack = tmp / "pack"
         cmd = programs.python("lantern.runner", "prepare", str(repo), str(pack), "--minutes", str(asked["minutes"]),
-                              "--memory", str(asked["memory"]), f"--cwd={asked['cwd']}", "--", *asked["command"])
+                              "--memory", str(asked["memory"]),
+                              *(["--find"] if finds(asked) else [f"--cwd={asked['cwd']}", "--", *asked["command"]]))
         # The stores the libraries come from are the website's own setting (`lantern.libraries.VARIABLES`), else the
         # official ones; never the project's.
         stores = {v: os.environ[v] for v in libraries.VARIABLES.values() if os.environ.get(v)}
@@ -536,8 +555,11 @@ class Worker:
                 return runner.not_run(PREPARE_FAILED)
             if said["state"] == "not_run":
                 return said                  # the packing step's own words: what the project names, and why
-            if any(said[k] != asked[k] for k in TESTS_KEYS):
+            # What the step packed is what was asked; where the check named no command, the step's own find
+            # stands for the command and its folder, and the limits are still the check's.
+            if any(said[k] != asked[k] for k in (("minutes", "memory") if finds(asked) else TESTS_KEYS)):
                 return runner.not_run(PREPARE_FAILED)
+            used.update({k: said[k] for k in TESTS_KEYS})
             most = self.machines.archive_mb << 20
             try:
                 size = os.stat(runner.ARCHIVE, dir_fd=fd, follow_symlinks=False).st_size
@@ -1112,6 +1134,7 @@ def _summary(out: Path) -> dict:
         except (OSError, ValueError):
             return {}
     rd, sec, g = load("readiness.json"), load("security.json"), load("graph.json")
+    tests = tests_line(rd, load("run.json"))
     counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else {}
     meta = g.get("meta") if isinstance(g.get("meta"), dict) else {}
     def num(v):
@@ -1129,7 +1152,36 @@ def _summary(out: Path) -> dict:
             "release": decision if isinstance(decision, str) and decision in ("Blocked", "Incomplete", "Passed") else None,
             "shape": shape[:80] if isinstance(shape, str) else None,
             "counts": {k: count(counts.get(k)) for k in ("critical", "high", "medium", "low")},
-            "files": num(meta.get("files")), **lane_summary(sec, meta)}
+            "files": num(meta.get("files")), **lane_summary(sec, meta), **({"tests": tests} if tests else {})}
+
+
+TESTS_SAID = ("passed", "failed", "not run", "no result")
+MOST_TESTS_WORDS = 600      # characters of each sentence of the card's tests line
+
+
+def tests_line(rd: dict, run: dict) -> dict | None:
+    """The result card's line about a check's tests (a firm pass or fail, stage 3, step 6): {state, why, fix}, the
+    state one of `TESTS_SAID` (passed, failed, not run, or no result: they ran and did not end by themselves, or
+    something they tried was refused), in the release decision's own words (its `tests` criterion) and, for tests
+    that were not run, the reason the run recorded (`trace.unavailable`: Lantern's sentence) unless the project has
+    no tests, where the decision's words say which tests to write. None where the check asked for no tests (its
+    run.json has no `trace`). Only values of the expected shape are kept: the files come from a stranger's check."""
+    tr = run.get("trace") if isinstance(run, dict) and isinstance(run.get("trace"), dict) else None
+    rel = rd.get("release") if isinstance(rd, dict) and isinstance(rd.get("release"), dict) else {}
+    crit = next((c for c in (rel.get("criteria") if isinstance(rel.get("criteria"), list) else [])
+                 if isinstance(c, dict) and c.get("id") == "tests"), None)
+    if tr is None or crit is None or crit.get("state") not in ("passed", "failed", "missing"):
+        return None
+
+    def words(v) -> str:
+        return " ".join(v.split())[:MOST_TESTS_WORDS] if isinstance(v, str) else ""
+    exist = any(isinstance(k, dict) and k.get("id") == "tests-exist" and k.get("status") == "pass"
+                for c in (rd.get("categories") if isinstance(rd.get("categories"), list) else [])
+                if isinstance(c, dict) for k in (c.get("checks") if isinstance(c.get("checks"), list) else []))
+    state = {"passed": "passed", "failed": "failed"}.get(crit["state"],
+                                                         "not run" if tr.get("ran") is False else "no result")
+    why = words(tr.get("unavailable")) if state == "not run" and exist else ""
+    return {"state": state, "why": why or words(crit.get("why")), "fix": "" if state == "passed" else words(crit.get("fix"))}
 
 
 LANE_KEYS = ("browser", "frontend", "server", "data")

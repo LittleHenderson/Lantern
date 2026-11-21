@@ -34,15 +34,18 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from lantern import learn, scope
+from lantern import runner as test_runner
+from lantern import sandbox as test_sandbox
 
 from . import __version__, apart
 from .cleanup import Cleanup
 from .identity import GatewayUnavailable, Identity
 from .idle import IdleExit
 from .settings import Settings
-from . import site
+from . import machines, site
 from .store import FINISHED, LimitReached, Store
-from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, backfill_lanes, is_upload
+from .worker import (ACTIVE_EXPLAIN, HINTS, MACHINES_OFF, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, RunFailed,
+                     Worker, backfill_lanes, is_upload, tests_asked)
 
 log = logging.getLogger("lantern_cloud")
 PRIVACY = {"structure", "full"}
@@ -57,6 +60,12 @@ VIEWABLE = {"report.html": "report.html", "evidence.html": "evidence.html", "bad
             "findings.json": "security.json", "graph.json": "graph.json", "readiness.json": "readiness.json"}
 FULL_NOTICE = ("Short source snippets of your code will be stored on Lantern's server so the report can show them. "
                "Send stored_snippets_ok: true to agree, or choose privacy \"structure\" (no code kept).")
+# A check's tests on a test machine (a firm pass or fail, stage 3, step 6): the words are the test machine's program's
+# own (`lantern.runner.ask`); these say only what a request is missing.
+TESTS_FIELDS = frozenset(("command", "cwd", "minutes", "memory"))
+TESTS_CONSENT_NEEDED = "Before a check runs your tests, read where they run and agree."
+TESTS_WORDS_CHANGED = "The words about test machines changed since this page showed them. Read them again."
+TESTS_SHAPE = 'tests is true, or a table of "command" (text or a list of words), "cwd", "minutes" and "memory".'
 
 
 def _engine_version() -> str | None:
@@ -181,6 +190,9 @@ def run_view(r: dict, logs=None) -> dict:
             "shared": bool(r["share_slug"]), "log_tail": tail, "workspace": r.get("workspace"),
             "hint": HINTS.get(r["error"]),   # "upload" / "connect": what the website offers in place of the link
             "step": next((k for k, v in STAGES.items() if v == r["stage"]), None),
+            # each step with the time it began (the progress shows how long each took), and what the check asked
+            # of its tests (None: none; a command of None: Lantern finds it in the project)
+            "steps": r.get("steps") if isinstance(r.get("steps"), list) else [], "tests": r.get("tests"),
             "explain": {"status": r.get("explain_status"), "error": r.get("explain_error"),
                         "summary": r.get("explain_summary"),
                         "log": logs.tail("x:" + r["id"], 12) if logs and r.get("explain_status") in ACTIVE_EXPLAIN else ""}}
@@ -324,7 +336,92 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         acc = who["account"]
         return {"account": acc.split(":", 1)[0], "label": who["label"],
                 "runs_today": store.runs_today(acc), "runs_active": store.active_runs(acc),
-                "limits": s.limits(), "connect_url": gh.install_url if gh else None}
+                "limits": s.limits(), "connect_url": gh.install_url if gh else None,
+                # whether a check here can run the person's tests (the page shows its tick line only then), and
+                # whether they agreed to the words about test machines as they are now (`/v1/tests`)
+                "tests": {"on": tm is not None, "agreed": tests_agreed(acc)}}
+
+    # ---- a check's tests, on a test machine made for it (a firm pass or fail, stage 3, step 6) ----
+    def tests_agreed(account: str) -> bool:
+        """The person agreed to the words about test machines as they are now: a change of the words (another wall,
+        another store of libraries) asks again."""
+        return store.tests_consent(account) == test_runner.ask()["digest"]
+
+    def tests_limits() -> dict:
+        """What a check may ask of its tests: minutes, and megabytes of memory up to what the largest test machine
+        holds beside its own (`machines.memory_for`)."""
+        most = min(test_sandbox.MEGABYTES[1], (tm.most_memory if tm is not None else machines.MOST_MB) - machines.ROOM_MB)
+        low = test_sandbox.MEGABYTES[0]
+        return {"minutes": {"default": test_sandbox.WALL_CLOCK // 60, "least": test_sandbox.MINUTES[0],
+                            "most": test_sandbox.MINUTES[1]},
+                "memory": {"default": max(low, min(test_sandbox.MEMORY_MB, most)), "least": low, "most": most}}
+
+    @app.get("/v1/tests")
+    async def tests_state(request: Request):
+        """Whether this website runs a check's tests (its test machines are switched on, else `why_off`), the words a
+        person agrees to before the first such check, written by the test machine's program whose walls make them
+        true (`lantern.runner.ask`: `ask`, `libraries` and their `digest`), whether this person agreed to these very
+        words, and what a check may ask of its tests."""
+        who = await signed_in(request)
+        return {"on": tm is not None, "why_off": "" if tm is not None else MACHINES_OFF,
+                "agreed": tests_agreed(who["account"]), **test_runner.ask(), **tests_limits()}
+
+    @app.post("/v1/tests/consent")
+    async def tests_consent(payload: dict, request: Request):
+        """{agree: true, digest}: the person read the words `/v1/tests` gave and agrees; refused (409) when the words
+        changed since, so a yes is only ever to the words a page printed. {agree: false} takes the yes back."""
+        who = await signed_in(request)
+        on = payload.get("agree")
+        if not isinstance(on, bool):
+            raise HTTPException(400, "agree is true or false.")
+        words = test_runner.ask()
+        if on and not (isinstance(payload.get("digest"), str) and hmac.compare_digest(payload["digest"], words["digest"])):
+            raise HTTPException(409, TESTS_WORDS_CHANGED)
+        store.set_tests_consent(who["account"], words["digest"] if on else None)
+        return {"agreed": on, **words}
+
+    def tests_for(raw, who: dict) -> dict | None:
+        """What a new check asks of its tests, from the request's `tests`: absent, null or false for none; true for
+        the tick box (Lantern finds the command and the folder it starts in, with the usual limits); or a table of
+        `command` (text or a list of words), `cwd`, `minutes` and `memory`, each of which may be left out. In the
+        shape `runs.tests` keeps (`worker.tests_asked`). 409 where this website runs no test machines, 412 until the
+        person agreed to the words about them as they are now, 400 for what the test machine does not take."""
+        if raw is None or raw is False:
+            return None
+        if tm is None:
+            raise HTTPException(409, MACHINES_OFF)
+        if not tests_agreed(who["account"]):
+            raise HTTPException(412, TESTS_CONSENT_NEEDED)
+        raw = {} if raw is True else raw
+        if not isinstance(raw, dict) or not set(raw) <= TESTS_FIELDS:
+            raise HTTPException(400, TESTS_SHAPE)
+        command, cwd = raw.get("command"), raw.get("cwd")
+        if command is None or command == "":
+            if cwd not in (None, ""):
+                raise HTTPException(400, "A folder for the tests goes with a test command; with neither, Lantern "
+                                         "finds both in the project.")
+            command, cwd = None, None
+        else:
+            if isinstance(command, str):
+                try:
+                    command = test_sandbox.split(command)
+                except ValueError:
+                    raise HTTPException(400, "The test command has a quote that is not closed.") from None
+            if cwd is None:
+                cwd = ""
+            if not (isinstance(command, list) and all(isinstance(w, str) for w in command) and isinstance(cwd, str)):
+                raise HTTPException(400, TESTS_SHAPE)
+        limits = tests_limits()
+        asked = {"command": command, "cwd": cwd, "minutes": raw.get("minutes", limits["minutes"]["default"]),
+                 "memory": raw.get("memory", limits["memory"]["default"])}
+        try:
+            tests_asked({"tests": asked})
+            machines.memory_for(asked["memory"], tm.most_memory)
+        except RunFailed as e:
+            raise HTTPException(400, str(e)) from None
+        except ValueError as e:
+            raise HTTPException(400, f"{str(e)[:1].upper()}{str(e)[1:]}.") from None
+        return asked
 
     # Your repositories on GitHub, so a person picks one instead of finding and pasting its link (2026-11-17). Kept a
     # few minutes per account in memory only: GitHub allows a server few anonymous questions an hour.
@@ -397,19 +494,24 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 host, link = _host_of(payload.get("link"), s.hosts()), payload["link"].strip()
         except ValueError as e:
             raise HTTPException(400, str(e)) from None
+        tests = tests_for(payload.get("tests"), who)
         try:
             rid = store.create_run(who["account"], link, host, privacy, per_day=s.runs_per_day,
-                                   global_per_day=s.global_runs_per_day, per_user_active=s.per_user_active)
+                                   global_per_day=s.global_runs_per_day, per_user_active=s.per_user_active,
+                                   tests=tests)
         except LimitReached as e:
             raise HTTPException(429, str(e)) from None
         worker.submit(rid)
         return run_view(store.run(rid))
 
     @app.post("/v1/uploads", status_code=202)
-    async def upload_run(request: Request, name: str = "app", privacy: str | None = None, snippets_ok: str = "0"):
+    async def upload_run(request: Request, name: str = "app", privacy: str | None = None, snippets_ok: str = "0",
+                         tests: str | None = None):
         """Check an app uploaded from the person's computer: the request body is a .zip (at most the clone size cap).
         It waits in the uploads folder until its run starts, is then moved into the run's temp folder and unpacked
-        by `lantern.archive` inside the restricted process, and is gone when the run ends, like a clone."""
+        by `lantern.archive` inside the restricted process, and is gone when the run ends, like a clone. `tests`:
+        what the check asks of its tests, written as JSON (`true`, or the table `/v1/repos` takes), read before a
+        byte of the body is."""
         who = await signed_in(request)
         if worker is None:
             raise HTTPException(503, "Runs are paused on this server.")
@@ -418,6 +520,11 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(400, 'privacy is "structure" (no code kept) or "full" (short snippets kept).')
         if privacy == "full" and snippets_ok != "1":
             raise HTTPException(400, FULL_NOTICE)
+        try:
+            wanted = None if tests is None else json.loads(tests)
+        except (ValueError, RecursionError):
+            raise HTTPException(400, TESTS_SHAPE) from None
+        asked = tests_for(wanted, who)
         label = "".join(ch for ch in str(name) if ch.isalnum() or ch in "._-")[:80].strip(".") or "app"
         cap = s.clone_max_mb << 20
         too_big = f"The upload is larger than {s.clone_max_mb} MB. Leave out folders like node_modules, .git and build output."
@@ -443,7 +550,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 raise HTTPException(400, "That is not a .zip file. Choose your app's folder, or a .zip of it.")
             try:
                 rid = store.create_run(who["account"], UPLOAD_PREFIX + label, "upload", privacy, per_day=s.runs_per_day,
-                                       global_per_day=s.global_runs_per_day, per_user_active=s.per_user_active)
+                                       global_per_day=s.global_runs_per_day, per_user_active=s.per_user_active,
+                                       tests=asked)
             except LimitReached as e:
                 raise HTTPException(429, str(e)) from None
             part.replace(worker.upload_path(rid))

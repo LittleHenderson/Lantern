@@ -128,7 +128,8 @@ class Store:
             except ValueError:
                 parts = host = port = None
             here = host in _stores.LOCAL
-            if not host or parts.username or parts.query or parts.fragment or parts.scheme not in ("https", "http") \
+            # a user part, even an empty name before a colon (`https://:x@host`), is refused: the host alone is shown
+            if not host or "@" in parts.netloc or parts.query or parts.fragment or parts.scheme not in ("https", "http") \
                     or (parts.scheme == "http" and not here) or not said.isprintable() or len(said) > 300:
                 raise Unavailable(f"the store named in {VARIABLES[language]} is not an address Lantern fetches from "
                                   "(https://…, or http:// on this computer), so no library was fetched")
