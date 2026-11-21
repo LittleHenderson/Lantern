@@ -84,9 +84,16 @@ with it: tests the kernel had stopped read as failed tests however long Docker w
 as the second source, for a container whose first process did not say it (a "false" is asked again for
 `OOM_WAIT_KILLED` seconds after a kill and `OOM_WAIT` after any other error; a kill that neither names reads
 as failed tests). A test that prints the line and ends with that result says of itself that it was stopped, and
-gains "Incomplete" where it would have had "Blocked", never a pass. On macOS the limit is put on the address
-space as before, and on Windows it is the job's limit for each process: there tests that go over fail in their
-own way, and are reported as failed.
+gains "Incomplete" where it would have had "Blocked", never a pass. On Windows (2026-11-20, a firm pass or fail,
+stage 4) the run's job counts it: the memory Windows has given the tests and everything they started, together,
+which counts memory a program asked for and never wrote (Linux does not count that; a test of each says so).
+Windows tells the job when they go over the limit, a message Windows promises to deliver for such a limit, and
+`_stream` then ends the run, which is said to be over its memory exactly as on Linux; a wall at twice the limit,
+and at least 1 GB above it, keeps a program that asks for very much at once from taking the computer's memory
+before that (`winjob.wall`), and a program refused there is said the same way where Windows tells of it, which it
+does not promise. Until then the job's limit was for each program alone: programs over it together were not
+stopped, a program over it alone was refused memory, and its tests were reported as failed (the same project read
+"Blocked" there and "Incomplete" on Linux). On macOS the limit is put on the address space as before.
 
 What the Python hook does with a project's own ways (2026-11-13; each was found by running Lantern's tests here):
 * **A guard the project brings itself.** Python calls audit hooks in the order they were added and the sandbox's
@@ -543,10 +550,11 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
         at = 2 if language == "python" else 1
         det[at:at] = _no_network_words(no_own, language)
     if sys.platform == "win32":
-        det.insert(1, f"inside a Windows job: {room} of memory for each process, and nothing it starts can leave the job")
-    if _LINUX:
-        det.append(f"{room} of memory for the tests and everything they start, counted together; tests that use "
-                   "more are stopped, which is neither a pass nor a failure")
+        det.insert(1, "inside a Windows job, which nothing it starts can leave")
+    if _LINUX or sys.platform == "win32":
+        det.append(f"{room} of memory for the tests and everything they start, counted together"
+                   + (" (what Windows has given them, written to or not)" if sys.platform == "win32" else "")
+                   + "; tests that use more are stopped, which is neither a pass nor a failure")
     if fetched:
         det.insert(1, fetched)
     if _LINUX and language in READ_WALL_FOR and landlock_abi() >= 1:
@@ -2645,7 +2653,9 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
     """Run, streaming each output line to `log`, and leave nothing behind: when the command ends, at the wall
     clock (`timeout`), when `cancel` (a threading.Event) is set and when `stop_all` is called, every process it
     started is ended too. Returns (result, output, stopped at the wall clock); the result is None when the command
-    was stopped, at the wall clock or because it was asked.
+    was stopped, at the wall clock or because it was asked, and `_jail.OVER_MEMORY` when the job that holds it said
+    its programs together went over their memory (Windows: the run is then stopped, as Linux's launcher stops it and
+    ends with that result; a job's `refused` says it was so, which a command that ends with that number does not).
 
     `job`: called before the process is made; what it returns holds the process (Windows: `winjob.Job`, which the
     process is put in before it runs). `ask`: seconds the command has to end what it started after SIGTERM, for a
@@ -2698,9 +2708,13 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         deadline, delay = time.monotonic() + timeout, 0.001
+        watch = getattr(held, "over_memory", None)     # Windows: the job says when its programs went over
         while not run.ended():
             if run.asked.is_set() or (cancel is not None and cancel.is_set()):
                 why = "asked"
+                break
+            if watch is not None and _watched(watch):
+                why = "memory"
                 break
             if time.monotonic() >= deadline:
                 why = "clock"
@@ -2723,13 +2737,30 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
     reader.join(timeout=5)
     if reader.is_alive():
         log("sandbox: something this run started still holds its output open")
-    return (None if why else proc.returncode), "\n".join(lines), why == "clock"
+    rc = None if why else proc.returncode
+    if why in ("", "memory") and getattr(held, "refused", False) is True:
+        # also when Windows said it as the command ended by itself; a run stopped at the wall clock or because it
+        # was asked was stopped for that, whatever the job says after
+        from . import _jail
+        rc = _jail.OVER_MEMORY
+    return rc, "\n".join(lines), why == "clock"
+
+
+def _watched(watch) -> bool:
+    """What the job that holds a run says of its memory (`winjob.Job.over_memory`). Lantern cannot say the tests
+    passed or failed where Windows does not answer it: the run is then stopped, and is not counted."""
+    try:
+        return watch()
+    except OSError as e:
+        raise Unavailable(f"Windows did not say whether the tests stayed within their memory ({e}), so what they "
+                          "did is not counted") from e
 
 
 def _windows_job(memory: int = MEMORY_MB):
-    """Windows: the Job Object a project's tests run in (`memory` megabytes for each process; every process in it
-    ends when the job is stopped or closed, and nothing started inside can leave it). None on other systems, where
-    `lantern._jail` does that work. `Unavailable` when Windows does not make it: the tests are then not run."""
+    """Windows: the Job Object a project's tests run in (`memory` megabytes for the tests and everything they start,
+    counted together, `winjob.Job`; every process in it ends when the job is stopped or closed, and nothing started
+    inside can leave it). None on other systems, where `lantern._jail` does that work. `Unavailable` when Windows
+    does not make it: the tests are then not run."""
     if sys.platform != "win32":
         return None
     from . import winjob
@@ -3354,14 +3385,21 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
                 f"closed now ({shut[0][:200]}{', ...' if len(shut) > 1 else ''}): a library that is only there "
                 "is not found by the tests")
     left: list[str] = []
-    rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=lambda: _windows_job(memory), cancel=cancel,
+    jobs: list = []                   # Windows: the job, which says whether its programs went over their memory
+
+    def job():
+        jobs.append(_windows_job(memory))
+        return jobs[-1]
+    rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=job, cancel=cancel,
                                     ask=_jail.ASK if _LINUX else 0.0, left=left)
     why = _unavailable(rc, output)
     if why:
         raise Unavailable(why)
     if os.name == "posix":
         left += _left_by_launcher(output)
-    over = os.name == "posix" and _over_memory(rc, output)
+        over = _over_memory(rc, output)
+    else:                             # the job's own word, not a number the tests may end with themselves
+        over = rc == _jail.OVER_MEMORY and any(getattr(j, "refused", False) is True for j in jobs)
     if over:        # stopped by the launcher, which had ended everything before it said so: no result of the tests' own
         rc = None
         log(_stopped(_over_words(memory), left, "every process it started was ended"))

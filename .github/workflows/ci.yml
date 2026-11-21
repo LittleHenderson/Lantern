@@ -408,10 +408,10 @@ jobs:
 
   windows-box:
     # The sealed box's tests for Windows alone, the older tests of what it lets a test do on this computer (its own
-    # servers and event loops, process pools, moving its files between its folders, the memory a run gets), and the
-    # behaviour checks' tests, which start apps in the box, so that what the box lets a project's tests and apps do
-    # here is known minutes in: GitHub hands out a job's log only once the job has ended, and the Windows job above
-    # takes about 50 minutes. That job runs these tests again with the whole suite.
+    # servers and event loops, process pools, moving its files between its folders, the memory a run gets, the job
+    # that holds a run), and the behaviour checks' tests, which start apps in the box, so that what the box lets a
+    # project's tests and apps do here is known minutes in: GitHub hands out a job's log only once the job has
+    # ended, and the Windows job above takes about 50 minutes. That job runs these tests again with the whole suite.
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -445,6 +445,10 @@ jobs:
           tests/test_sandbox_memory.py::test_the_same_programs_with_room_for_all_four_pass
           tests/test_sandbox_memory.py::test_the_whole_check_on_tests_that_use_too_much_memory_is_incomplete_not_blocked
           tests/test_sandbox_memory.py::test_tests_over_their_memory_limit_in_either_sandbox
+          tests/test_sandbox_safety.py::test_windows_the_tests_run_inside_a_job_with_the_memory_limit
+          tests/test_sandbox_safety.py::test_windows_the_real_job_ends_a_detached_grandchild_at_the_wall_clock
+          tests/test_sandbox_safety.py::test_windows_a_process_cannot_leave_the_job
+          tests/test_sandbox_safety.py::test_windows_no_test_runs_when_the_process_cannot_be_put_in_the_job
           tests/test_hook.py::test_the_line_for_a_hook_of_ones_own_runs_this_lantern_too
           tests/test_behave.py
         timeout-minutes: 20

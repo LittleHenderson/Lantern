@@ -9,6 +9,24 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The memory a run of a project's tests gets is counted on Windows as on Linux: for the tests and everything they
+  start, together, and tests that use more are stopped and said to be so, which reads as Incomplete, never as failed
+  tests. The run's job (`lantern/winjob.py`) has a notification limit for the memory Windows has given its programs,
+  of which Windows promises to tell the job, and a wall at twice the limit (and at least 1 GB above it) for a program
+  that asks for very much at once. Windows counts memory a program asked for and never wrote, which Linux does not,
+  and the sheet says so. Until then the job's limit was for each process alone: programs over it only together ran
+  on, and a program over it alone was refused memory, so its tests read as failed, and the same project read Blocked
+  on Windows where it read Incomplete on Linux. The tests of the memory a run gets now run on Windows too
+  (`tests/test_sandbox_memory.py`, one more: memory asked for and never written), and the four tests of the real job
+  run in the quick Windows job.
+- Tests that were skipped on Windows, gone through one by one: 613 of the 648 tests skipped in main's last Windows run
+  were skipped there only, for 64 reasons. Tests that make a link now ask the system whether a link can be made
+  (`tests/links_here.py`: `needs_links`, `needs_pipes`, `needs_long_paths`) instead of skipping on every Windows, so
+  GitHub's Windows machines, whose user may make links, run them (16 files); one more test removes links of each kind
+  on every system; process pools and moving a file between a test's own folders are checked in the sandbox there; the
+  test of a push hook starts its line with the shell git uses on Windows. What stays skipped there is skipped for a
+  reason Windows itself gives (no pipe among its files, the Linux launcher and its kernel walls, Docker), listed in
+  `docs/audit/TEST_PLAN.md` ("Tests that do not run on every system").
 - Completing the guard's coverage on Windows: a project's async tests, its tests that start a server of their own and
   call it, and the app `lantern behave` starts now run in the sandbox there, as at home. Windows gives the run no
   network of its own, so the guard's own rule decides there: a test may listen at this computer's own address,

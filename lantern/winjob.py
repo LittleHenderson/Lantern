@@ -1,17 +1,29 @@
 """The Windows Job Object the test sandbox runs a project's tests in, with every call checked.
 
 `lantern.sandbox` runs a project's own tests in a restricted process. On Windows the part of that restriction the
-operating system itself keeps is a Job Object: a memory limit for each process, and one handle through which every
-process the tests started, however deep, can be ended. Used by `sandbox._stream` like this:
+operating system itself keeps is a Job Object: the memory of the tests and of everything they started, counted
+together, and one handle through which every process the tests started, however deep, can be ended. Used by
+`sandbox._stream` like this:
 
-    job = Job()                    # CreateJobObjectW, SetInformationJobObject
+    job = Job(memory)              # CreateJobObjectW, CreateIoCompletionPort, SetInformationJobObject (three times)
     proc = subprocess.Popen(cmd, creationflags=SUSPENDED | ...)    # made, but it has not run one instruction
     job.take(proc.pid)             # AssignProcessToJobObject, then IsProcessInJob to see that it is so
     job.release(proc.pid)          # the process runs from here (ResumeThread on its thread)
     ...
+    job.over_memory()              # GetQueuedCompletionStatus: has Windows said the job went over its memory?
     job.stop()                     # TerminateJobObject: every process in the job, children of children too
     job.count()                    # how many are still there (0 once they are gone)
-    job.close()                    # CloseHandle, once
+    job.close()                    # what the port still holds is read, then CloseHandle, once for each handle
+
+The memory (a firm pass or fail, stage 4, 2026-11-20) is what Windows has given the job's programs together (their
+commit: memory a program asked for counts when it asks, written to or not). Windows tells the job's port when it
+goes over `memory`, a notification limit, whose message Windows promises to deliver; `sandbox._stream` then ends
+the run and says it was over its memory, never that its tests failed. Beneath that a wall (`wall`: twice the
+limit, and at least 1 GB above it) keeps a program that asks for very much at once from taking the computer's
+memory before the run is ended; Windows refuses such a request and tells the port where it can (it does not
+promise that message). Until then the limit was the job's limit for each process alone: tests whose programs went
+over it together were not stopped, and a program that went over it alone was refused memory, so its tests failed
+and the run read as failed.
 
 The process is put in the job before it runs, so nothing it starts is outside the job: a process started by a
 member of a job belongs to that job (the job does not allow "breakaway"). Until 2026-11-10 the process was put in
@@ -34,9 +46,19 @@ import ctypes
 SUSPENDED = 0x00000004
 
 KILL_ON_JOB_CLOSE = 0x00002000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-PROCESS_MEMORY = 0x00000100             # JOB_OBJECT_LIMIT_PROCESS_MEMORY
+PROCESS_MEMORY = 0x00000100             # JOB_OBJECT_LIMIT_PROCESS_MEMORY (not used since 2026-11-20)
+JOB_MEMORY = 0x00000200                 # JOB_OBJECT_LIMIT_JOB_MEMORY: the job's programs together
 BASIC_ACCOUNTING = 1                    # JobObjectBasicAccountingInformation
+ASSOCIATE_PORT = 7                      # JobObjectAssociateCompletionPortInformation
 EXTENDED_LIMIT = 9                      # JobObjectExtendedLimitInformation
+NOTIFICATION_LIMIT = 12                 # JobObjectNotificationLimitInformation
+# what Windows tells the port (GetQueuedCompletionStatus hands the message's number as "bytes transferred")
+MSG_PROCESS_MEMORY_LIMIT = 9            # JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT
+MSG_JOB_MEMORY_LIMIT = 10               # JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: a request refused at the wall
+MSG_NOTIFICATION_LIMIT = 11             # JOB_OBJECT_MSG_NOTIFICATION_LIMIT: over the one notification limit set here
+MEMORY_MESSAGES = (MSG_PROCESS_MEMORY_LIMIT, MSG_JOB_MEMORY_LIMIT, MSG_NOTIFICATION_LIMIT)
+WAIT_TIMEOUT = 258                      # what GetQueuedCompletionStatus says when the port holds nothing
+TOLERANCE_LOW = 1                       # ToleranceLow, ToleranceIntervalShort: valid values for fields not used here
 # what the calls below need of the process: assign (SET_QUOTA, TERMINATE), IsProcessInJob (QUERY_LIMITED_INFORMATION)
 PROCESS_RIGHTS = 0x0100 | 0x0001 | 0x1000
 THREAD_SUSPEND_RESUME = 0x0002
@@ -67,6 +89,19 @@ class ExtendedLimits(ctypes.Structure):
     _fields_ = [("Basic", _BasicLimits), ("Io", _IoCounters), ("ProcessMemoryLimit", ctypes.c_size_t),
                 ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
                 ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+
+class NotificationLimits(ctypes.Structure):
+    """JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION"""
+    _fields_ = [("IoReadBytesLimit", ctypes.c_uint64), ("IoWriteBytesLimit", ctypes.c_uint64),
+                ("PerJobUserTimeLimit", ctypes.c_int64), ("JobMemoryLimit", ctypes.c_uint64),
+                ("RateControlTolerance", ctypes.c_int32), ("RateControlToleranceInterval", ctypes.c_int32),
+                ("LimitFlags", _DWORD)]
+
+
+class PortLink(ctypes.Structure):
+    """JOBOBJECT_ASSOCIATE_COMPLETION_PORT"""
+    _fields_ = [("CompletionKey", ctypes.c_void_p), ("CompletionPort", _HANDLE)]
 
 
 class Accounting(ctypes.Structure):
@@ -108,7 +143,10 @@ class _Kernel32:
              ("Thread32First", _BOOL, [_HANDLE, ctypes.c_void_p]),
              ("Thread32Next", _BOOL, [_HANDLE, ctypes.c_void_p]),
              ("OpenThread", _HANDLE, [_DWORD, _BOOL, _DWORD]),
-             ("ResumeThread", _DWORD, [_HANDLE]))
+             ("ResumeThread", _DWORD, [_HANDLE]),
+             ("CreateIoCompletionPort", _HANDLE, [_HANDLE, _HANDLE, ctypes.c_size_t, _DWORD]),
+             ("GetQueuedCompletionStatus", _BOOL, [_HANDLE, ctypes.POINTER(_DWORD), ctypes.POINTER(ctypes.c_size_t),
+                                                   ctypes.POINTER(ctypes.c_void_p), _DWORD]))
 
     def __init__(self):
         dll = ctypes.WinDLL("kernel32", use_last_error=True)    # Windows only: this class is made nowhere else
@@ -122,22 +160,41 @@ class _Kernel32:
         return ctypes.get_last_error()
 
 
+def wall(memory: int) -> int:
+    """The bytes the job's programs together are refused beyond: twice the limit, and at least 1 GB above it, so that
+    a program that asks for much at once is stopped by the limit's message rather than refused by the wall."""
+    return max(2 * memory, memory + (1 << 30))
+
+
 class Job:
-    """One Job Object: `memory` bytes for each process in it, and every process ends when it is stopped or closed."""
+    """One Job Object: `memory` bytes for its programs together (Windows tells the job's port when they go over, and
+    refuses them beyond `wall(memory)`), and every process ends when it is stopped or closed."""
 
     def __init__(self, memory: int = 2 << 30, k32=None):
         self.k32 = k32 if k32 is not None else _Kernel32()
-        self.handle = None
+        self.handle = self.port = None
+        self.memory, self.refused = memory, False
         self.handle = self._need("CreateJobObjectW", self.k32.CreateJobObjectW(None, None))
         try:
+            # the port first, so that nothing Windows tells the job is lost
+            port = self.k32.CreateIoCompletionPort(INVALID_HANDLE, None, 0, 1)
+            self.port = self._need("CreateIoCompletionPort", port)
+            link = PortLink(None, self.port)
+            self._set("SetInformationJobObject", ASSOCIATE_PORT, link)
             info = ExtendedLimits()
-            info.Basic.LimitFlags = KILL_ON_JOB_CLOSE | PROCESS_MEMORY
-            info.ProcessMemoryLimit = memory
-            self._need("SetInformationJobObject",
-                       self.k32.SetInformationJobObject(self.handle, EXTENDED_LIMIT, ctypes.byref(info), ctypes.sizeof(info)))
+            info.Basic.LimitFlags = KILL_ON_JOB_CLOSE | JOB_MEMORY
+            info.JobMemoryLimit = wall(memory)
+            self._set("SetInformationJobObject", EXTENDED_LIMIT, info)
+            note = NotificationLimits()
+            note.LimitFlags, note.JobMemoryLimit = JOB_MEMORY, memory
+            note.RateControlTolerance = note.RateControlToleranceInterval = TOLERANCE_LOW
+            self._set("SetInformationJobObject", NOTIFICATION_LIMIT, note)
         except BaseException:
             self.close()
             raise
+
+    def _set(self, call: str, kind: int, info) -> None:
+        self._need(call, self.k32.SetInformationJobObject(self.handle, kind, ctypes.byref(info), ctypes.sizeof(info)))
 
     def _need(self, call: str, result):
         if not result:
@@ -199,14 +256,38 @@ class Job:
                    self.k32.QueryInformationJobObject(self.handle, BASIC_ACCOUNTING, ctypes.byref(info), ctypes.sizeof(info), None))
         return int(info.ActiveProcesses)
 
+    def over_memory(self) -> bool:
+        """Whether Windows has told the job's port that its programs together went over `memory`, or that one of
+        them was refused memory at the wall. Every message the port holds is read and taken off it (it is also told
+        of each program that starts and ends); once true it stays true."""
+        while self.port and not self.refused:
+            what, key, where = _DWORD(0), ctypes.c_size_t(0), ctypes.c_void_p(None)
+            if not self.k32.GetQueuedCompletionStatus(self.port, ctypes.byref(what), ctypes.byref(key),
+                                                      ctypes.byref(where), 0):
+                code = self.k32.last_error()
+                if code == WAIT_TIMEOUT and not where.value:
+                    break                     # nothing more
+                raise JobError("GetQueuedCompletionStatus", code)
+            if what.value in MEMORY_MESSAGES:
+                self.refused = True
+        return self.refused
+
     def stop(self) -> None:
         """End every process in the job."""
         if self.handle:
             self._need("TerminateJobObject", self.k32.TerminateJobObject(self.handle, 1))
 
     def close(self) -> None:
-        """Give the handle back. The job is set to end its processes when its last handle closes."""
+        """Give the handles back, once each, after reading what the port still holds (Windows may tell of the memory
+        as the run ends). The job is set to end its processes when its last handle closes."""
+        try:
+            self.over_memory()
+        except OSError:
+            pass                              # what it would have said is lost; the handles still go back
+        port, self.port = self.port, None
         handle, self.handle = self.handle, None
+        if port:
+            self.k32.CloseHandle(port)
         if handle:
             self.k32.CloseHandle(handle)
 
