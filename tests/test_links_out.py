@@ -26,7 +26,7 @@ import pytest
 
 from lantern import gitfacts, pipeline, remote, scanresult, security
 from lantern.python_frontend import inside_repo
-from links_here import PIPES, needs_links, needs_pipes
+from links_here import PIPES, link, needs_links, needs_pipes
 
 PRIVATE = "the private line 7341 of a file that is not in the project"
 APP = {"app.py": "import os\n\n\ndef run(cmd):\n    os.system(cmd)\n"}
@@ -82,8 +82,8 @@ def test_a_notes_file_reached_through_a_folder_link_out_of_the_project_is_not_sh
     _without_bandit(monkeypatch)
     repo = _write(tmp_path / "project", APP)
     _write(tmp_path / "outside", {"private.md": PRIVATE + "\n"})
-    os.symlink(tmp_path / "outside", repo / "notes")
-    os.symlink("notes/private.md", repo / "lantern-narratives.md")
+    link(tmp_path / "outside", repo / "notes")
+    link("notes/private.md", repo / "lantern-narratives.md", folder=False)
     out = _analyze(repo, tmp_path / "out")
     assert PRIVATE not in _everything(out) and _notes(out) is None
 
@@ -94,7 +94,7 @@ def test_a_notes_file_of_the_project_is_shown_as_before(tmp_path, monkeypatch):
     _without_bandit(monkeypatch)
     repo = _write(tmp_path / "project", APP | {"docs/flows.md": "How a command reaches the shell, in our words.\n"})
     assert _notes(_analyze(repo, tmp_path / "out0")) is None
-    os.symlink("docs/flows.md", repo / "lantern-narratives.md")
+    link("docs/flows.md", repo / "lantern-narratives.md")
     assert "How a command reaches the shell" in _notes(_analyze(repo, tmp_path / "out"))
     (repo / "lantern-narratives.md").unlink()
     (repo / "lantern-narratives.md").write_text("Written here.\n", encoding="utf-8")
@@ -211,8 +211,11 @@ def test_the_quick_look_and_the_slow_look_agree(tmp_path, monkeypatch):
     monkeypatch.setattr(python_frontend, "_plain_way", lambda p, repo: said.append(plain(p, repo)) and False)
     slow = ask()
     assert quick == slow
+    # Windows reads `..` in a path by its text, before any link on the way: there `vendor/..` is the project's own top
+    # whatever `vendor` names, and the name opens the project's `app.py`; Linux and macOS follow the link first
+    by_text = ["vendor/../app.py"] if os.name == "nt" else []
     assert [n for n in names if quick[n]] == ["app.py", "pkg/mod.py", "pkg/sub/deep.py", "alias/mod.py", "pkg//mod.py",
-                                              "pkg/./mod.py", "./app.py", "pkg/../app.py", "alias/../app.py"]
+                                              "pkg/./mod.py", "./app.py", "pkg/../app.py", *by_text, "alias/../app.py"]
     assert not quick["a neighbour"] and not quick["a neighbour, by the text of its path"]
     assert True in said and False in said                       # and both looks were in use
 
@@ -501,7 +504,8 @@ def test_a_clone_is_written_without_links(tmp_path):
     remote.fetch(src.as_uri(), dest)
     for name in ("lantern-narratives.md", "same.py", "alias"):
         assert (dest / name).is_file() and not (dest / name).is_symlink(), name
-    assert (dest / "lantern-narratives.md").read_text(encoding="utf-8") == str(private)
+    # the link's own text, as git keeps it: with `/` between its parts, on Windows too
+    assert (dest / "lantern-narratives.md").read_text(encoding="utf-8") == private.as_posix()
     assert (dest / "app.py").read_text(encoding="utf-8") == APP["app.py"]
     assert remote.missing_files(dest) == []                     # and the clone still counts as complete
     remote.check_complete(dest, "could not check")
@@ -521,7 +525,8 @@ def test_a_clone_an_earlier_lantern_made_gets_no_new_link_when_it_is_updated(tmp
     assert remote.clone("https://github.com/o/r", log=log.append, dest=dest) == dest
     assert log == [f"updating {dest}"]
     assert (dest / "lantern-narratives.md").is_file() and not (dest / "lantern-narratives.md").is_symlink()
-    assert (dest / "lantern-narratives.md").read_text(encoding="utf-8") == str(private)
+    # the link's own text, as git keeps it: with `/` between its parts, on Windows too
+    assert (dest / "lantern-narratives.md").read_text(encoding="utf-8") == private.as_posix()
 
 
 @needs_links
@@ -537,4 +542,5 @@ def test_a_cloned_repository_with_a_notes_link_shows_nothing_of_the_file(tmp_pat
     remote.fetch(src.as_uri(), dest)
     out = _analyze(dest, tmp_path / "out")
     assert PRIVATE not in _everything(out)
-    assert _notes(out) == str(private)                          # the link's own text, which the repository held anyway
+    assert _notes(out) == private.as_posix()                   # the link's own text (git keeps it with `/`), which the
+                                                                # repository held anyway

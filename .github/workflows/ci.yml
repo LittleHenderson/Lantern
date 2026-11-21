@@ -409,9 +409,11 @@ jobs:
   windows-box:
     # The sealed box's tests for Windows alone, the older tests of what it lets a test do on this computer (its own
     # servers and event loops, process pools, moving its files between its folders, the memory a run gets, the job
-    # that holds a run), and the behaviour checks' tests, which start apps in the box, so that what the box lets a
-    # project's tests and apps do here is known minutes in: GitHub hands out a job's log only once the job has
-    # ended, and the Windows job above takes about 50 minutes. That job runs these tests again with the whole suite.
+    # that holds a run, the links of a project in the tests' copy), the tests of how Lantern meets a link where it
+    # reads or writes its own files, and the behaviour checks' tests, which start apps in the box, so that what the
+    # box lets a project's tests and apps do here is known minutes in: GitHub hands out a job's log only once the job
+    # has ended, and the Windows job above takes about 50 minutes. That job runs these tests again with the whole
+    # suite.
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -432,10 +434,29 @@ jobs:
           tests/test_sandbox_own_network.py::test_tests_that_start_a_server_on_their_own_computer_run
           tests/test_sandbox_own_network.py::test_the_twin_that_reaches_outside_is_still_refused_and_written_down
           tests/test_sandbox_own_network.py::test_the_guard_lets_this_computer_through_only_in_a_network_the_launcher_made
+          tests/test_sandbox_own_network.py::test_where_no_network_of_its_own_can_be_made_nothing_on_this_computer_is_let_through_and_the_log_says_why
+          tests/test_sandbox_own_network.py::test_on_windows_the_tests_may_serve_themselves_and_the_log_and_the_sheet_say_so
+          tests/test_sandbox_guards.py::test_the_twins_a_number_this_computer_and_what_is_no_name_go_down_as_before
           tests/test_sandbox_shared_memory.py::test_tests_that_use_process_locks_pools_and_queues_run
           tests/test_sandbox_second_look.py::test_tests_that_move_a_file_from_one_of_their_folders_to_another_run_as_they_do_at_home
           tests/test_sandbox_second_look.py::test_the_twin_that_moves_a_file_out_of_its_folders_is_still_refused
           tests/test_sandbox_second_look.py::test_lanterns_own_install_record_in_the_home_folder_is_not_a_read_the_tests_were_refused
+          tests/test_sandbox_second_look.py::test_the_sheet_does_not_say_the_network_is_closed_to_tests_that_nothing_keeps_from_it
+          tests/test_sandbox_second_look.py::test_on_windows_the_sheet_says_what_the_guards_own_rule_lets_through
+          tests/test_sandbox_second_look.py::test_the_twins_that_are_held_read_as_before
+          tests/test_sandbox_at_home.py
+          tests/test_gitfacts.py::test_a_link_in_place_of_git_data_is_not_followed
+          tests/test_gitfacts.py::test_a_junction_in_place_of_git_data_is_not_followed
+          tests/test_kept.py::test_an_entry_is_never_read_through_a_link
+          tests/test_kept.py::test_the_mark_of_the_last_tidy_up_is_never_made_or_dated_through_a_link
+          tests/test_links_out.py::test_a_notes_file_reached_through_a_folder_link_out_of_the_project_is_not_shown
+          tests/test_links_out.py::test_a_notes_file_of_the_project_is_shown_as_before
+          tests/test_links_out.py::test_the_quick_look_and_the_slow_look_agree
+          tests/test_links_out.py::test_a_clone_is_written_without_links
+          tests/test_links_out.py::test_a_clone_an_earlier_lantern_made_gets_no_new_link_when_it_is_updated
+          tests/test_links_out.py::test_a_cloned_repository_with_a_notes_link_shows_nothing_of_the_file
+          tests/test_project_files.py::test_the_sweeps_six_states
+          tests/test_results_folder.py::test_a_link_is_as_it_was_when_the_write_does_not_end
           tests/test_sandbox_memory.py::test_the_sheet_says_the_memory_the_tests_will_have
           tests/test_sandbox_memory.py::test_tests_that_reserve_far_more_space_than_they_use_run_as_they_do_at_home
           tests/test_sandbox_memory.py::test_tests_that_use_more_memory_than_their_limit_are_stopped_and_it_is_said

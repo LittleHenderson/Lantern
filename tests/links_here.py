@@ -45,6 +45,30 @@ def _long_paths() -> bool:
         return False
 
 
+def link(text, at, folder: bool | None = None) -> None:
+    """A link at `at` whose text is `text`, made the way this system's own tools make one (found on GitHub's Windows
+    machine, 2026-11-20: a test that wrote a link's text with `/` there made a link that leads nowhere, so a safe
+    twin failed and a dangerous one passed whatever Lantern did). On Windows the text gets Windows' own separator,
+    as `mklink` writes it and git for Windows when it checks a link out, and the link is one to a folder where the
+    place it names is a folder (Windows asks which one a link is when it is made): `folder` says so where that place
+    is not there yet. Elsewhere it is `os.symlink` as it is."""
+    text = os.fspath(text)
+    if os.name != "nt":
+        os.symlink(text, at)
+        return
+    text = text.replace("/", "\\")
+    if folder is None:
+        folder = os.path.isdir(os.path.join(os.path.dirname(os.fspath(at)), text))
+    os.symlink(text, at, target_is_directory=folder)
+
+
+def link_text(at) -> str:
+    """A link's text as it was written. For a link that names a full path, Windows' `os.readlink` hands back the
+    name it keeps for the system, which begins with `\\\\?\\` (found on GitHub's Windows machine, 2026-11-20)."""
+    text = os.readlink(at)
+    return text[4:] if os.name == "nt" and text.startswith("\\\\?\\") else text
+
+
 LINKS = _links()
 PIPES = hasattr(os, "mkfifo")
 LONG_PATHS = _long_paths()

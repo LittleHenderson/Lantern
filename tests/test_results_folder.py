@@ -24,7 +24,7 @@ import pytest
 import lantern
 from lantern import explain, pipeline, results, security
 from lantern.cli import main
-from links_here import PIPES, needs_links, needs_pipes
+from links_here import PIPES, link_text, needs_links, needs_pipes
 
 APP = {"app.py": "import os\n\n\ndef run(cmd):\n    os.system(cmd)\n"}
 MINE = "the person's own file\n"
@@ -117,8 +117,13 @@ def test_a_result_file_is_whole_or_as_it_was(tmp_path, monkeypatch):
 
 
 @needs_links
-def test_a_link_is_as_it_was_when_the_write_does_not_end(tmp_path, monkeypatch):
-    """The link is taken away only by the step that puts Lantern's file in its place. (On Windows it has to go first.)"""
+@pytest.mark.parametrize("way", ["as this system writes", "as Windows writes"])
+def test_a_link_is_as_it_was_when_the_write_does_not_end(tmp_path, monkeypatch, way):
+    """The link is taken away only once Lantern's file is in its place. Windows puts no file in the place of a link
+    to a folder, so there the link is moved aside first, as itself, and put back when the write does not end
+    (2026-11-20, found on GitHub's Windows machine: it was removed first there, and lost); stood in for on every
+    system."""
+    windows_way = way == "as Windows writes"
     out = tmp_path / "out"
     out.mkdir()
     mine = tmp_path / "mine.txt"
@@ -127,13 +132,19 @@ def test_a_link_is_as_it_was_when_the_write_does_not_end(tmp_path, monkeypatch):
 
     def full(tmp, path):
         raise OSError(28, "No space left on device")
+    monkeypatch.setattr(results, "ASIDE", windows_way or results.ASIDE)
     monkeypatch.setattr(results.os, "replace", full)
     with pytest.raises(OSError):
         results.write(out / "run.json", "{}")
     monkeypatch.undo()
-    assert os.readlink(out / "run.json") == str(mine) and mine.read_text(encoding="utf-8") == MINE
+    assert link_text(out / "run.json") == str(mine) and mine.read_text(encoding="utf-8") == MINE
     assert sorted(p.name for p in out.iterdir()) == ["run.json"]
     assert results.said(out) == []                                          # nothing was replaced, so nothing is said
+    # the twin: the write ends, Lantern's file is in the link's place, and nothing is left beside it
+    monkeypatch.setattr(results, "ASIDE", windows_way or results.ASIDE)
+    results.write(out / "run.json", "{}")
+    assert (out / "run.json").read_bytes() == b"{}" and not (out / "run.json").is_symlink()
+    assert sorted(p.name for p in out.iterdir()) == ["run.json"] and mine.read_text(encoding="utf-8") == MINE
 
 
 def test_a_replace_the_system_refuses_is_tried_again_only_on_windows(tmp_path, monkeypatch):

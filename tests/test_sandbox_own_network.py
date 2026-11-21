@@ -903,6 +903,7 @@ def test_the_guard_refuses_a_socket_file_outside_the_temp_folder_and_a_socket_na
 
 
 # ------------------------------------------------------------------- where no network of its own can be made
+@pytest.mark.skipif(WINDOWS, reason="Windows has a rule of its own since stage 4 (the test after this one)")
 def test_where_no_network_of_its_own_can_be_made_nothing_on_this_computer_is_let_through_and_the_log_says_why(
         tmp_path, monkeypatch, others):
     """The walls of before stay, every one: said in the log once, and on the sheet before the person clicks Run."""
@@ -928,6 +929,31 @@ def test_where_no_network_of_its_own_can_be_made_nothing_on_this_computer_is_let
         assert "OWN LISTENER: refused" in r["output_tail"], r["output_tail"]
         # (inside a sandbox that makes the connections, that sandbox decides what a connection reaches)
         assert others.came() <= {"udp"} or not sandbox.held_below_python(), r["output_tail"]
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows' own rule (the test before this one is the other systems')")
+def test_on_windows_the_tests_may_serve_themselves_and_the_log_and_the_sheet_say_so(tmp_path, monkeypatch):
+    """Windows makes no network of the run's own, and since stage 4 the guard's own rule there lets the tests start
+    a server at this computer's own address and call what only their own programs listen at
+    (`tests/test_sandbox_windows.py`): of the six server tests above only the one at every address of this computer
+    is refused, and written down. The log and the sheet say what is let through, and no longer that tests that
+    start a server will fail (2026-11-20, found on GitHub's Windows machine while the test above was read there)."""
+    why = "this system refused the rights it takes (error 1)"
+    monkeypatch.setattr(sandbox, "own_network", lambda: why)
+    lines = []
+    r = sandbox.run(_tiny(tmp_path / "tiny", SERVER), PYTEST, log=lines.append, backend="subprocess", timeout=180)
+    assert r["own_network"] is False and r["returncode"] == 1, r["output_tail"]
+    assert _failed(r["output_tail"]) == {"test_a_server_on_every_address_of_this_computer_answers"}, r["output_tail"]
+    assert r["blocked"] == [{"kind": "network", "what": "network bind ('', 0)"}], r["blocked"]
+    said = [line for line in lines if "network of their own" in line]
+    assert len(said) == 1 and why in said[0] and "may still start a server" in said[0], lines
+    assert "tests that start a server" not in said[0], said
+    monkeypatch.setenv("LANTERN_SANDBOX", "subprocess")
+    details = sandbox.describe(tmp_path / "tiny", "python")["details"]
+    assert any(why in d and "may still start a server" in d for d in details), details
+    assert any("a network connection to anything but the tests' own programs" in d for d in details), details
+    assert not any("tests that start a server" in d or "opening network connections are refused" in d
+                   for d in details), details
 
 
 def test_the_sheet_says_what_the_tests_can_reach(tmp_path, monkeypatch):

@@ -2206,10 +2206,169 @@ def _path_here(path: str, remote=None, sep: str = os.pathsep) -> tuple[str, list
 
 MOST_LINKS = 20_000         # links of one repository that are made links again in the tests' copy
 LINK_TEXT = 4096            # the longest path a link names
+MOST_HOPS = 40              # links followed on the way to one place (Linux's own limit)
+MOST_STEPS = 2_000_000      # steps of all the ways read for one copy on Windows, so that no project holds a run up
+# a piece of a link's text that Windows reads otherwise than git keeps it: a stream of a file (`a:b`), a character
+# Windows allows in no name, a control character, a dot or a space at its end (Windows' own names drop them)
+WINDOWS_READS_OTHERWISE = re.compile(r'[<>:"|?*\x00-\x1f]|[. ]$')
+SURROGATE = 0x20000000      # the bit of a Windows reparse tag that says the point stands for another place
+NO_RIGHT = 1314             # Windows' ERROR_PRIVILEGE_NOT_HELD: this user may make no link
 
 
 def _n_links(n: int, many: str, one: str) -> str:
     return f"sandbox: {n} {one if n == 1 else many}"
+
+
+def _pieces(text: str, windows: bool) -> list[str] | None:
+    """The pieces of a link's text as this system reads them, or None for a full path (one that does not begin at
+    the link's own folder; on Windows also one that names a drive, or begins at the top of one)."""
+    if windows:
+        if text[:1] in ("/", "\\") or text[1:2] == ":":
+            return None
+        return re.split(r"[\\/]", text)
+    return None if text.startswith("/") else text.split("/")
+
+
+def _by_text(pieces) -> list[str] | None:
+    """A path read by its text alone, each `..` taking away the piece before it: the pieces of the place from the
+    project's top, or None when it goes up past the top."""
+    at: list[str] = []
+    for p in pieces:
+        if p in ("", "."):
+            continue
+        if p != "..":
+            at.append(p)
+        elif at:
+            at.pop()
+        else:
+            return None
+    return at
+
+
+def _fold(piece: str) -> str:
+    """A name as Windows compares names: each letter as its capital, where it has one capital letter."""
+    return "".join(u if len(u := c.upper()) == 1 else c for c in piece)
+
+
+def _key(parts) -> str:
+    return "\0".join(_fold(p) for p in parts)
+
+
+class _Far(Exception):
+    """The way of a link could not be followed to its end: a loop, more than MOST_HOPS links on it, or more steps
+    for all the ways of one copy than MOST_STEPS."""
+
+
+def _leads(folder: list[str], pieces: list[str], links: dict[str, list[str]], windows_way: bool,
+           steps: list[int]) -> list[str] | None:
+    """Where a link in `folder` (its pieces from the project's top) whose text is `pieces` leads, through the
+    links that will be in the copy (`links`: the place of each, as `_key` writes it, to the pieces of its text):
+    the pieces of the place from the project's top, or None when the way leaves the project; `_Far` when it cannot
+    be followed to its end (`steps` counts down). Read two ways. Linux and macOS go into each link on the way
+    before the `..` after it (`windows_way` false). Windows puts the folder of a link, the link's text and the rest
+    of the way together and reads every `..` of that by its text before it goes on (`windows_way`; found on
+    GitHub's Windows machine, 2026-11-20: there `vendor/..` is the project's own top whatever `vendor` names)."""
+    first = _by_text([*folder, *pieces]) if windows_way else [*folder, *pieces]
+    if first is None:
+        return None
+    todo, at, keys, hops = list(reversed(first)), [], [], 0        # `todo` is read from its end
+    while todo:
+        p = todo.pop()
+        steps[0] -= 1 + len(at)
+        if steps[0] < 0:
+            raise _Far
+        if p in ("", "."):
+            continue
+        if p == "..":
+            if not at:
+                return None
+            at.pop()
+            keys.pop()
+            continue
+        key = f"{keys[-1]}\0{_fold(p)}" if keys else _fold(p)
+        text = links.get(key)
+        if text is None:
+            at.append(p)
+            keys.append(key)
+            continue
+        hops += 1
+        if hops > MOST_HOPS:
+            raise _Far
+        if windows_way:
+            steps[0] -= len(at) + len(text) + len(todo)
+            joined = _by_text([*at, *text, *reversed(todo)])
+            if joined is None:
+                return None
+            todo, at, keys = list(reversed(joined)), [], []
+        else:
+            todo.extend(reversed(text))
+    return at
+
+
+def _both_ways(found: dict, top: str, steps: list[int]) -> tuple[dict[str, bool], dict[str, str]]:
+    """Of the links about to be made on Windows (`found`: each place with its pieces from the project's top and the
+    pieces of its text, in the order the repository lists them), those whose way stays inside the project read
+    both ways `_leads` reads it, through the links that stay, each with whether the place it leads to is a folder
+    (Windows asks which a link is when it is made); and each of the others with the reason, `out` or `far`. As on
+    Linux and macOS, where the system's own answer is asked once the links are there, one link at a time: a link
+    that leads out goes, and the ones after it are read without it, and all of them again until none goes. Where
+    the steps run out, none of them is made."""
+    keep = dict(found)
+    links = {_key(parts): pieces for parts, pieces in keep.values()}
+    left: dict[str, str] = {}
+    ends: dict[str, list[str]] = {}
+    again = True
+    while again:
+        again = False
+        for place, (parts, pieces) in list(keep.items()):
+            try:
+                ways = [_leads(parts[:-1], pieces, links, way, steps) for way in (False, True)]
+            except _Far:
+                if steps[0] < 0:
+                    left.update(dict.fromkeys(keep, "far"))
+                    return {}, left
+                ways = None
+            if ways is not None and None not in ways:
+                ends[place] = ways[1]
+                continue
+            del keep[place], links[_key(parts)]
+            ends.pop(place, None)
+            left[place] = "out" if ways else "far"
+            again = True
+    return {place: os.path.isdir(os.path.join(top, *end)) for place, end in ends.items()}, left
+
+
+def _read_small(place: str, st, within) -> bytes | None:
+    """The text of the small file at a link's place in Lantern's copy, when it can be a link's text: a plain file of
+    one line, no longer than LINK_TEXT, in a folder inside the copy (`within`), read without going through a link
+    (where the system has no word for that, Windows, the file is the one `st` looked at just before). None
+    otherwise."""
+    if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= LINK_TEXT \
+            or not within(os.path.realpath(os.path.dirname(place))):
+        return None
+    try:
+        fd = os.open(place, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                     | getattr(os, "O_BINARY", 0))
+        try:
+            again = os.fstat(fd)
+            raw = os.read(fd, LINK_TEXT + 1) if stat.S_ISREG(again.st_mode) and again.st_size == st.st_size else b""
+        finally:
+            os.close(fd)
+    except OSError:
+        return None
+    if len(raw) != st.st_size or b"\0" in raw or b"\n" in raw or b"\r" in raw:
+        return None
+    return raw
+
+
+def _write_small(place: str, raw: bytes, mode: int) -> None:
+    """The small file a link was, written back at its place (where nothing is now)."""
+    fd = os.open(place, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_BINARY", 0), mode)
+    try:
+        os.write(fd, raw)
+    finally:
+        os.close(fd)
 
 
 def _links_again(repo: Path, app: Path, log) -> None:
@@ -2223,11 +2382,16 @@ def _links_again(repo: Path, app: Path, log) -> None:
     Here each file that the repository's own record calls a link (`gitfacts.links`) is made a link again in the
     tests' copy, which is thrown away with the run, when the link stays in the project: its text is one line of
     a path's length, no full path, and does not go up past the project's top as written; and, once all are
-    made, where it leads through the others is still inside the copy (a link to the project's own top makes
-    `top/..` the folder above). A link that leads out stays the small file it was, and the log says how many.
-    Nothing here opens what a link names, and Lantern's own copy of the repository is not changed. A folder of
+    made, where it leads through the others, as the system itself answers, is still inside the copy (a link to
+    the project's own top makes `top/..` the folder above). On Windows (a firm pass or fail, stage 4, 2026-11-20;
+    until then no link was made there, and tests that pass at home failed in the copy) each is read first the two
+    ways `_leads` reads a link, through the links about to be made, and made only where both stay inside: with
+    Windows' own separator, and as a link to a folder where it leads to one (`_both_ways`). A link that leads out
+    stays the small file it was, and so does one this computer does not let Lantern make; the log says how many.
+    Nothing here reads what a link names, and Lantern's own copy of the repository is not changed. A folder of
     the person's own keeps its links as it always did (`_copy`), with the sandbox's walls around them."""
-    if os.name != "posix":
+    windows = os.name == "nt"
+    if os.name != "posix" and not windows:
         return
     from . import gitfacts, remote
     try:
@@ -2237,86 +2401,122 @@ def _links_again(repo: Path, app: Path, log) -> None:
     if not names:
         return
     top = os.path.realpath(app)
+    folded = os.path.normcase(top)
 
     def within(path: str) -> bool:
-        return path == top or path.startswith(top + os.sep)
+        path = os.path.normcase(path)
+        return path == folded or path.startswith(folded + os.sep)
 
-    made: dict[str, tuple[bytes, int]] = {}
-    out = odd = 0
+    def stays(place: str) -> bool:
+        try:
+            return within(os.path.realpath(place))
+        except (OSError, ValueError):
+            return False
+
+    found: dict[str, tuple[list[str], list[str]]] = {}
+    texts: dict[str, tuple[str, bytes, int]] = {}
+    said = dict.fromkeys(("out", "far", "other", "refused", "odd"), 0)
     for name in names[:MOST_LINKS]:
         parts = name.split("/")
-        if name.startswith("/") or any(part in ("", ".", "..") for part in parts):
+        if name.startswith("/") or any(part in ("", ".", "..") for part in parts) \
+                or windows and any(":" in part or "\\" in part for part in parts):
             continue
         place = os.path.join(top, *parts)
         try:
             st = os.lstat(place)
         except OSError:
             continue                                # not in the copy (a folder the copy leaves out)
-        if stat.S_ISLNK(st.st_mode):
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) & SURROGATE:
             continue                                # a copy that kept its links: as it is
-        try:
-            if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= LINK_TEXT \
-                    or not within(os.path.realpath(os.path.dirname(place))):
-                odd += 1
-                continue
-            fd = os.open(place, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
-            try:
-                raw = os.read(fd, LINK_TEXT + 1)
-            finally:
-                os.close(fd)
-        except OSError:
-            odd += 1
-            continue
-        if len(raw) != st.st_size or b"\0" in raw or b"\n" in raw or b"\r" in raw:
-            odd += 1
+        raw = _read_small(place, st, within)
+        if raw is None:
+            said["odd"] += 1
             continue
         target = os.fsdecode(raw)
-        where = os.path.normpath(os.path.join(os.path.dirname(name), target))
-        if target.startswith("/") or where == ".." or where.startswith("../"):
-            out += 1
+        pieces = _pieces(target, windows)
+        if pieces is None or _by_text([*parts[:-1], *pieces]) is None:
+            said["out"] += 1
             continue
+        if windows and any(p not in (".", "..") and WINDOWS_READS_OTHERWISE.search(p) for p in pieces):
+            said["other"] += 1
+            continue
+        found[place] = (parts, pieces)
+        texts[place] = (target, raw, stat.S_IMODE(st.st_mode))
+    folders: dict[str, bool] = {}
+    if windows and found:
+        folders, left = _both_ways(found, top, [MOST_STEPS])
+        for why in left.values():
+            said[why] += 1
+        found = {place: found[place] for place in folders}
+    made: dict[str, tuple[bytes, int]] = {}
+    for place in found:
+        target, raw, mode = texts[place]
         beside = f"{place}.lantern-link-{uuid.uuid4().hex[:12]}"
         try:
-            os.symlink(target, beside)
-            os.replace(beside, place)
+            os.symlink(target.replace("/", "\\") if windows else target, beside,
+                       target_is_directory=folders.get(place, False))
+        except OSError as e:
+            said["refused" if e.errno == errno.EPERM or getattr(e, "winerror", None) == NO_RIGHT else "odd"] += 1
+            continue
+        try:
+            if windows:                             # Windows puts no link to a folder in a file's place: it goes first
+                os.unlink(place)
+                try:
+                    os.rename(beside, place)
+                except OSError:
+                    _write_small(place, raw, mode)
+                    raise
+            else:
+                os.replace(beside, place)
         except OSError:
             try:
                 os.unlink(beside)
             except OSError:
                 pass
-            odd += 1
+            said["odd"] += 1
             continue
-        made[place] = (raw, stat.S_IMODE(st.st_mode))
+        made[place] = (raw, mode)
     again = True
-    while again:                                    # where each one leads, through the others
+    while again:                                    # where each one leads, through the others, as the system says
         again = False
         for place in list(made):
-            if within(os.path.realpath(place)):
+            if stays(place):
                 continue
             raw, mode = made.pop(place)
-            try:
-                os.unlink(place)
-                fd = os.open(place, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-                try:
-                    os.write(fd, raw)
-                finally:
-                    os.close(fd)
-            except OSError:
-                pass
-            out += 1
+            os.unlink(place)                        # a link that leads out is never left: the copy fails instead
+            _write_small(place, raw, mode)
+            said["out"] += 1
             again = True
     if made:
         log(_n_links(len(made), "links of the repository are links again in the tests' copy",
                      "link of the repository is a link again in the tests' copy")
             + " (Lantern's own copy of a repository keeps each as a small file)")
-    if out:
-        log(_n_links(out, "links of the repository lead out of the project and stay small files in the copy: "
-                          "tests that go through them do not find what they name",
+    if said["out"]:
+        log(_n_links(said["out"], "links of the repository lead out of the project and stay small files in the "
+                                  "copy: tests that go through them do not find what they name",
                      "link of the repository leads out of the project and stays a small file in the copy: "
                      "tests that go through it do not find what it names"))
-    if odd:
-        log(_n_links(odd, "files that the repository holds as links are not a link's text in Lantern's copy "
-                          "and stay as they are",
+    if said["far"]:
+        log(_n_links(said["far"], "links of the repository lead through too many other links to be followed, and "
+                                  "stay small files in the copy: tests that go through them do not find what they name",
+                     "link of the repository leads through too many other links to be followed, and stays a small "
+                     "file in the copy: tests that go through it do not find what it names"))
+    if said["other"]:
+        log(_n_links(said["other"], "links of the repository name their place in words Windows reads otherwise "
+                                    "than git, and stay small files in the copy: tests that go through them do not "
+                                    "find what they name",
+                     "link of the repository names its place in words Windows reads otherwise than git, and stays a "
+                     "small file in the copy: tests that go through it do not find what it names"))
+    if said["refused"]:
+        why = " (on Windows that takes Developer Mode or the right to make links)" if windows else ""
+        log(_n_links(said["refused"], "links of the repository stay small files in the tests' copy: this computer "
+                                      f"did not let Lantern make a link{why}, so tests that go through them do not "
+                                      "find what they name",
+                     "link of the repository stays a small file in the tests' copy: this computer did not let "
+                     f"Lantern make a link{why}, so tests that go through it do not find what it names"))
+    if said["odd"]:
+        log(_n_links(said["odd"], "files that the repository holds as links are not a link's text in Lantern's copy "
+                                  "and stay as they are",
                      "file that the repository holds as a link is not a link's text in Lantern's copy and "
                      "stays as it is"))
 

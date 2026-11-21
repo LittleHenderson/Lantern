@@ -256,7 +256,13 @@ def test_an_entry_that_is_not_whole_is_no_entry(tmp_path):
 
 
 @needs_links
-def test_an_entry_is_never_read_through_a_link(tmp_path):
+@pytest.mark.parametrize("way", ["as this system opens a name", "as Windows opens one"])
+def test_an_entry_is_never_read_through_a_link(tmp_path, monkeypatch, way):
+    """Windows' `os.open` has no way to refuse a link at the name and goes through it, so there the name is looked
+    at first (2026-11-20, found on GitHub's Windows machine); stood in for on every system."""
+    if way == "as Windows opens one":
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+        monkeypatch.setattr(kept, "NOFOLLOW", 0)
     key, other = SHELF.key("one"), SHELF.key("two")
     assert SHELF.put(other, "the other answer")
     elsewhere = tmp_path / "elsewhere.json"
@@ -268,6 +274,36 @@ def test_an_entry_is_never_read_through_a_link(tmp_path):
     _entry(key).mkdir()                                  # a folder under an entry's name
     assert SHELF.get(key) is kept.NOTHING and not SHELF.put(key, "x") or SHELF.get(key) is kept.NOTHING
     assert SHELF.get(other) == "the other answer"
+
+
+@needs_links
+@pytest.mark.parametrize("way", ["as this system opens a name", "as Windows opens one"])
+def test_the_mark_of_the_last_tidy_up_is_never_made_or_dated_through_a_link(tmp_path, monkeypatch, way):
+    """`tidy` dates a mark of its own in the folder; a link in the mark's place is left as it is, and what it names
+    is neither dated nor made (2026-11-20: on Windows `os.open` goes through a link at the name, and there both
+    happened; the name is looked at first there). Windows' way stood in for on every system."""
+    if way == "as Windows opens one":
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+        monkeypatch.setattr(kept, "NOFOLLOW", 0)
+    root = kept.home()
+    root.mkdir(parents=True)
+    mine = tmp_path / "mine.txt"
+    mine.write_text("the person's own", encoding="utf-8")
+    old = 1_700_000_000
+    os.utime(mine, (old, old))
+    nowhere = tmp_path / "made-through-the-link.txt"
+    for target in (mine, nowhere):
+        mark = root / ".tidied"
+        if os.path.lexists(mark):
+            os.unlink(mark)
+        os.symlink(target, mark)
+        assert kept.tidy(force=True) == 0
+        assert os.path.islink(mark), target
+    assert int(mine.stat().st_mtime) == old and mine.read_text(encoding="utf-8") == "the person's own"
+    assert not nowhere.exists()
+    os.unlink(root / ".tidied")                      # the twin: no link there, and the mark is made and dated
+    assert kept.tidy(now=old + 5, force=True) == 0
+    assert (root / ".tidied").is_file() and int((root / ".tidied").stat().st_mtime) == old + 5
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")

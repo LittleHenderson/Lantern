@@ -374,10 +374,11 @@ NO_DOORMAN = "this system does not let Lantern put a doorman between the tests' 
 CLOSED_WORDS = ("network connections refused", "nothing on this computer is let through")
 
 
-def _system(monkeypatch, linux=True, network="", doorman="", landlock=7):
+def _system(monkeypatch, linux=True, network="", doorman="", landlock=7, windows=False):
     monkeypatch.delenv("LANTERN_SANDBOX", raising=False)
     monkeypatch.setattr(sandbox, "docker_ok", lambda: False)
     monkeypatch.setattr(sandbox, "_LINUX", linux)
+    monkeypatch.setattr(sandbox, "_windows_rule", lambda: windows and not linux, raising=False)
     monkeypatch.setattr(sandbox, "_OWN_NETWORK", [network if linux else "a network of their own for the tests is made on Linux only"])
     monkeypatch.setattr(sandbox, "_OWN_SOCKETS", [doorman if linux else "the doorman is made on Linux only"])
     monkeypatch.setattr(sandbox, "_OWN_MEMORY", [""])
@@ -415,6 +416,24 @@ def test_the_sheet_does_not_say_the_network_is_closed_to_tests_that_nothing_keep
     said = " ".join(details)
     assert "opening network connections are refused" in said, details
     assert "a program the tests start that is not Python is not kept from the network" in said and says in said, details
+
+
+def test_on_windows_the_sheet_says_what_the_guards_own_rule_lets_through(tmp_path, monkeypatch):
+    """Windows, which makes the run no network of its own: since stage 4 the guard's own rule there lets the tests
+    start a server at this computer's own address and call what only their own programs listen at, and the sheet
+    says so for Python's tests, and no longer that a test that starts a server will fail (2026-11-20, found on
+    GitHub's Windows machine). For tests that are not Python nothing changed: nothing holds them there. Read from
+    a pretend Windows, so on every system."""
+    _system(monkeypatch, linux=False, windows=True)
+    said = " ".join(sandbox.describe(tmp_path, "python")["details"])
+    assert "may still start a server at this computer's own address" in said, said
+    assert "a network connection to anything but the tests' own programs" in said, said
+    assert "tests that start a server and call it will fail" not in said, said
+    assert "opening network connections are refused" not in said, said
+    assert "a program the tests start that is not Python is not kept from the network" in said, said
+    said = " ".join(sandbox.describe(tmp_path, "node")["details"])
+    assert "These tests are not Python" in said and "not kept from the network" in said, said
+    assert not any(words in said for words in CLOSED_WORDS) and "may still start a server" not in said, said
 
 
 @pytest.mark.parametrize("system", [{}, {"network": WHY}, {"network": WHY, "doorman": NO_DOORMAN}])

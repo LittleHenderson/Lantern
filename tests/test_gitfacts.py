@@ -298,6 +298,14 @@ def test_a_planted_commondir_does_not_have_another_repository_read(where, tmp_pa
     assert gitfacts.head_commit(d) is None
 
 
+def _remove_git_folder(at: Path) -> None:
+    """A folder of git's data, removed: git's object files are read-only on Windows, which removes no such file."""
+    for folder, _dirs, files in os.walk(at):
+        for f in files:
+            os.chmod(os.path.join(folder, f), 0o600)
+    shutil.rmtree(at)
+
+
 @needs_links
 @pytest.mark.parametrize("what", [".git", "refs", "HEAD", "config", "packed-refs", "index", "objects"])
 def test_a_link_in_place_of_git_data_is_not_followed(what, tmp_path, other, monkeypatch):
@@ -309,10 +317,11 @@ def test_a_link_in_place_of_git_data_is_not_followed(what, tmp_path, other, monk
         shutil.rmtree(d / ".git" / "refs" / "heads")        # the branch could now only come from the linked file
         (d / ".git" / "refs" / "heads").mkdir()
     elif at.is_dir():
-        shutil.rmtree(at)
+        _remove_git_folder(at)
     else:
         at.unlink()
-    os.symlink(other / ".git" if what == ".git" else other / ".git" / what, at)
+    theirs = other / ".git" if what == ".git" else other / ".git" / what
+    os.symlink(theirs, at, target_is_directory=theirs.is_dir())     # on Windows a link to a folder is made as one
     got = evidence.git_info(d)
     assert nothing_of(other, got), got
     if what == "config":        # the folder's own commit is still read; its settings, which are the link, are not
@@ -333,10 +342,7 @@ def test_a_junction_in_place_of_git_data_is_not_followed(what, tmp_path, other):
     import _winapi
     d = make(tmp_path)
     at = d / ".git" if what == ".git" else d / ".git" / what
-    for folder, _dirs, files in os.walk(at):    # git's object files are read-only on Windows
-        for f in files:
-            os.chmod(os.path.join(folder, f), 0o600)
-    shutil.rmtree(at)
+    _remove_git_folder(at)
     _winapi.CreateJunction(str(other / ".git" if what == ".git" else other / ".git" / what), str(at))
     got = evidence.git_info(d)
     assert got["commit"] is None and nothing_of(other, got), got

@@ -22,13 +22,14 @@ The project with both languages then showed a third, in a copy of it changed as 
   cache is left on; what it writes is in the tests' copy and goes with it.
 
 Each case stands beside its twin."""
+import errno
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from links_here import needs_links
+from links_here import link, needs_links
 
 from lantern import gitfacts, remote, sandbox
 
@@ -85,8 +86,8 @@ def _repository(folder: Path, source: str, links: dict[str, str]) -> Path:
     (folder / "data" / "a.txt").write_text("as written", encoding="utf-8")
     (folder / "data" / "tool.py").write_text("print('the tool ran')\n", encoding="utf-8")
     (folder / "fixtures" / "kept.txt").write_text("kept", encoding="utf-8")
-    for name, target in links.items():
-        os.symlink(target, folder / name)
+    for name, target in links.items():       # as this system's own tools make a link: git keeps each text with `/`
+        link(target, folder / name)
     for args in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "one"]):
         subprocess.run([*GIT, *args], cwd=folder, check=True)
     return folder
@@ -203,6 +204,127 @@ def test_a_file_the_record_calls_a_link_and_that_is_no_link_text_is_left_alone(t
     assert any("3 links of the repository are links again" in line for line in lines), lines
     assert any("3 links of the repository lead out of the project" in line for line in lines) is False, lines
     assert any("3 files that the repository holds as links are not a link's text" in line for line in lines), lines
+
+
+@needs_links
+def test_where_this_computer_lets_lantern_make_no_link_the_small_files_stay_and_the_log_says_why(tmp_path,
+                                                                                                monkeypatch):
+    """Windows lets a user make a link only in Developer Mode or with a right of its own (2026-11-20). Where the
+    computer refuses, every link stays the small file it was, nothing is left beside it, and the log says why (the
+    refusal stood in for here, on every system)."""
+    clone = _clone(tmp_path, THROUGH_LINKS, LINKS)
+
+    def refused(*args, **kwargs):
+        raise OSError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(sandbox.os, "symlink", refused)
+    app = tmp_path / "copy"
+    lines: list[str] = []
+    sandbox._copy_in(clone, app, lines.append)
+    monkeypatch.undo()
+    assert [n for n in LINKS if os.path.islink(app / n)] == []
+    assert {n: (app / n).read_text(encoding="utf-8") for n in LINKS} == LINKS        # each small file as it was
+    assert list(app.rglob("*.lantern-link-*")) == []
+    why = " (on Windows that takes Developer Mode or the right to make links)" if os.name == "nt" else ""
+    assert [line for line in lines if "of the repository" in line] == [
+        "sandbox: 6 links of the repository stay small files in the tests' copy: this computer did not let Lantern "
+        f"make a link{why}, so tests that go through them do not find what they name"], lines
+
+
+def _entry(folder: Path, name: str, text: str) -> None:
+    """A link in the repository's record whose text is `text`, put there without making a link (git's own way), so
+    that a text this system would not write is held as git holds it."""
+    blob = subprocess.run([*GIT, "hash-object", "-w", "--stdin"], cwd=folder, input=text, capture_output=True,
+                          text=True, encoding="utf-8", check=True).stdout.strip()
+    subprocess.run([*GIT, "update-index", "--add", "--cacheinfo", f"120000,{blob},{name}"], cwd=folder, check=True)
+
+
+@needs_links
+def test_a_link_windows_reads_otherwise_or_cannot_follow_to_its_end_stays_a_small_file_there(tmp_path):
+    """On Windows a name loses a dot or a space at its end and `a:b` is a part of the file `a`, so a link whose text
+    has such a piece leads there somewhere else than git means; and a link whose way goes round in a circle cannot
+    be read to its end. Both stay small files there and the log says so; the link that leads to such a small file,
+    and the plain one beside them, are made. Linux and macOS make all four, as before: those systems read such a
+    name as it is, and ask the system itself where a link leads."""
+    src = _repository(tmp_path / "src", "", {"fixtures/same.txt": "../data/a.txt"})
+    for name, text in {"fixtures/dot.txt": "../data/a.txt.", "loop-a": "loop-b", "loop-b": "loop-a"}.items():
+        _entry(src, name, text)
+    subprocess.run([*GIT, "commit", "-q", "-m", "two"], cwd=src, check=True)
+    clone = tmp_path / "clone"
+    remote.fetch(src.as_uri(), clone)
+    assert gitfacts.links(clone) == ["fixtures/dot.txt", "fixtures/same.txt", "loop-a", "loop-b"]
+    app = tmp_path / "copy"
+    lines: list[str] = []
+    sandbox._copy_in(clone, app, lines.append)
+    said = [line for line in lines if "of the repository" in line]
+    links = [n for n in gitfacts.links(clone) if os.path.islink(app / n)]
+    if os.name != "nt":
+        assert links == ["fixtures/dot.txt", "fixtures/same.txt", "loop-a", "loop-b"], lines
+        assert said == ["sandbox: 4 links of the repository are links again in the tests' copy (Lantern's own copy "
+                        "of a repository keeps each as a small file)"], lines
+        return
+    assert links == ["fixtures/same.txt", "loop-b"], lines
+    assert (app / "fixtures" / "dot.txt").read_text(encoding="utf-8") == "../data/a.txt."
+    assert (app / "loop-b").read_text(encoding="utf-8") == "loop-b"     # through the link, the small file `loop-a`
+    assert said == ["sandbox: 2 links of the repository are links again in the tests' copy (Lantern's own copy of a "
+                    "repository keeps each as a small file)",
+                    "sandbox: 1 link of the repository leads through too many other links to be followed, and stays "
+                    "a small file in the copy: tests that go through it do not find what it names",
+                    "sandbox: 1 link of the repository names its place in words Windows reads otherwise than git, and "
+                    "stays a small file in the copy: tests that go through it do not find what it names"], lines
+
+
+def test_how_the_way_of_a_link_is_read_for_windows():
+    """`_leads` reads a link's way as Linux and macOS go (each link before the `..` after it) and as Windows goes
+    (the folder, the text and the rest of the way put together, every `..` read by its text); found on GitHub's
+    Windows machine, where `vendor/..` is the project's own top whatever `vendor` names. Pure reading: it runs on
+    every system."""
+    links = {sandbox._key(["top"]): ["."], sandbox._key(["shared"]): ["data"]}
+
+    def read(folder, text, windows_way):
+        return sandbox._leads(folder, text.split("/"), links, windows_way, [sandbox.MOST_STEPS])
+    # through a link to the project's own top, `..` is the folder above on Linux, and the project's top on Windows
+    assert read(["fixtures"], "../top/../outside/secret.txt", False) is None
+    assert read(["fixtures"], "../top/../outside/secret.txt", True) == ["outside", "secret.txt"]
+    # through a link to a folder of the project, both stay
+    assert read(["fixtures"], "../shared/../data/a.txt", False) == ["data", "a.txt"]
+    assert read(["fixtures"], "../shared/a.txt", True) == read(["fixtures"], "../shared/a.txt", False) == ["data", "a.txt"]
+    # Windows compares names as capitals; up past the project's top is out either way
+    assert read([], "SHARED/a.txt", True) == ["data", "a.txt"]
+    assert read(["fixtures"], "../../x", False) is None and read(["fixtures"], "../../x", True) is None
+    loop = {sandbox._key(["a"]): ["b"], sandbox._key(["b"]): ["a"]}
+    for windows_way in (False, True):
+        with pytest.raises(sandbox._Far):
+            sandbox._leads([], ["a"], loop, windows_way, [sandbox.MOST_STEPS])
+    with pytest.raises(sandbox._Far):                                   # the steps of a copy run out
+        sandbox._leads([], ["x"] * 20, {}, False, [5])
+    # the text of a link as each system reads it
+    assert sandbox._pieces("C:/Users/x/secret.txt", True) is None and sandbox._pieces("\\\\x\\y", True) is None
+    assert sandbox._pieces("..\\data/a.txt", True) == ["..", "data", "a.txt"]
+    assert sandbox._pieces("/x", False) is None and sandbox._pieces("a\\b", False) == ["a\\b"]
+    other = [p for p in ("x.", "x ", "...", "a:b", "a*b", "a?", "ok", "..", ".")
+             if p not in (".", "..") and sandbox.WINDOWS_READS_OTHERWISE.search(p)]
+    assert other == ["x.", "x ", "...", "a:b", "a*b", "a?"]
+
+
+def test_which_links_are_made_on_windows_and_as_what(tmp_path):
+    """Of the links about to be made on Windows, those whose way stays inside read both ways, each as a link to a
+    folder where it leads to one (Windows asks when a link is made); one link at a time, as Linux and macOS ask the
+    system: once the first of a circle is left a small file, the second leads to that file and is made. Where the
+    steps of a copy run out, none is made."""
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "a.txt").write_text("as written", encoding="utf-8")
+
+    def at(name):
+        return str(tmp_path.joinpath(*name.split("/")))
+    texts = {"top": ".", "fixtures/looks-inside.txt": "../top/../outside/secret.txt", "to-a-link-out.txt": "up.txt",
+             "fixtures/same.txt": "../data/a.txt", "shared": "data", "fixtures/to-shared": "../shared",
+             "a": "b", "b": "a"}
+    found = {at(n): (n.split("/"), t.split("/")) for n, t in texts.items()}
+    folders, left = sandbox._both_ways(found, str(tmp_path), [sandbox.MOST_STEPS])
+    assert folders == {at("top"): True, at("to-a-link-out.txt"): False, at("fixtures/same.txt"): False,
+                       at("shared"): True, at("fixtures/to-shared"): True, at("b"): False}
+    assert left == {at("fixtures/looks-inside.txt"): "out", at("a"): "far"}
+    assert sandbox._both_ways(found, str(tmp_path), [0]) == ({}, dict.fromkeys(found, "far"))
 
 
 # ---------------------------------------------------------------------------- a program that is nowhere

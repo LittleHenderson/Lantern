@@ -52,6 +52,8 @@ KEEP_DAYS = 30                      # an entry nobody asked for in this many day
 DEFAULT_MB = 1024                   # what the folder may hold before the least recently used entries go
 TIDY_EVERY = 24 * 3600              # seconds between two looks at the whole folder
 NOTHING = object()                  # what `Shelf.get` hands back when nothing usable is kept
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)   # 0 where the system has no way to open a name without going through a link
+SURROGATE = 0x20000000              # the bit of a Windows reparse tag that says the point stands for another place
 
 _KIND = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
 _PART = re.compile(r"^[0-9a-f]{2}$")
@@ -244,8 +246,10 @@ class Shelf:
 
     def _read(self, key: str):
         try:
-            fd = os.open(self._path(key), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-                         | getattr(os, "O_BINARY", 0))
+            path = self._path(key)
+            if not NOFOLLOW and not _plain_or_absent(path):
+                return NOTHING
+            fd = os.open(path, os.O_RDONLY | NOFOLLOW | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
         except (OSError, ValueError):
             return NOTHING
         try:
@@ -362,6 +366,18 @@ class Shelf:
 
 def _mine(st) -> bool:
     return not hasattr(os, "geteuid") or st.st_uid == os.geteuid()
+
+
+def _plain_or_absent(path) -> bool:
+    """Nothing at `path`, or a plain file: never a link, a junction or a folder. Asked before a name is opened where
+    the system has no way to open a name without going through a link at it (`NOFOLLOW` is 0: Windows, where
+    `os.open` goes through a link, and makes the place it names where nothing is there; 2026-11-20, found on
+    GitHub's Windows machine: an entry was read through a link there)."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    return stat.S_ISREG(st.st_mode) and not getattr(st, "st_reparse_tag", 0) & SURROGATE
 
 
 def _folders(last: Path) -> None:

@@ -865,11 +865,20 @@ def test_a_name_in_an_address_is_refused_before_the_system_is_asked_for_it(tmp_p
 def test_the_twins_a_number_this_computer_and_what_is_no_name_go_down_as_before(tmp_path):
     """The same calls with an address written as a number and with `localhost`: no lookup is heard of, the call
     itself is what the guard refuses (there is no network of the run's own here), and its line names the call as it
-    always did. What is no address is the system's to refuse, and a socket file of the run's own is made."""
+    always did. What is no address is the system's to refuse, and a socket file of the run's own is made. On Windows
+    the guard's own rule (stage 4) writes `localhost` out as its number, and binds a datagram socket that sends to
+    this computer to its own address first (`_written_out`, `_bound_first`): the line says so there."""
     r = _guard_alone(tmp_path, THE_TWINS, NAME, str(_six()))
-    call = lambda what, to: (f"refused: {what} | network {EVENT[what.split(' to ')[0]]} {to!r} | "      # noqa: E731
-                             f"socket.{EVENT[what.split(' to ')[0]]}")
-    want = ([call(way, ("192.0.2.1", 9)) for way in WAYS] + [call(way + " to localhost", ("localhost", 9)) for way in WAYS]
+    windows = sys.platform == "win32"
+
+    def call(what, to, here=False):
+        event = EVENT[what.split(" to ")[0]]
+        if here and windows:
+            to = ("127.0.0.1", to[1])
+        first = "socket.bind " if here and windows and event == "sendto" else ""
+        return f"refused: {what} | network {event} {to!r} | {first}socket.{event}"
+    want = ([call(way, ("192.0.2.1", 9)) for way in WAYS]
+            + [call(way + " to localhost", ("localhost", 9), here=True) for way in WAYS]
             + ["refused: sendto everybody | network sendto ('<broadcast>', 9) | socket.sendto",
                "refused: bind anywhere | network bind ('', 0) | socket.bind",
                "no address: a name that is no address | ", "no address: a number where the name goes | "]

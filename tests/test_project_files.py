@@ -42,7 +42,7 @@ FIXTURES = ROOT / "tests" / "fixtures"
 sys.path.insert(0, str(ROOT / "bench"))
 import links as sweep  # noqa: E402  (bench/links.py: the sweep that found the cases below)
 
-from links_here import PIPES, needs_links, needs_pipes  # noqa: E402
+from links_here import PIPES, link_text, needs_links, needs_pipes  # noqa: E402
 PRIVATE = "PRIVATE-LINE-7341"
 OWN = "OWN-LINE-1234"
 APP = f"def run():\n    return '{OWN}'\n"
@@ -165,7 +165,8 @@ OWN_FILES = {
     ("_jail.py", "_Doorman._hold"): "/proc: which process a thread that asked for a connection belongs to",
     ("_jail.py", "_Doorman._file"): "a handle on the socket file a program of the tests named, to see where it lies: nothing of it is read",
     ("sandbox.py", "_programs_run_by"): "a program the fetched libraries brought, in the run's own folder, never through a link",
-    ("sandbox.py", "_links_again"): "a small file in the tests' copy that the repository holds as a link: its text, never through a link",
+    ("sandbox.py", "_read_small"): "a small file in the tests' copy that the repository holds as a link: its text, never through a link",
+    ("sandbox.py", "_write_small"): "writes: such a small file put back in the tests' copy where its link may not stay, a new file, never through a link",
     ("libraries.py", "_own_look"): "a file a fetch or a build left in the run's own folder, for its fingerprint: opened as itself, never through a link, a plain file with one name",
     ("_builder.py", "unpack"): "the source package of a library that is built, in the build's own folder, behind the sandbox's walls",
     ("_builder.py", "how"): "the pyproject.toml of that source, in the build's own folder: opened as itself, never through a link",
@@ -509,7 +510,7 @@ def test_the_sweeps_six_states(tmp_path):
         elif state == "loop":
             assert os.readlink(p) == "a.txt" and not p.exists()
         else:
-            assert p.is_symlink() and os.readlink(p) == str(there)
+            assert p.is_symlink() and link_text(p) == str(there)
             assert {"link": "kept", "other": "", "nothing": None}[state] == (there.read_text(encoding="utf-8") if there.exists() else None)
 
 
