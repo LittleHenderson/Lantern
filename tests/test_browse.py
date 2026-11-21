@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 import browse_sites
-from browse_sites import PLANTED, SAFE
+from browse_sites import LOOKALIKES, PLANTED, SAFE
 from lantern import browse
 
 DOC = Path(__file__).resolve().parents[1] / "docs" / "browser.md"
@@ -69,6 +69,26 @@ def test_every_planted_version_is_the_safe_site_but_for_its_own_pieces(name):
             assert f not in safe and planted[f] == new
         else:
             assert old != new and safe[f].count(old) == 1
+
+
+@pytest.mark.parametrize("name", sorted(LOOKALIKES))
+def test_every_lookalike_is_the_safe_site_but_for_its_own_pieces_and_says_what_it_gives(name):
+    look = LOOKALIKES[name]
+    assert name not in PLANTED and look.site in SAFE, name
+    safe, version = browse_sites.files(look.site), browse_sites.files(look.site, name)
+    changed = {f for f in set(safe) | set(version) if safe.get(f) != version.get(f)}
+    assert changed == {f for f, _, _ in look.edits}, changed
+    for f, old, new in look.edits:
+        if old is None:
+            assert f not in safe and version[f] == new
+        else:
+            assert old != new and safe[f].count(old) == 1
+    gives = {check: (outcome, codes) for check, outcome, codes in look.gives}
+    assert len(gives) == len(look.gives) and set(gives) <= set(browse.BY_ID), look.gives
+    for check, (outcome, codes) in gives.items():
+        assert outcome in browse.OUTCOMES and outcome != SAFE[look.site][check], (check, outcome)
+        assert set(codes) <= set(browse.BY_ID[check].codes) and (outcome == "broken") == bool(codes), (check, codes)
+    assert (gives.get("outside", ("",))[0] == "broken") == bool(look.asks), name
 
 
 def test_every_code_is_planted_and_every_site_says_each_check():
@@ -307,7 +327,20 @@ def _outcomes(record) -> dict[str, str]:
 
 
 def _codes(record, check: str) -> list[str]:
-    return sorted({s["code"] for c in record["checks"] if c["id"] == check for s in c.get("saw") or []})
+    """The codes the check gives: those of what it saw and counted, never of what it left undecided."""
+    return next(c["codes"] for c in record["checks"] if c["id"] == check)
+
+
+def _told(record, want: dict | None = None) -> str:
+    """What a failure says: the browser, and each check that is not as wanted (with no `want`, each that saw
+    something), with the first rows it saw, so a run on another machine says what it was."""
+    lines = [f"browser: {json.dumps(record.get('browser'), sort_keys=True)}"]
+    for c in record.get("checks") or []:
+        if (want is not None and want.get(c["id"]) == c["outcome"] and not c.get("codes")) or \
+                (want is None and not c.get("saw")):
+            continue
+        lines.append(f"{c['id']}: {c['outcome']} {c.get('codes')} why={c.get('why')!r} saw={json.dumps(c.get('saw')[:6])}")
+    return "\n".join(lines)
 
 
 @needs_browser
@@ -317,9 +350,10 @@ def test_each_site_written_safe_breaks_no_check(tmp_path, site, the_browser):
     the_browser(record)
     assert record["ran"] is True, (record.get("why_not"), record.get("why"))
     assert record["browser"]["own_sandbox"] is True, record["browser"]
-    assert _outcomes(record) == SAFE[site], record["checks"]
-    assert not any(c["codes"] for c in record["checks"]), record["checks"]
+    assert _outcomes(record) == SAFE[site], _told(record, SAFE[site])
+    assert not any(c["codes"] or c["saw"] for c in record["checks"]), _told(record)
     assert record["asked_outside"] == [], record["asked_outside"]        # the safe sites ask nothing of another computer
+    assert record["browser"]["keyboard_end"] in browse.KEYBOARD_ENDS, _told(record)    # what this browser does
 
 
 @needs_browser
@@ -330,8 +364,35 @@ def test_each_planted_problem_breaks_its_own_check_and_no_other(tmp_path, name, 
                         page_seconds=SHORT if name == "hangs" else browse.PAGE_SECONDS)
     the_browser(record)
     assert record["ran"] is True, (record.get("why_not"), record.get("why"))
-    assert _outcomes(record) == dict(SAFE[p.site], **{p.check: "broken"}), record["checks"]
-    assert _codes(record, p.check) == [p.code], record["checks"]
+    want = dict(SAFE[p.site], **{p.check: "broken"})
+    assert _outcomes(record) == want, _told(record, want)
+    assert _codes(record, p.check) == [p.code], _told(record, want)
+    assert not any(s.get("undecided") for c in record["checks"] for s in c["saw"]), _told(record)
     asked = {a["host"] for a in record["asked_outside"]}
     assert asked == ({p.asks} if p.asks else set()), record["asked_outside"]
     assert all(a["refused"] is True for a in record["asked_outside"]), record["asked_outside"]
+
+
+@needs_browser
+@pytest.mark.parametrize("name", sorted(LOOKALIKES))
+def test_each_lookalike_gives_what_it_should(tmp_path, name, the_browser):
+    """A look-alike breaks no check the safe site holds unless it says so: Tab moving on inside a frame, a date field
+    or a part with a tree of its own is no trap, a page that listens for keys does not hold the keyboard, a hidden
+    element is not asked to be reached, a cover that fades away as the page opens is gone before the page is looked
+    at and clicked, and what a refused script from another computer could have done is undecided, with each row it
+    saw marked so and no code given for it."""
+    look = LOOKALIKES[name]
+    record = browse.run(browse_sites.write(tmp_path / name, look.site, name), browser=BROWSER)
+    the_browser(record)
+    assert record["ran"] is True, (record.get("why_not"), record.get("why"))
+    want = dict(SAFE[look.site], **{check: outcome for check, outcome, _ in look.gives})
+    assert _outcomes(record) == want, _told(record, want)
+    codes = {check: list(codes) for check, _, codes in look.gives}
+    for c in record["checks"]:
+        assert c["codes"] == codes.get(c["id"], []), _told(record, want)
+        if c["outcome"] == "inconclusive":
+            assert c["saw"] and all(s.get("undecided") is True for s in c["saw"]) and c["why"], _told(record, want)
+        else:
+            assert not any(s.get("undecided") for s in c["saw"]), _told(record, want)
+    asked = {a["host"] for a in record["asked_outside"]}
+    assert asked == ({look.asks} if look.asks else set()), record["asked_outside"]

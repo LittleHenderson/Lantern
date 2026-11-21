@@ -3,8 +3,10 @@ and `app`, a FastAPI app. Each is written safe, or with one planted problem of `
 pieces: an edit puts new text in place of text that stands exactly once in one file of the safe site, or adds a file.
 
 Written before the checks were built (a firm pass or fail, stage 5, step 1): `PLANTED` says, for each problem, the one
-check that must come out broken and the one code it must give; `SAFE` says what each site written safe gives. None of
-it is copied from a real project."""
+check that must come out broken and the one code it must give; `SAFE` says what each site written safe gives.
+`LOOKALIKES` (step 2, written before each fix it guards): versions that look like a problem to a careless check and
+are not one, or where the run itself can only say "undecided", each with what it must give. None of it is copied from
+a real project."""
 
 from __future__ import annotations
 
@@ -319,12 +321,95 @@ SAFE = {
 }
 
 
+@dataclass(frozen=True)
+class Lookalike:
+    site: str                   # "pages" or "app"
+    what: str                   # what it is, in plain words
+    edits: tuple                # as `Planted.edits`
+    gives: tuple = ()           # (check, outcome, codes) where it differs from the safe site; every other check as SAFE
+    asks: str = ""              # for `outside`: the address the page asks another computer for
+
+
+MAP = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Where to find us</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<p><a href="index.html">The shop</a> <a href="contact.html">Write to us</a></p>
+</body>
+</html>
+"""
+
+LOOKALIKES: dict[str, Lookalike] = {
+    # Tab moves on inside each of these while the page's own place for the keyboard stays the same: no trap
+    "frame": Lookalike("pages", "a page of the site shown in a frame of another, with two links", (
+        ("about.html", "<p>Baking since 1987.</p>",
+         '<p>Baking since 1987.</p>\n<p><iframe src="map.html" title="Where to find us" width="320" height="80">'
+         "</iframe></p>"),
+        ("map.html", None, MAP))),
+    "date-field": Lookalike("pages", "a date field, which Tab goes through part by part", (
+        ("contact.html", '<input id="email" name="email" type="email" required></p>',
+         '<input id="email" name="email" type="email" required></p>\n'
+         '<p><label for="day">A good day to call</label> <input id="day" name="day" type="date"></p>'),)),
+    "component": Lookalike("pages", "a part of the page with a tree of its own (a shadow root) holding two buttons", (
+        ("index.html", '<p id="hours-text" hidden>', '<p><shop-size></shop-size></p>\n<p id="hours-text" hidden>'),
+        _then('customElements.define("shop-size", class extends HTMLElement {\n'
+              '  connectedCallback() {\n'
+              '    var root = this.attachShadow({ mode: "open" });\n'
+              '    ["Smaller", "Larger"].forEach(function (name) {\n'
+              '      var b = document.createElement("button");\n'
+              '      b.type = "button";\n'
+              '      b.textContent = name;\n'
+              '      root.appendChild(b);\n'
+              '    });\n'
+              '  }\n'
+              '});'))),
+    # a page that listens for keys, on its page with one link: Tab can still leave the link
+    "keys-on-page": Lookalike("pages", "a page that listens for keys and has one link", (
+        ("thanks.html", "</main>\n</body>",
+         '</main>\n<script>\ndocument.addEventListener("keydown", function (event) {\n'
+         '  if (event.key === "Escape") { location.href = "index.html"; }\n});\n</script>\n</body>'),)),
+    # what answers a click but cannot be seen is not asked to be reached with Tab
+    "hidden-handler": Lookalike("pages", "a hidden element that answers a click", (
+        ("index.html", '<p id="hours-text" hidden>', '<div id="welcome" hidden>Welcome back</div>\n<p id="hours-text" hidden>'),
+        _then('document.getElementById("welcome").addEventListener("click", function () {\n'
+              '  document.getElementById("welcome").hidden = true;\n});'))),
+    # the page's script needs a library from another computer, which the run refuses: what the page's script would
+    # have done there is undecided, and the request itself is the `outside` check's
+    "outside-library": Lookalike("pages", "the page's script needs a library from another computer", (
+        ("index.html", '<script src="app.js"></script>',
+         '<script src="https://cdn.example.com/shelf.js"></script>\n<script src="app.js"></script>'),
+        ("app.js", '"use strict";\n', '"use strict";\nShelf.start();\n')),
+        gives=(("script", "inconclusive", ()), ("leads", "inconclusive", ()), ("forms", "inconclusive", ()),
+               ("outside", "broken", ("outside-script",))),
+        asks="cdn.example.com"),
+    # a cover that fades away as the page opens, as a start screen does: the page is looked at and its controls are
+    # clicked once the cover has gone, and what answers a click on the cover is hidden by then
+    "fading-cover": Lookalike("pages", "a cover over the page that fades away as the page opens", (
+        ("index.html", "<body>\n<nav>", '<body>\n<div id="cover"><div id="cover-skip">Skip</div></div>\n<nav>'),
+        ("style.css", "outline-offset: 2px; }\n",
+         "outline-offset: 2px; }\n#cover { position: fixed; inset: 0; background: #2b2118; color: #fff;"
+         " transition: opacity 1.5s, visibility 1.5s; }\n#cover.gone { opacity: 0; visibility: hidden; }\n"),
+        _then('document.getElementById("cover-skip").addEventListener("click", function () {});\n'
+              'window.addEventListener("load", function () {\n'
+              '  setTimeout(function () {\n'
+              '    var cover = document.getElementById("cover");\n'
+              '    getComputedStyle(cover).opacity;\n'
+              '    cover.className = "gone";\n'
+              '  }, 50);\n'
+              '});'))),
+}
+
+
 def files(site: str, planted: str | None = None) -> dict[str, str]:
-    """The site's files, name to text: written safe, or with the one planted problem named."""
+    """The site's files, name to text: written safe, or with the one planted problem or look-alike named."""
     out = dict(SITES[site])
     if planted is None:
         return out
-    p = PLANTED[planted]
+    p = PLANTED.get(planted) or LOOKALIKES[planted]
     if p.site != site:
         raise ValueError(f"{planted} is planted in {p.site}, not in {site}")
     for name, old, new in p.edits:
@@ -340,7 +425,8 @@ def files(site: str, planted: str | None = None) -> dict[str, str]:
 
 
 def write(folder, site: str, planted: str | None = None) -> Path:
-    """Write the site into `folder` (made here) and give the folder."""
+    """Write the site into `folder` (made here), safe or with the one planted problem or look-alike named, and give
+    the folder."""
     folder = Path(folder)
     folder.mkdir(parents=True)
     for name, text in files(site, planted).items():

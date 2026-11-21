@@ -56,6 +56,14 @@ path; otherwise Lantern looks where each system installs them.
 
 Each check gives one outcome (below). A broken one lists what it saw, each with its code.
 
+A page is looked at once it has settled: no request of it is under way, nothing on it has changed for a moment, and
+nothing on it is still moving (a transition or an animation that comes to an end, by the browser's own list of them;
+one that goes on for ever, a spinner, does not hold the page up), or once `PAGE_SECONDS` have passed. What a click or
+a sent form does is looked at the same way, after a shorter wait (a form answered with a new page has a page's time
+for that answer). Until 2026-11-21 a page that was still moving counted as settled: a cover that fades away as the
+page opens was looked at and clicked while it was still there or after it had gone, and two runs on the same code gave
+two answers.
+
 ### `opens`: every page opens
 
 Looks at the start page and every page the site itself says it has: a route of the app's code that answers GET and
@@ -74,8 +82,8 @@ Looks at the site's own scripts while each page loads and settles.
 Broken when the site's script raises an error that nothing catches (`raised`), writes an error with `console.error`
 (`console-error`), or a script the page names is not on the site (`not-loaded`). An error raised while Lantern clicks
 or sends a form belongs to that check (`leads`, `forms`). The browser's own lines about a load it was refused are not
-counted. Undecided (`inconclusive`) when the only errors come on pages where a script from another computer was
-refused: they may come from that script being missing. Nothing to check when the pages have no script.
+counted. An error on a page where a script from another computer was refused is undecided (below): it may come from
+that script being missing. Nothing to check when the pages have no script.
 Broken example: `document.title.notThere()` at the end of the page's script; a `console.error(...)` line;
 `<script src="widgets.js">` with no such file. Safe twin: the same page without that line.
 Codes: `raised`, `console-error`, `not-loaded`.
@@ -146,15 +154,25 @@ Codes: `outside-script`, `outside-file`.
 
 ### `keyboard`: it can be used without a mouse
 
-Looks at every page opened, walked with the Tab key, and at the names the browser itself gives its controls.
+Looks at every page opened, walked with the Tab key (once for each control of the page and a few more, up to a
+limit), and at the names the browser itself gives its controls.
 Broken when a link or button has no name the browser can tell (`no-name`: an icon button with no label, a picture
-link with no `alt`), a form field has no label (`no-label`), something that answers a click cannot be reached with
-Tab (`not-reached`: a `div` with a click handler), the place the keyboard is at does not show (`no-focus-ring`:
+link with no `alt`), a form field has no label (`no-label`), something that answers a click and can be seen cannot be
+reached with Tab (`not-reached`: a `div` with a click handler; a hidden one, with no size or `visibility: hidden`, is
+not asked for, since nobody can click it either), the place the keyboard is at does not show (`no-focus-ring`:
 nothing changes when a control is reached), or Tab cannot leave a place (`trapped`). These are the basics, not a
 whole accessibility review: colours, headings and reading order are not judged.
+A trap is a place where Tab and Shift+Tab both leave the keyboard where it is and the page's own script listens for
+keys or focus there or above it. What a browser does by itself at the end of a page differs: the keyboard leaves the
+page, goes back to the first control, or stays on the last. Lantern looks at it once a run, on a page of its own with
+two buttons and no script (`keyboard_end` in the record), so a page with one link, in a browser that brings the
+keyboard back to it or keeps it there, is no trap, and neither is a place the page's script does not hold. Tab moving
+on inside a frame, a video or audio player with its controls, or a date or time field (Tab goes through its parts)
+takes one press more and is no trap. Whether the place of the keyboard shows is not judged inside those, nor inside a
+part of the page with a tree of its own, whose outline is drawn on its own elements.
 Broken example: an icon button holding only a drawing; a phone field with no label; a menu made of a `div`;
-`outline: none` on every control; a field that swallows Tab. Safe twin: the same controls with a label, a real button,
-an outline that shows, and Tab moving on.
+`outline: none` on every control; a field whose script swallows Tab. Safe twin: the same controls with a label, a real
+button, an outline that shows, and Tab moving on.
 Codes: `no-name`, `no-label`, `not-reached`, `no-focus-ring`, `trapped`.
 
 ## Outcomes
@@ -162,7 +180,7 @@ Codes: `no-name`, `no-label`, `not-reached`, `no-focus-ring`, `trapped`.
 * `held`: looked at, and nothing of this kind was found.
 * `broken`, with codes; `saw` lists each thing seen: the code, the page, what it was (the control, the address asked
   for, the answer's status) and how the page was reached.
-* `inconclusive`: what was seen may come from something the run itself refused (only `script`).
+* `inconclusive`: everything the check saw is undecided (below): it may come from something the run itself refused.
 * `nothing-to-check`: the site has nothing of this kind (no form, no page that asks for a sign-in), with why.
 * `not-run`, with the reason: `not-built` (not built for this system yet), `no-browser` (no browser Lantern can drive
   was found), `no-browser-sandbox`, `browser-failed` (the browser stopped, or did not answer, before the pages were
@@ -171,11 +189,24 @@ Codes: `no-name`, `no-label`, `not-reached`, `no-focus-ring`, `trapped`.
 
 Only `held` counts as held.
 
+**Undecided.** Every request for another computer is refused in a run (the `outside` check), so a page that loads a
+script from another computer, a library from a content network, runs without it. What that script could have done on
+the page is undecided on a page where one was refused while the page loaded: a page that shows nothing (`empty`), an
+error of the page's own script (`raised`, `console-error`), a link that leads nowhere, a button that changes nothing
+or raises (`empty-link`, `dead-button`, `button-raises`), a form whose script raises (`form-raises`), and a control
+with no name or label, one Tab does not reach, or one whose place does not show (`no-name`, `no-label`,
+`not-reached`, `no-focus-ring`). Such a thing is kept in `saw`, marked `undecided`, and gives no code. A check with at
+least one decided thing is `broken` with the codes of the decided ones; a check whose every thing is undecided is
+`inconclusive`. What the site answers, a file of the site's own that is not there, a link as the page was sent, a trap
+(a listener of a script that did run) and a page a visitor was let into are decided whatever the refused script would
+have done.
+
 ## What comes out
 
 `browser.json` in the results folder (the shape to come): `of` (the code it is of, as in `behaviour.json`), `ran`,
-`why_not`, `browser` (`name`, `version`, `own_sandbox`), `site` (`how`: `pages` or `app`; `address`), `opened` (each
-page: its path, status and seconds), `checks` (one a check: `id`, `outcome`, `codes`, `saw`, `why`),
+`why_not`, `browser` (`name`, `version`, `own_sandbox`, `keyboard_end`: `leaves`, `wraps`, `stays` or `unknown`),
+`site` (`how`: `pages` or `app`; `address`), `opened` (each page: its path, status and seconds), `checks` (one a
+check: `id`, `outcome`, `codes` of the decided things only, `saw` with `undecided` on each undecided thing, `why`),
 `asked_outside` (every request for another computer: address, kind, page; each refused) and `browser_own` (what the
 browser itself asked for, not the pages, which is not counted for the site).
 
@@ -183,11 +214,17 @@ browser itself asked for, not the pages, which is not counted for the site).
 
 `tests/browse_sites.py` writes two small sites at test time: a folder of plain pages and a FastAPI app. Each is
 written safe, or with one of 25 planted problems that changes only its own pieces (`PLANTED`: the check and the code
-each must give). `tests/test_browse.py` checks that the list on this page is the list in `lantern/browse.py`; that
-every planted version is the safe site but for its own pieces; that Lantern's reading of the code says the same of the
-app and of each twin where only a browser can tell them apart (the sign-in, the headers); and, where
-`LANTERN_TESTS_BROWSER` names a browser by its full path, that each site written safe breaks no check and that each
-planted problem breaks its own check, with its own code, and changes no other. CI runs those in its browser job (Linux,
+each must give), or as one of seven look-alikes (`LOOKALIKES`, each written before the fix it guards): a version that
+looks like a problem to a careless check and is none, or where the run itself can only say undecided (a page of the
+site in a frame, a date field, a part with a tree of its own, a page with one link that listens for keys, a hidden
+element that answers a click, a library from another computer that the run refuses, a cover that fades away as the
+page opens), each with what it must give. `tests/test_browse.py` checks that the list on this page is the list in
+`lantern/browse.py`; that every planted version and look-alike is the safe site but for its own pieces; that Lantern's
+reading of the code says the same of the app and of each twin where only a browser can tell them apart (the sign-in,
+the headers); and, where `LANTERN_TESTS_BROWSER` names a browser by its full path, that each site written safe breaks
+no check, that each planted problem breaks its own check, with its own code, and changes no other, and that each
+look-alike gives what it must; the messages of those tests say what each check saw and what the browser does at the
+end of a page. CI runs those in its browser job (Linux,
 Playwright's Chromium, as the ordinary user), and at the end of its macOS job and of the Windows box's job, each on the
 Chrome its machine comes with; no test may be skipped there. `tests/test_browser_driver.py` holds how the browser is
 started and ended, with a stand-in browser that speaks the same pipe (on every system), and `tests/test_winspawn.py`

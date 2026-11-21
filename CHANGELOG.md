@@ -44,6 +44,25 @@ file. New entries go under `## Unreleased`, on top.
   `tests/test_browse.py`. CI runs the browser checks' tests on the Chrome GitHub's macOS and Windows machines come
   with, at the end of the macOS job and of the Windows box's job (job limits 70 and 60 minutes), where no test may be
   skipped and the run must name the browser it started.
+- Browser checks: what GitHub's macOS machine and Lantern's own landing page showed (the same stage, step 2). On the
+  Chrome 157 of GitHub's macOS machine 17 of the 72 browser tests failed, in both runs, each with "Tab cannot leave
+  this control" on the one page of the plain pages that has a single link (GitHub's Windows machine, on its Chrome
+  157, passed all 92 in both runs); and Lantern's own landing page, opened twice on the same code, gave two different
+  answers. Each fixed after failing tests: seven look-alikes in `tests/browse_sites.py` (`LOOKALIKES`), each with what
+  it must give: a page of the site in a frame, a date field, a part with a tree of its own, a page with one link that
+  listens for keys, a hidden element that answers a click, a library from another computer that the run refuses, and
+  a cover that fades away as the page opens. A trap is now a place where Tab and Shift+Tab both leave the keyboard
+  where it is and the page's own script listens for keys or focus there or above it; what the browser does at the
+  end of a page is looked at once a run, on a page of Lantern's own (`keyboard_end` in the record: the keyboard
+  leaves the page, goes back to the first control, or stays), so a page with one link in a browser that brings the
+  keyboard back to it is no trap. Tab moving on inside a frame, a player or a date field is no trap, and whether the
+  place of the keyboard shows is not judged there or inside a part with a tree of its own; a control that cannot be
+  seen is not asked to be reached. What a script from another computer, refused by the run, could have done on a
+  page is undecided there: such a thing is kept, marked `undecided`, and gives no code, and a check whose every thing
+  is undecided is `inconclusive`. A page counts as settled only when nothing on it is still moving (no transition or
+  animation that ends is running, by the browser's own list of them): until then the landing page's cover, which
+  fades away over 0.9 seconds as the page opens, was looked at and clicked while it was still there or after it had
+  gone. `tests/test_browse.py` has 78 tests now, 34 of them with a real browser.
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
   inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
   the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own

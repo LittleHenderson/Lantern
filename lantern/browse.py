@@ -15,9 +15,10 @@ its list, and `tests/test_browse.py` holds the two to each other.
   before it leaves (`Fetch`): one for the site's address is answered from the site, any other is refused there and
   written down. The browser's one way out is a door of Lantern's own (`_Door`) that forwards nothing: what reaches
   it (what the browser asks for itself) is refused and written down too.
-* The walk (`_Walk`): every page the site says it has is opened, looked at and settled; then its links and buttons
-  are clicked one at a time, its forms filled with made-up values and sent once, and it is walked with the Tab key,
-  each from a fresh load of the page. A visitor with no sign-in opens the pages the code reading says ask who is
+* The walk (`_Walk`): every page the site says it has is opened, and looked at once it has settled (no request
+  under way, nothing changed for a moment, nothing on it still moving); then its links and buttons are clicked one
+  at a time, its forms filled with made-up values and sent once, and it is walked with the Tab key, each from a
+  fresh load of the page. A visitor with no sign-in opens the pages the code reading says ask who is
   calling, in a browser context of its own. What each check saw is read from what was recorded (`_judge`).
 
 A browser check only says what the browser saw: nothing here creates, closes or re-ranks a finding."""
@@ -63,9 +64,20 @@ CHECKS: tuple[Check, ...] = (
 )
 BY_ID = {c.id: c for c in CHECKS}
 
-# Only `held` counts as held. `inconclusive` comes only from `script` (an error on a page where a script from another
-# computer was refused may come from that script being missing).
+# Only `held` counts as held. `inconclusive`: every row the check saw is undecided (below), so it may come from
+# something the run itself refused.
 OUTCOMES = ("held", "broken", "inconclusive", "nothing-to-check", "not-run")
+
+# What a page's script could have changed, where a script from another computer was refused on that page (every such
+# request is refused in a run): the rows of these codes there are undecided (`"undecided": true` on the row), may come
+# from that script being missing, and give no code. A server's answer, a missing file of the site's own, a link in the
+# page as it was sent and a trap (a listener of a script that ran) are decided whatever the refused script would have
+# done.
+UNDECIDED = {"opens": ("empty",), "script": ("raised", "console-error"),
+             "leads": ("empty-link", "dead-button", "button-raises"), "forms": ("form-raises",),
+             "keyboard": ("no-name", "no-label", "not-reached", "no-focus-ring")}
+UNDECIDED_WHY = "what was seen came on pages where a script from another computer was refused, and may come from " \
+                "that script being missing"
 
 # Why a check, or a whole run, was not run: Lantern's own words, never text of a page, a browser or an app.
 WHY_NOT = {
@@ -637,17 +649,44 @@ FOCUSABLES = """(() => {
     text: (e.innerText || e.value || e.getAttribute('aria-label') || e.getAttribute('name') || '').trim().slice(0, 60)}));
 })()""" % STYLE
 
+# Where the keyboard is after a press: the page's own place for it (`document.activeElement`), and inside a part with a
+# tree of its own (an open shadow root) the control inside it. Tab moves on inside a frame, a player's controls and the
+# parts of a date or time field while the page's place stays the same (`inside`).
 AFTER_TAB = """(() => {
-  const style = %s, F = window.__lanternFocus; const a = document.activeElement;
+  const style = %s, F = window.__lanternFocus; const top = document.activeElement;
+  let a = top;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
   const body = !a || a === document.body || a === document.documentElement;
   const same = !body && a === F.last; F.last = body ? null : a;
-  if (!body) F.reached.add(a);
-  const i = F.list.indexOf(a);
-  return {i, body, same, style: body ? null : style(a), tag: a ? a.tagName.toLowerCase() : ''};
+  if (!body) { F.reached.add(a); F.reached.add(top); }
+  const i = F.list.indexOf(top), tag = a ? a.tagName.toLowerCase() : '', type = a ? String(a.type || '').toLowerCase() : '';
+  const inside = !body && (['iframe', 'frame', 'object', 'embed', 'portal'].includes(tag)
+    || ((tag === 'video' || tag === 'audio') && a.controls)
+    || (tag === 'input' && ['date', 'time', 'datetime-local', 'month', 'week'].includes(type)));
+  return {i, body, same, inside, deep: a !== top, style: body ? null : style(a), tag};
 })()""" % STYLE
+
+# The place of the keyboard and every element above it, up through the hosts of trees of their own: whose listeners
+# say whether the page's script can hold the keyboard there.
+HOLDERS = """(() => { const out = []; let e = document.activeElement;
+  while (e && e.shadowRoot && e.shadowRoot.activeElement) e = e.shadowRoot.activeElement;
+  while (e && e.nodeType === 1) { out.push(e); const up = e.parentNode;
+    e = up && up.nodeType === 11 ? up.host : up; }
+  return out; })()"""
+KEYISH = ("keydown", "keyup", "keypress", "focus", "blur", "focusin", "focusout")
+
+# What this browser does when Tab is pressed on the last control of a page, seen once a run on a page of Lantern's own
+# with two buttons and no script: the keyboard leaves the page, goes back to the first control, or stays.
+PROBE = "data:text/html;charset=utf-8," + urllib.parse.quote(
+    '<!doctype html><title>Lantern</title><button id="a">a</button> <button id="b">b</button>', safe="")
+KEYBOARD_ENDS = ("leaves", "wraps", "stays")
+MOST_PRESSES = 80               # Tab presses on one page
 
 REACHED = """function () { const F = window.__lanternFocus; if (!F) return false;
   for (const r of F.reached) { if (r === this || this.contains(r) || r.contains(this)) return true; } return false; }"""
+
+SHOWN = """function () { const r = this.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && getComputedStyle(this).visibility !== 'hidden'; }"""
 
 DESCRIBE = """function () { return {tag: this.tagName.toLowerCase(), id: this.id || '',
   text: (this.innerText || this.getAttribute('aria-label') || '').trim().slice(0, 60)}; }"""
@@ -658,6 +697,15 @@ FIELDISH = ("textbox", "searchbox", "combobox", "spinbutton", "checkbox", "radio
 MOST_ELEMENTS = 3000            # elements of one page whose listeners are looked at
 CLICK_SECONDS = 3.0             # what a click does shows in this time (a new page gets PAGE_SECONDS)
 QUIET = 0.25                    # seconds with no request and no change to the page: the page has settled
+# ... and nothing on it is still moving, by the browser's own list of its animations: a transition or an animation
+# that ends (one that goes on for ever, a spinner, does not hold the page up). Until 2026-11-21 a page whose cover
+# fades away as it opens was looked at, and clicked, while the cover was still there or after it had gone, which
+# gave two runs on the same code two answers (Lantern's own landing page: its cover fades for 0.9 s).
+SETTLED = """(() => { const s = window.__lantern; let moving = 0;
+  for (const a of document.getAnimations()) {
+    const t = a.playState === 'running' && a.effect ? a.effect.getComputedTiming() : null;
+    if (t && isFinite(t.endTime)) moving += 1; }
+  return {since: s ? performance.now() - s.last : null, moving}; })()"""
 SCRIPT_KINDS = ("Script",)
 SIGN_IN_COOKIE = re.compile(r"(?i)(?:^|[^a-z])(?:session|sess|sessid|sessionid|sid|auth|jwt|token|login|remember)"
                             r"(?:[^a-z]|$)|sessid$|sessionid$|^jsessionid$|^phpsessid$")
@@ -703,6 +751,7 @@ class _Walk:
         self.looked: dict[str, int] = {c.id: 0 for c in CHECKS}
         self.scripts = 0
         self.visitor_judged = 0
+        self.keyboard_end = "unknown"
 
     # ------------------------------------------------------------------------------------------- events
     def tab_of(self, session: str | None) -> _Tab | None:
@@ -943,8 +992,9 @@ class _Walk:
             net = not busy and time.monotonic() - last >= QUIET
             dom = True
             if net and tab.world is not None:
-                since = self.eval(tab, "performance.now() - window.__lantern.last")
-                dom = since is None or since >= QUIET * 1000
+                now = self.eval(tab, SETTLED) or {}
+                since = now.get("since")
+                dom = (since is None or since >= QUIET * 1000) and not now.get("moving")
             if net and dom:
                 return True
             time.sleep(0.05)
@@ -1144,28 +1194,37 @@ class _Walk:
         focusables = self.eval(tab, FOCUSABLES) or []
         reached: set[int] = set()
         ringless: set[int] = set()
-        presses = min(len(focusables) + 2, 80)
-        for _ in range(presses if focusables else 0):
-            try:
-                for kind in ("rawKeyDown", "keyUp"):
-                    self.b.call("Input.dispatchKeyEvent", {"type": kind, "key": "Tab", "code": "Tab",
-                                                           "windowsVirtualKeyCode": 9, "nativeVirtualKeyCode": 9},
-                                tab.session)
-            except Exception:  # noqa: BLE001 - the page went away under the key
-                break
-            now = self.eval(tab, AFTER_TAB)
-            if not isinstance(now, dict):
+        left: set = set()               # where Tab stayed and Shift+Tab moved on: the keyboard can leave it
+        budget, presses = len(focusables) + 2, 0
+        while focusables and presses < min(budget, MOST_PRESSES):
+            presses += 1
+            now = self._tab(tab)
+            if now is None:
                 break
             i = now.get("i")
             if now.get("same"):
-                found.append({"code": "trapped", "page": path, "control": self._said(focusables, i, now),
-                              "what": "Tab cannot leave this control"})
-                break
+                if now.get("inside"):
+                    budget += 1         # Tab moves on inside a frame, a player or a date field: one press more
+                    continue
+                key = (i, now.get("tag"))
+                if key in left:
+                    break               # back where Tab stays: the keyboard goes no further on this page
+                held = self._held(tab, focusables)
+                if held == "trapped":
+                    found.append({"code": "trapped", "page": path, "control": self._said(focusables, i, now),
+                                  "what": "Tab cannot leave this control"})
+                    break
+                if held == "browser":
+                    break               # the browser itself keeps the keyboard there: nothing more to reach
+                left.add(key)
+                budget += 1
+                continue
             if isinstance(i, int) and i >= 0:
                 if i in reached:
                     continue
                 reached.add(i)
-                if now.get("style") == focusables[i].get("style") and i not in ringless:
+                if not now.get("inside") and not now.get("deep") and now.get("style") == focusables[i].get("style") \
+                        and i not in ringless:
                     ringless.add(i)
                     found.append({"code": "no-focus-ring", "page": path, "control": self._said(focusables, i, now),
                                   "what": "nothing shows where the keyboard is when this control is reached"})
@@ -1175,6 +1234,106 @@ class _Walk:
             self.b.call("Runtime.releaseObjectGroup", {"objectGroup": "lantern"}, tab.session)
         except Exception:  # noqa: BLE001
             pass
+
+    def _key(self, tab: _Tab, shift: bool = False) -> None:
+        """Tab, or Shift+Tab, as the browser's own key events."""
+        for kind in ("rawKeyDown", "keyUp"):
+            args = {"type": kind, "key": "Tab", "code": "Tab", "windowsVirtualKeyCode": 9}
+            if shift:
+                args["modifiers"] = 8
+            self.b.call("Input.dispatchKeyEvent", args, tab.session)
+
+    def _tab(self, tab: _Tab, shift: bool = False) -> dict | None:
+        """Press Tab (or Shift+Tab) and say where the keyboard went (`AFTER_TAB`); None when the page went away."""
+        try:
+            self._key(tab, shift)
+        except Exception:  # noqa: BLE001 - the page went away under the key
+            return None
+        now = self.eval(tab, AFTER_TAB)
+        return now if isinstance(now, dict) else None
+
+    def _held(self, tab: _Tab, focusables: list) -> str:
+        """Tab left the keyboard where it was. "left" when Shift+Tab moves it on (it can be left with the keyboard),
+        "trapped" when Shift+Tab cannot move it either and the page's own script listens for keys or focus there or
+        above it, else "browser": what this browser does by itself (on a page with one control, a browser that brings
+        the keyboard back to the first control, or keeps it on the last, keeps it on that one)."""
+        back = self._tab(tab, shift=True)
+        if back is None:
+            return "browser"
+        if not back.get("same"):
+            return "left"
+        if len(focusables) == 1 and self.keyboard_end in ("wraps", "stays"):
+            return "browser"
+        return "trapped" if self._listens_for_keys(tab) else "browser"
+
+    def _listens_for_keys(self, tab: _Tab) -> bool:
+        """Does the page's own script listen for keys or focus where the keyboard is, above it, on the document or on
+        the window? The elements are found in Lantern's world and handed to the page's own world by the browser's own
+        calls (no script of the page runs for it), where its listeners are read."""
+        with self.lock:
+            main, world = tab.main, tab.world
+        if main is None or world is None:
+            return False
+        targets: list[str] = []
+        try:
+            self.b.call("DOM.getDocument", {"depth": 0}, tab.session)
+            chain = self.b.call("Runtime.evaluate", {"expression": HOLDERS, "contextId": world, "returnByValue": False,
+                                                     "objectGroup": "lantern"}, tab.session)["result"]
+            items = self.b.call("Runtime.getProperties", {"objectId": chain["objectId"], "ownProperties": True},
+                                tab.session).get("result") or []
+            for item in items:
+                obj = (item.get("value") or {}).get("objectId")
+                if not str(item.get("name", "")).isdigit() or not obj:
+                    continue
+                node = self.b.call("DOM.requestNode", {"objectId": obj}, tab.session)["nodeId"]
+                theirs = self.b.call("DOM.resolveNode", {"nodeId": node, "executionContextId": main,
+                                                         "objectGroup": "lantern"}, tab.session)["object"]["objectId"]
+                targets.append(theirs)
+            for name in ("document", "window"):
+                r = self.b.call("Runtime.evaluate", {"expression": name, "contextId": main, "returnByValue": False,
+                                                     "objectGroup": "lantern"}, tab.session)
+                targets.append(r["result"]["objectId"])
+        except Exception:  # noqa: BLE001 - a page that went away, or an element the browser did not hand over
+            return False
+        for target in targets:
+            try:
+                listeners = self.b.call("DOMDebugger.getEventListeners", {"objectId": target}, tab.session)
+            except Exception:  # noqa: BLE001
+                continue
+            if any(item.get("type") in KEYISH for item in listeners.get("listeners") or []):
+                return True
+        return False
+
+    def probe_keyboard(self, context: str | None) -> str:
+        """What this browser does when Tab is pressed on the last control of a page (`KEYBOARD_ENDS`), on a page of
+        Lantern's own with two buttons and no script; "unknown" when it could not be told."""
+        tab = self.open_tab(context)
+        try:
+            with self.lock:
+                self.k += 1
+                tab.phase = ("probe", "", self.k)
+                loads = tab.loads
+            self.b.call("Page.navigate", {"url": PROBE}, tab.session, timeout=self.page_seconds + 15)
+            deadline = time.monotonic() + self.page_seconds
+            while time.monotonic() < deadline:
+                with self.lock:
+                    if tab.loads > loads and tab.world is not None:
+                        break
+                time.sleep(0.02)
+            if self.eval(tab, "document.activeElement && document.activeElement.blur(), document.title") != "Lantern":
+                return "unknown"
+            seen = []
+            for _ in range(3):
+                self._key(tab)
+                seen.append(self.eval(tab, "(() => { const a = document.activeElement; "
+                                           "return a && a !== document.body ? String(a.id) : ''; })()"))
+        except Exception:  # noqa: BLE001 - the browser did not let the page be opened or the keys be pressed
+            return "unknown"
+        finally:
+            self.close_tab(tab)
+        if seen[:2] != ["a", "b"]:
+            return "unknown"
+        return {"": "leaves", "a": "wraps", "b": "stays"}.get(seen[2], "unknown")
 
     @staticmethod
     def _said(focusables: list, i, now: dict) -> str:
@@ -1219,9 +1378,10 @@ class _Walk:
         return ("<" + " ".join(bits) + ">")[:100]
 
     def _unreached(self, tab: _Tab, path: str) -> list[dict]:
-        """What answers a click and was not reached with Tab. The elements are listed by the browser's own calls
-        (no script of the page runs for it), their listeners read in the page's own world, where its script put
-        them, and whether Tab reached them in Lantern's world, where the walk wrote it down."""
+        """What answers a click, can be seen, and was not reached with Tab. The elements are listed by the browser's
+        own calls (no script of the page runs for it), their listeners read in the page's own world, where its script
+        put them, and whether they can be seen and whether Tab reached them in Lantern's world, where the walk wrote
+        it down."""
         out: list[dict] = []
         with self.lock:
             main, world = tab.main, tab.world
@@ -1245,6 +1405,10 @@ class _Walk:
             try:
                 obj = self.b.call("DOM.resolveNode", {"nodeId": node, "executionContextId": world,
                                                       "objectGroup": "lantern"}, tab.session)["object"]["objectId"]
+                shown = self.b.call("Runtime.callFunctionOn", {"objectId": obj, "functionDeclaration": SHOWN,
+                                                               "returnByValue": True}, tab.session)
+                if (shown.get("result") or {}).get("value") is not True:
+                    continue            # hidden: nobody can click it either
                 r = self.b.call("Runtime.callFunctionOn", {"objectId": obj, "functionDeclaration": REACHED,
                                                            "returnByValue": True}, tab.session)
                 reached = (r.get("result") or {}).get("value")
@@ -1293,6 +1457,7 @@ class _Walk:
     # ------------------------------------------------------------------------------------------- the walk
     def walk(self) -> None:
         context = self.b.call("Target.createBrowserContext", {})["browserContextId"]
+        self.keyboard_end = self.probe_keyboard(context)
         tab = self.open_tab(context)
         try:
             for path in self.site.pages:
@@ -1308,16 +1473,26 @@ class _Walk:
             answers, errors, outside = list(self.answers), list(self.errors), list(self.outside)
         checks: dict[str, dict] = {}
 
+        # the pages where a script from another computer was refused while the page loaded
+        refused_on = {o["phase"][1] for o in outside
+                      if o["phase"][0] in ("load", "reload") and o["kind"] in SCRIPT_KINDS}
+
         def put(check: str, outcome: str, why: str | None = None) -> None:
             saw = self.saw[check]
-            codes = sorted({s["code"] for s in saw})
-            checks[check] = {"id": check, "outcome": "broken" if saw else outcome, "codes": codes, "saw": saw[:200],
-                             "why": why if not saw else None}
+            for row in saw:
+                if row["code"] in UNDECIDED.get(check, ()) and row.get("page") in refused_on:
+                    row["undecided"] = True
+            counted = [row for row in saw if not row.get("undecided")]
+            if counted:
+                outcome, why = "broken", None
+            elif saw:
+                outcome, why = "inconclusive", UNDECIDED_WHY
+            checks[check] = {"id": check, "outcome": outcome, "codes": sorted({row["code"] for row in counted}),
+                             "saw": saw[:200], "why": why}
 
         put("opens", "held")
         # the page's own script: what it raised or wrote as an error while each page loaded the first time
         first = [e for e in errors if e["phase"][0] == "load"]
-        outside_scripts = {o["phase"][1] for o in outside if o["phase"][0] == "load" and o["kind"] in SCRIPT_KINDS}
         not_loaded = [a for a in answers if a["phase"][0] == "load" and a["kind"] in SCRIPT_KINDS
                       and (a["status"] is None or a["status"] >= 400)]
         for e in first:
@@ -1327,10 +1502,7 @@ class _Walk:
             self.saw["script"].append({"code": "not-loaded", "page": a["phase"][1], "address": a["path"][:200],
                                        "status": a["status"], "what": "a script the page names is not on the site"})
         self.saw["script"] = _unique(self.saw["script"])
-        if self.saw["script"] and not not_loaded and all(s["page"] in outside_scripts for s in self.saw["script"]):
-            checks["script"] = {"id": "script", "outcome": "inconclusive", "codes": [], "saw": self.saw["script"],
-                                "why": "the errors came on pages where a script from another computer was refused"}
-        elif not self.scripts and not self.saw["script"]:
+        if not self.scripts and not self.saw["script"]:
             put("script", "nothing-to-check", "the pages have no script")
         else:
             put("script", "held")
@@ -1506,6 +1678,7 @@ def run(repo, *, browser: str | None = None, page_seconds: float = PAGE_SECONDS,
         walk = _Walk(b, site, server, page_seconds, origin, log)
         holder["walk"] = walk
         walk.walk()
+        record["browser"]["keyboard_end"] = walk.keyboard_end
         record.update(ran=True, opened=walk.pages, checks=walk.judge(), asked_outside=walk.asked_outside())
     except _cdp.BrowserError as e:
         log(f"browse: the browser stopped ({e.why})")
