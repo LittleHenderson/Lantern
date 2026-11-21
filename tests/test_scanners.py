@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from links_here import LINKS, needs_links
 
 from lantern import depaudit, evidence, pipeline, programs, readiness, scanresult, security
 from lantern.cli import main as cli_main
@@ -480,7 +481,7 @@ def test_a_file_gitleaks_names_outside_what_it_was_handed_fails_the_run(tmp_path
     assert {f["tool"] for f in found} == {"lantern-secrets"}
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="a link made by the test: POSIX")
+@needs_links
 def test_a_file_gitleaks_names_through_a_link_out_of_the_project_or_that_is_not_there_is_no_finding(tmp_path, monkeypatch):
     """A scanner's row is a finding only for a file of the project. The twin, a plain file two folders down, is in
     the test above."""
@@ -534,8 +535,8 @@ def test_where_no_name_of_lanterns_own_can_be_made_gitleaks_gets_the_project_by_
 def test_where_no_name_of_lanterns_own_can_be_made_a_project_with_its_own_list_is_not_scanned_by_gitleaks(tmp_path, monkeypatch, as_a):
     """The same system, and the project brings a list of findings for gitleaks to leave out: handed over by its
     own path the program would read it. It is not started on the project; the record says why; the patterns run."""
-    if as_a == "link" and sys.platform == "win32":
-        pytest.skip("a link made by the test: POSIX")
+    if as_a == "link" and not LINKS:
+        pytest.skip("this system does not let this user make a symbolic link")
     repo = _write(tmp_path / "p", {"config.py": 'KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n'})
     if as_a == "file":
         (repo / ".gitleaksignore").write_text("config.py:aws-access-token:1\n", encoding="utf-8")

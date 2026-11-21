@@ -20,6 +20,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 
 import lantern_files
 from lantern import cli, evidence, kept, pipeline, python_frontend, scanresult, security
@@ -254,7 +255,7 @@ def test_an_entry_that_is_not_whole_is_no_entry(tmp_path):
     same(SHELF.get(key), Outer("o", [Inner("a")]))      # the safe twin: the whole entry is read
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
+@needs_links
 def test_an_entry_is_never_read_through_a_link(tmp_path):
     key, other = SHELF.key("one"), SHELF.key("two")
     assert SHELF.put(other, "the other answer")
@@ -800,12 +801,12 @@ def _clearing(tmp_path, shelf):
     assert all(stray.read_text(encoding="utf-8") == "{}" for stray in strays)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
+@needs_links
 def test_clearing_removes_entries_and_nothing_else(tmp_path):
     _clearing(tmp_path, SHELF)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
+@needs_links
 @pytest.mark.parametrize("which", range(5))
 def test_clearing_does_not_go_by_where_an_entry_is_kept(tmp_path, which):
     """The same, with an entry kept in the folder this test once took for its link. On 2026-11-13 the first of the five

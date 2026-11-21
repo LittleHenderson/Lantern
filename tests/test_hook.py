@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 from test_commit_copy import WHEN, commit, git
 from test_diff import BACKUP, BACKUP_NIGHTLY, BACKUP_ROUTE, BASE, SHELL_LINE, SHELL_LINE_SAID, Checks, changed
 
@@ -202,7 +203,7 @@ def test_a_hook_lantern_did_not_write_is_never_replaced_or_removed(tmp_path, cap
     assert "of your own" in capsys.readouterr().out
 
 
-@pytest.mark.skipif(os.name == "nt", reason="a symbolic link needs rights a Windows user may not have")
+@needs_links
 def test_a_hook_that_is_a_link_is_not_lanterns_and_what_it_names_is_left_alone(tmp_path, capsys):
     repo = tmp_path / "p"
     commit(repo, {"a.txt": "one\n"})
@@ -381,7 +382,7 @@ def test_the_line_for_a_hook_of_ones_own_runs_this_lantern_too(tmp_path):
     assert r.returncode == 2 and "could not read what git said is being pushed" in r.stderr, r.stderr
 
 
-@pytest.mark.skipif(os.name == "nt", reason="a symbolic link needs rights a Windows user may not have")
+@needs_links
 def test_a_receipts_folder_the_project_brings_as_a_link_is_not_written_through(tmp_path):
     """A project can bring `.lantern/push` as a link to a folder anywhere on the computer. Lantern writes nothing
     through it, no receipt and no `.gitignore`: the push is stopped as one Lantern could not check, with the reason.

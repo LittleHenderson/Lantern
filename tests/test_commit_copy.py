@@ -13,10 +13,10 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 
 from lantern import gitfacts, programs
 
-only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links)")
 WHEN = {"GIT_AUTHOR_DATE": "2026-11-01T10:00:00+0100", "GIT_COMMITTER_DATE": "2026-11-01T10:00:00+0100"}
 
 
@@ -134,7 +134,7 @@ def test_only_the_asked_folder_of_a_larger_repository_is_copied(tmp_path):
 
 
 # ---------------------------------------------------------------------------------------------------------- links
-@only_posix
+@needs_links
 def test_a_link_that_stays_inside_is_made_again_and_one_that_leads_out_is_not(tmp_path):
     repo = tmp_path / "repo"
     put(repo, {"app/main.py": "m = 1\n", "shared/util.py": "u = 1\n"})
@@ -168,7 +168,7 @@ def test_which_link_stays_inside_whatever_else_lies_in_the_folder(parts, target,
     assert programs.link_inside(parts, target) is inside
 
 
-@only_posix
+@needs_links
 def test_no_link_that_leads_out_is_ever_made(tmp_path):
     with pytest.raises(ValueError):
         programs.put_link(tmp_path, ["a", "x"], "../../etc/passwd")

@@ -26,8 +26,8 @@ import pytest
 
 from lantern import gitfacts, pipeline, remote, scanresult, security
 from lantern.python_frontend import inside_repo
+from links_here import PIPES, needs_links, needs_pipes
 
-needs_links = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links, pipes)")
 PRIVATE = "the private line 7341 of a file that is not in the project"
 APP = {"app.py": "import os\n\n\ndef run(cmd):\n    os.system(cmd)\n"}
 SHELL = "import subprocess\n\n\ndef go(cmd):\n    subprocess.call(cmd, shell=True)\n"
@@ -101,7 +101,7 @@ def test_a_notes_file_of_the_project_is_shown_as_before(tmp_path, monkeypatch):
     assert _notes(_analyze(repo, tmp_path / "out2")) == "Written here.\n"
 
 
-@needs_links
+@needs_pipes
 def test_a_pipe_under_the_notes_files_name_does_not_hold_the_run_up(tmp_path, monkeypatch):
     """Before, the report waited for good for somebody to write into the pipe (the run is ended here after 20 s)."""
     import signal
@@ -169,9 +169,10 @@ def test_what_counts_as_a_file_of_the_project(tmp_path):
         assert not inside_repo(repo / name, repo), name
     assert not inside_repo(outside / "private.py", repo)        # a path that was never under the project
     assert not inside_repo(repo, repo)                          # the project is a folder, not a file of itself
-    os.mkfifo(repo / "pipe.py")                                 # no file at all: reading one waits for good
-    os.symlink("pipe.py", repo / "to-pipe.py")
-    assert not inside_repo(repo / "pipe.py", repo) and not inside_repo(repo / "to-pipe.py", repo)
+    if PIPES:                                                   # Windows has no pipe among its files
+        os.mkfifo(repo / "pipe.py")                             # no file at all: reading one waits for good
+        os.symlink("pipe.py", repo / "to-pipe.py")
+        assert not inside_repo(repo / "pipe.py", repo) and not inside_repo(repo / "to-pipe.py", repo)
     os.symlink(repo, tmp_path / "shortcut")                     # the person's own shortcut to the project changes nothing
     short = tmp_path / "shortcut"
     assert inside_repo(short / "app.py", short) and inside_repo(short / "alias" / "mod.py", short)
@@ -189,7 +190,8 @@ def test_the_quick_look_and_the_slow_look_agree(tmp_path, monkeypatch):
     os.symlink(repo / "pkg", repo / "alias")
     os.symlink(outside / "dir", repo / "vendor")
     os.symlink(outside / "private.py", repo / "out.py")
-    os.mkfifo(repo / "pipe.py")
+    if PIPES:                                                   # Windows has no pipe among its files: there the name
+        os.mkfifo(repo / "pipe.py")                             # is one nothing answers to, which is not inside either
     _write(tmp_path / "project2", {"app.py": "x = 1\n"})       # a folder whose path begins with the project's
     names = ["app.py", "pkg/mod.py", "pkg/sub/deep.py", "alias/mod.py", "vendor/inner.py", "out.py", "pipe.py",
              "pkg", "missing.py", "pkg/missing.py", "pkg//mod.py", "pkg/./mod.py", "./app.py", "pkg/../app.py",
@@ -287,7 +289,7 @@ def test_only_the_link_is_left_out_of_bandit(tmp_path):
     assert [x for x in record["exclusions"] if x.endswith(".py")] == ["a,b/tool.py", "a[1]/tool.py", "tool.py"]
 
 
-@needs_links
+@needs_pipes
 def test_a_pipe_under_a_python_name_does_not_hold_bandit_up(tmp_path, monkeypatch):
     """Before, Bandit waited on it until Lantern's time limit for Bandit ended the whole check: a project could
     switch the Python checker off by bringing a pipe (the limit is 15 s here so the older code fails soon)."""
@@ -297,6 +299,16 @@ def test_a_pipe_under_a_python_name_does_not_hold_bandit_up(tmp_path, monkeypatc
     findings, record = security.run_bandit(repo)
     assert record["state"] == "ok" and [f["file"] for f in findings] == ["app.py"]
     assert "wait.py" in record["exclusions"]
+
+
+def _not_the_projects(tmp_path: Path, place: Path) -> None:
+    """Something under a Python name with a comma in it that is not the project's own file, so that Bandit is
+    started on copies: a pipe, or where the system has none among its files (Windows), a link out of the project."""
+    if PIPES:
+        os.mkfifo(place)
+    else:
+        outside = _write(tmp_path / "elsewhere", {"other.py": SHELL}) / "other.py"
+        os.symlink(outside, place)
 
 
 def _what_bandit_said(monkeypatch) -> list:
@@ -345,7 +357,7 @@ def test_bandit_opens_no_file_it_could_not_be_told_to_leave_out(tmp_path, monkey
     assert plain["scope"] == record["scope"]
 
 
-@needs_links
+@needs_pipes
 def test_a_pipe_bandit_could_not_be_told_to_leave_out_does_not_hold_it_up(tmp_path, monkeypatch):
     """Before, Bandit waited on such a pipe until Lantern's time limit ended it, and the project had no Python
     check: a comma in the pipe's name was enough (the limit is 15 s here so the older code fails soon)."""
@@ -378,7 +390,7 @@ def test_a_file_of_the_project_that_could_not_be_copied_is_said(tmp_path, monkey
     """On copies, a file of the project that could not be copied was not checked: the run is partial and names it,
     as it does for a file Bandit could not read where it lies."""
     repo = _write(tmp_path / "project", APP | {"pkg/mod.py": SHELL})
-    os.mkfifo(repo / "wait,1.py")
+    _not_the_projects(tmp_path, repo / "wait,1.py")
     monkeypatch.setattr(security, "BANDIT_TIMEOUT", 15)         # before: the pipe held Bandit up for that long
     real = security.project_bytes
 
@@ -398,7 +410,7 @@ def test_without_a_folder_for_the_copies_bandit_is_not_started(tmp_path, monkeyp
     that the Python check did not run, and why."""
     said = _what_bandit_said(monkeypatch)
     repo = _write(tmp_path / "project", APP)
-    os.mkfifo(repo / "wait,1.py")
+    _not_the_projects(tmp_path, repo / "wait,1.py")
     monkeypatch.setattr(security, "BANDIT_TIMEOUT", 15)
 
     def no_folder():

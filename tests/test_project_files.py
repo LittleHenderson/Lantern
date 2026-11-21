@@ -42,7 +42,7 @@ FIXTURES = ROOT / "tests" / "fixtures"
 sys.path.insert(0, str(ROOT / "bench"))
 import links as sweep  # noqa: E402  (bench/links.py: the sweep that found the cases below)
 
-only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links, pipes)")
+from links_here import PIPES, needs_links, needs_pipes  # noqa: E402
 PRIVATE = "PRIVATE-LINE-7341"
 OWN = "OWN-LINE-1234"
 APP = f"def run():\n    return '{OWN}'\n"
@@ -88,7 +88,7 @@ def _in_time(fn, pipe: Path, seconds: int = 30):
     t.join(seconds)
     if not done:
         try:
-            os.close(os.open(pipe, os.O_WRONLY | os.O_NONBLOCK))
+            os.close(os.open(pipe, os.O_WRONLY | getattr(os, "O_NONBLOCK", 0)))
         except OSError:
             pass
         t.join(5)
@@ -124,15 +124,16 @@ def test_a_path_that_leaves_the_project_is_a_file_that_is_not_there(tmp_path):
     assert project_text(repo / str(repo / "app.py"), repo) == APP       # and so is its own file by its whole path
 
 
-@only_posix
+@needs_links
 def test_a_link_out_a_pipe_and_a_file_behind_a_linked_folder_are_not_there(tmp_path):
     repo = _write(tmp_path / "project", {"app.py": APP, "pkg/mod.py": "x = 1\n"})
     other = _write(tmp_path / "other", {"app.py": OTHER, "dir/inner.py": OTHER})
     os.symlink(other / "app.py", repo / "out.py")
     os.symlink(other / "dir", repo / "vendor")
     os.symlink(other / "nowhere", repo / "broken.py")
-    os.mkfifo(repo / "pipe.py")
-    for name in ("out.py", "vendor/inner.py", "broken.py", "pipe.py"):
+    if PIPES:                                                        # Windows has no pipe among its files
+        os.mkfifo(repo / "pipe.py")
+    for name in ("out.py", "vendor/inner.py", "broken.py") + (("pipe.py",) if PIPES else ()):
         for read in (project_text, project_bytes):
             with pytest.raises(FileNotFoundError):
                 _in_time(lambda read=read, name=name: read(repo / name, repo), repo / "pipe.py", 10)
@@ -315,16 +316,16 @@ def _said(sample: str, rel: str, state: str, here: Path) -> dict:
     return sweep.says(out, str(here))
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("sample, rel", FOUND + BY_NAME, ids=lambda v: v.replace("/", "_"))
 def test_a_file_looked_for_by_its_name_is_not_read_through_a_link_and_not_waited_on(sample, rel, tmp_path, monkeypatch):
     _without_bandit(monkeypatch)
     said = {state: _said(sample, rel, state, tmp_path / state)
-            for state in ("link", "other", "nothing", "pipe", "loop", "inside", "beside")}
+            for state in ("link", "other", "nothing") + (("pipe",) if PIPES else ()) + ("loop", "inside", "beside")}
     # nothing the analysis says depends on what the outside file holds, or on whether it is there at all
     assert said["link"] == said["other"], "read through the link"
     assert said["other"] == said["nothing"], "the results tell whether the outside path exists"
-    assert not [v for state in ("pipe", "loop") for v in said[state].values() if v.startswith("unreadable")]
+    assert not [v for state in ("pipe", "loop") if state in said for v in said[state].values() if v.startswith("unreadable")]
     # the twin: the same link kept inside the project is the project's file, and is read as the file itself is
     assert said["inside"] == said["beside"]
 
@@ -365,7 +366,7 @@ READ_BEFORE = [("aiapp", "notebooks/experiments.ipynb"), ("androidapp", "app/bui
                ("iosapp", "Journal/Info.plist"), ("nextapp", "package.json"), ("rnapp", "app.json"), ("rustapp", "Cargo.toml")]
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("sample, rel", READ_BEFORE, ids=lambda v: v.replace("/", "_"))
 def test_the_comparison_can_see_a_read(sample, rel, tmp_path, monkeypatch):
     """The test above compares a link to the file with a link to an empty file. That only shows a read when the
@@ -386,7 +387,7 @@ def test_the_comparison_can_see_a_read(sample, rel, tmp_path, monkeypatch):
 IPHONE = [("Journal/Info.plist", lambda app: app.plist), ("Journal/Journal.entitlements", lambda app: app.entitlements)]
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("rel, named", IPHONE, ids=["Info.plist", "entitlements"])
 @pytest.mark.parametrize("at_its_end", ["the file", "nothing"])
 def test_an_iphone_app_is_not_given_a_settings_file_that_is_a_link_out(rel, named, at_its_end, tmp_path):
@@ -417,7 +418,7 @@ def test_an_iphone_app_is_not_given_a_settings_file_that_is_a_link_out(rel, name
     assert named(inside) == named(own) and inside.keys == own.keys
 
 
-@only_posix
+@needs_links
 def test_a_learn_step_about_a_file_is_done_only_when_the_project_holds_the_file(tmp_path):
     """The same question asked the same way: "is `SECURITY.md` there" was asked with a look for the exact name, which
     finds a link whatever is at its end from Python 3.12 on and only a link with something at its end before."""
@@ -463,7 +464,7 @@ def test_the_sweep_names_each_kind_of_find():
     assert sweep.judge([run("", "whole", says=same), run("", "whole", says=less)])["finds"]["unstable"]
 
 
-@only_posix
+@pytest.mark.skipif(not hasattr(signal, "SIGALRM"), reason="the sweep's time limit is an alarm signal, which Windows has not")
 def test_the_sweeps_time_limit_is_not_passed_over_by_a_reader():
     """A reader that passes over whatever goes wrong with one file and goes on to the next is still ended at the
     sweep's limit. Until 2026-11-10 the limit was an `Exception` and rang once: such a reader caught it, went on, and
@@ -495,9 +496,9 @@ def test_the_sweeps_time_limit_is_not_passed_over_by_a_reader():
     assert signal.getsignal(signal.SIGALRM) is before and signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
 
 
-@only_posix
+@needs_links
 def test_the_sweeps_six_states(tmp_path):
-    for state in sweep.STATES:
+    for state in [s for s in sweep.STATES if PIPES or s != "pipe"]:
         repo = _write(tmp_path / state / "project", {"a.txt": "kept"})
         sweep.put(repo, "a.txt", state, tmp_path / state / "outside")
         p, there = repo / "a.txt", tmp_path / state / "outside" / "moved"
@@ -515,7 +516,7 @@ def test_the_sweeps_six_states(tmp_path):
 # -- the files the comparison above cannot see: their being read changes what the analysis says only when they hold
 #    something that matters, so each gets a file that does
 
-@only_posix
+@needs_links
 def test_an_accepted_risks_file_that_is_a_link_accepts_nothing(tmp_path, monkeypatch):
     _without_bandit(monkeypatch)
     code = {"app.js": "export function show(el, text) {\n  el.innerHTML = text\n}\n"}
@@ -534,7 +535,7 @@ def test_an_accepted_risks_file_that_is_a_link_accepts_nothing(tmp_path, monkeyp
     assert state == {"own": [True], "link": [False]}
 
 
-@only_posix
+@needs_links
 def test_a_project_pack_and_a_settings_file_that_are_links_are_not_used(tmp_path, monkeypatch):
     _without_bandit(monkeypatch)
     pack = json.dumps({"pack": "mine", "version": "1", "about": "a pack", "rules": [
@@ -553,7 +554,7 @@ def test_a_project_pack_and_a_settings_file_that_are_links_are_not_used(tmp_path
     assert rules == {"own": True, "link": False}
 
 
-@only_posix
+@needs_links
 def test_the_test_command_is_not_read_from_a_package_file_that_is_a_link(tmp_path):
     """`sandbox.detect` proposes the command for "Watch my tests run" from the project's package.json."""
     pkg = json.dumps({"scripts": {"test": "jest"}})
@@ -563,6 +564,8 @@ def test_the_test_command_is_not_read_from_a_package_file_that_is_a_link(tmp_pat
     linked.mkdir()
     os.symlink(_write(tmp_path / "outside", {"p.json": pkg}) / "p.json", linked / "package.json")
     assert sandbox.detect(linked)["supported"] is False
+    if not PIPES:                                                    # Windows has no pipe among its files
+        return
     piped = tmp_path / "piped"
     piped.mkdir()
     os.mkfifo(piped / "package.json")
@@ -573,7 +576,7 @@ NAMES_A_TEST_SETUP = ["pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "r
                       "pom.xml", "build.gradle", "build.gradle.kts"]
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("name", NAMES_A_TEST_SETUP)
 def test_the_test_command_is_the_same_whatever_a_linked_file_leads_to(name, tmp_path):
     """`sandbox.detect` only asks whether these files are there. A link that leads out of the project is not the
@@ -589,7 +592,7 @@ def test_the_test_command_is_the_same_whatever_a_linked_file_leads_to(name, tmp_
     assert sandbox.detect(_write(tmp_path / "own", {name: "x\n"}))["supported"] is True
 
 
-@only_posix
+@needs_links
 def test_the_gradle_and_package_manager_words_come_from_the_projects_own_files(tmp_path):
     outside = _write(tmp_path / "outside", {"there": "x\n"})
     gradle = _write(tmp_path / "gradle", {"build.gradle": "x\n"})
@@ -611,7 +614,7 @@ def test_the_gradle_and_package_manager_words_come_from_the_projects_own_files(t
     assert sandbox.detect(installed)["supported"] is False            # a package that was installed is not the project
 
 
-@only_posix
+@needs_links
 def test_a_signing_key_counts_only_when_the_key_file_is_the_projects_own(tmp_path, monkeypatch):
     """`LM-SIGNING-SECRET` says more, and ranks higher, when the key file is in the repository too. A link that
     leads out of the project is not the project's key file, whether or not a file is at its other end; neither is a
@@ -647,7 +650,7 @@ def test_a_very_large_android_file_is_not_read(tmp_path, monkeypatch):
     assert android._read(repo / "none.xml", repo) == ""
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("leads_to", ["a file", "nothing"])
 def test_a_dependency_file_that_is_a_link_is_named_in_the_same_words_whatever_it_leads_to(leads_to, tmp_path):
     repo = tmp_path / "project"
@@ -659,7 +662,7 @@ def test_a_dependency_file_that_is_a_link_is_named_in_the_same_words_whatever_it
     assert info["errors"] == ["requirements.txt: a link that does not lead to a file of the project, so it was not read"]
 
 
-@only_posix
+@needs_links
 def test_a_dependency_file_that_is_a_link_inside_the_project_is_read(tmp_path):
     repo = _write(tmp_path / "project", {"reqs/base.txt": "flask==2.0.1\n"})
     os.symlink(repo / "reqs" / "base.txt", repo / "requirements.txt")
@@ -667,7 +670,7 @@ def test_a_dependency_file_that_is_a_link_inside_the_project_is_read(tmp_path):
     assert pins["flask"][0] == "2.0.1"
 
 
-@only_posix
+@needs_links
 def test_a_lock_file_that_is_a_link_out_of_the_project_is_no_lock_file_for_npm(tmp_path):
     """npm reads package-lock.json itself, and would send the names in somebody else's file to the registry."""
     lock = json.dumps({"name": "x", "lockfileVersion": 3, "packages": {}})
@@ -684,7 +687,7 @@ def test_a_lock_file_that_is_a_link_out_of_the_project_is_no_lock_file_for_npm(t
     assert depaudit.run_npm_audit(bare, True)[1]["why"] == "no package.json names a library that ships"
 
 
-@only_posix
+@needs_links
 def test_links_that_name_each_other_do_not_stop_the_analysis(tmp_path, monkeypatch):
     """`a.ts -> b.ts -> a.ts`, a folder that is a link to itself, a Python file that is a link to itself, and
     imports that mention each. Python 3.11 and 3.12 raise an error of their own when such a path is followed
@@ -788,7 +791,7 @@ USES_SUPABASE = '{"dependencies": {"@supabase/supabase-js": "2"}}'
 SETUP_CFG = "[options.entry_points]\nconsole_scripts =\n    tool = app:run\n"
 
 
-@only_posix
+@needs_links
 def test_a_table_is_supabases_when_the_projects_own_package_file_says_so(tmp_path):
     """A table with no row-level security is a finding in a project that uses Supabase, and its package.json is
     what says so (when it has no `supabase/` folder)."""
@@ -802,7 +805,7 @@ def test_a_table_is_supabases_when_the_projects_own_package_file_says_so(tmp_pat
     assert websec.database_rules(linked) == []
 
 
-@only_posix
+@needs_links
 def test_a_script_is_an_entry_point_when_the_projects_own_setup_file_names_it(tmp_path):
     from lantern import engine
     own = _write(tmp_path / "own", {"app.py": APP, "setup.cfg": SETUP_CFG})
@@ -997,8 +1000,8 @@ def _linked_results(tmp_path: Path, monkeypatch, name: str, holds: dict | str, s
     return repo, out
 
 
-@only_posix
-@pytest.mark.parametrize("state", ["link", "pipe"])
+@needs_links
+@pytest.mark.parametrize("state", ["link", pytest.param("pipe", marks=needs_pipes)])
 def test_a_command_about_a_result_refuses_one_that_is_not_a_plain_file(state, tmp_path, monkeypatch, capsys):
     repo, out = _linked_results(tmp_path, monkeypatch, "security.json", SCAN, state)
     before = (out / "report.html").read_bytes()
@@ -1019,8 +1022,8 @@ def _everything_but(out: Path, name: str) -> str:
                      if p.is_file() and not p.is_symlink() and p.name != name)
 
 
-@only_posix
-@pytest.mark.parametrize("state", ["link", "pipe"])
+@needs_links
+@pytest.mark.parametrize("state", ["link", pytest.param("pipe", marks=needs_pipes)])
 def test_a_saved_map_that_is_not_a_plain_file_is_refused(state, tmp_path, monkeypatch, capsys):
     repo, out = _linked_results(tmp_path, monkeypatch, "graph.json", {"repo_root": "/", "nodes": [], "edges": []}, state)
     with pytest.raises(results.Refused):
@@ -1044,8 +1047,8 @@ def test_a_plain_result_file_is_read_as_before_and_a_missing_one_is_nothing(tmp_
     capsys.readouterr()
 
 
-@only_posix
-@pytest.mark.parametrize("state", ["link", "pipe"])
+@needs_links
+@pytest.mark.parametrize("state", ["link", pytest.param("pipe", marks=needs_pipes)])
 def test_the_app_shows_nothing_from_a_result_file_that_is_not_a_plain_file(state, tmp_path, monkeypatch):
     """The project cards, Ask Lantern and the Learn steps go on without a file they cannot use."""
     repo, out = _linked_results(tmp_path, monkeypatch, "readiness.json", READY, state)
@@ -1073,8 +1076,8 @@ def test_the_app_reads_a_plain_result_file_as_before(tmp_path, monkeypatch):
     assert result_page(out, "report.html", None)[0] == 200 and result_page(out, "readiness.json", None)[0] == 200
 
 
-@only_posix
-@pytest.mark.parametrize("state", ["link", "pipe"])
+@needs_links
+@pytest.mark.parametrize("state", ["link", pytest.param("pipe", marks=needs_pipes)])
 def test_a_report_page_is_not_built_from_a_file_that_is_not_a_plain_file(state, tmp_path, monkeypatch):
     _without_bandit(monkeypatch)
     donor = _analyze(_write(tmp_path / "donor" / "project", {"app.py": OTHER})) / "report.html"
@@ -1090,8 +1093,8 @@ def test_a_report_page_is_not_built_from_a_file_that_is_not_a_plain_file(state, 
     assert read_bundle(donor)["graph"]                                  # the twin: a plain report gives its data
 
 
-@only_posix
-@pytest.mark.parametrize("state", ["link", "pipe"])
+@needs_links
+@pytest.mark.parametrize("state", ["link", pytest.param("pipe", marks=needs_pipes)])
 def test_verify_does_not_take_a_digest_from_a_report_that_is_not_a_plain_file(state, tmp_path, monkeypatch, capsys):
     _without_bandit(monkeypatch)
     repo = _write(tmp_path / "project", {"app.py": APP})
@@ -1118,7 +1121,7 @@ def test_verify_does_not_take_a_digest_from_a_report_that_is_not_a_plain_file(st
         evidence.read_digest(out / "no-such.html")                      # and a report that is not there says that
 
 
-@only_posix
+@needs_links
 def test_what_the_tests_left_as_their_record_is_read_only_as_a_plain_file(tmp_path):
     """The tests of a project run in the folder that holds the record of their calls, and could put anything under
     its name."""
@@ -1126,10 +1129,11 @@ def test_what_the_tests_left_as_their_record_is_read_only_as_a_plain_file(tmp_pa
     plain = _write(tmp_path, {"trace.json": json.dumps(record)}) / "trace.json"
     assert sandbox._recorded(plain) == record
     os.symlink(plain, tmp_path / "linked.json")
-    os.mkfifo(tmp_path / "pipe.json")
     nothing = {"pairs": []}
     assert sandbox._recorded(tmp_path / "linked.json") == nothing
-    assert _in_time(lambda: sandbox._recorded(tmp_path / "pipe.json"), tmp_path / "pipe.json", 10) == nothing
+    if PIPES:                                                        # Windows has no pipe among its files
+        os.mkfifo(tmp_path / "pipe.json")
+        assert _in_time(lambda: sandbox._recorded(tmp_path / "pipe.json"), tmp_path / "pipe.json", 10) == nothing
     assert sandbox._recorded(tmp_path / "nothing.json") == nothing
     for odd in ("[1, 2]", "{", '{"pairs": 7}', '{"pairs": null}'):
         assert sandbox._recorded(_write(tmp_path, {"odd.json": odd}) / "odd.json") == nothing, odd
@@ -1155,7 +1159,7 @@ def test_a_record_of_calls_keeps_only_rows_of_the_recorders_shape(tmp_path, monk
     merge_trace(g, data)                                               # stops at what a traced program wrote
 
 
-@only_posix
+@needs_links
 def test_the_note_of_what_a_clone_left_out_is_read_only_as_a_plain_file(tmp_path):
     note = json.dumps({"files": 3, "mb": 12, "examples": ["a.bin"]})
     own = _write(tmp_path / "own", {f".git/{remote.SKIPPED}": note})
@@ -1164,8 +1168,9 @@ def test_the_note_of_what_a_clone_left_out_is_read_only_as_a_plain_file(tmp_path
     (linked / ".git").mkdir(parents=True)
     os.symlink(own / ".git" / remote.SKIPPED, linked / ".git" / remote.SKIPPED)
     assert remote.skipped(linked) is None
-    piped = tmp_path / "piped"
-    (piped / ".git").mkdir(parents=True)
-    os.mkfifo(piped / ".git" / remote.SKIPPED)
-    assert _in_time(lambda: remote.skipped(piped), piped / ".git" / remote.SKIPPED, 10) is None
+    if PIPES:                                                        # Windows has no pipe among its files
+        piped = tmp_path / "piped"
+        (piped / ".git").mkdir(parents=True)
+        os.mkfifo(piped / ".git" / remote.SKIPPED)
+        assert _in_time(lambda: remote.skipped(piped), piped / ".git" / remote.SKIPPED, 10) is None
     assert remote.skipped(tmp_path) is None

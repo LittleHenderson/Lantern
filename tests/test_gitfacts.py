@@ -26,11 +26,11 @@ import types
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 
 from lantern import case, evidence, gitfacts, programs, remote, winowner
 from lantern.cli import main
 
-only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links)")
 WHEN = {"GIT_AUTHOR_DATE": "2026-11-01T10:00:00+0100", "GIT_COMMITTER_DATE": "2026-11-01T10:00:00+0100"}
 
 
@@ -298,7 +298,7 @@ def test_a_planted_commondir_does_not_have_another_repository_read(where, tmp_pa
     assert gitfacts.head_commit(d) is None
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("what", [".git", "refs", "HEAD", "config", "packed-refs", "index", "objects"])
 def test_a_link_in_place_of_git_data_is_not_followed(what, tmp_path, other, monkeypatch):
     d = make(tmp_path)
@@ -805,7 +805,7 @@ def _borrow(how: str, d: Path, o: Path, tmp_path: Path) -> None:
     write(d / ".git" / "refs" / "heads" / "main", git("rev-parse", "HEAD", cwd=o) + "\n")
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("how", BORROWS)
 def test_git_is_not_started_where_the_objects_folder_leads_elsewhere(how, tmp_path, monkeypatch):
     d = make(tmp_path)
@@ -923,7 +923,7 @@ STILL_THERE = ["a link to nothing among the folders of single objects", "a link 
                "a link to itself"]
 
 
-@only_posix
+@needs_links
 @pytest.mark.parametrize("what", STILL_THERE)
 def test_a_link_to_nothing_is_there_and_still_stops_git(what, tmp_path, monkeypatch):
     """The twins of the test above. Gone means that nothing is there under the name; a link is there, wherever it

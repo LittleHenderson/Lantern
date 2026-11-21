@@ -28,12 +28,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from links_here import needs_links
 
 from lantern import gitfacts, remote, sandbox
 
 UNITTEST = ["python", "-m", "unittest", "-v"]
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main"]
-only_posix = pytest.mark.skipif(os.name != "posix", reason="making a link needs a right of its own on Windows")
 needs_root = pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0,
                                 reason="needs root (the tests then run as another user)")
 
@@ -100,7 +100,7 @@ def _clone(tmp_path: Path, source: str, links: dict[str, str]) -> Path:
     return dest
 
 
-@only_posix
+@needs_links
 def test_what_the_cases_below_stand_on(tmp_path):
     """Lantern's own copy of a repository holds each link as a small file with the link's text, and git's record
     of the repository still says which files are links."""
@@ -113,7 +113,7 @@ def test_what_the_cases_below_stand_on(tmp_path):
     assert gitfacts.links(tmp_path / "plain") is None                 # no repository: not known
 
 
-@only_posix
+@needs_links
 def test_tests_that_go_through_a_link_of_their_project_pass_in_lanterns_own_copy_too(tmp_path):
     """Until then every one of these failed in a project run from its link, and the decision read Blocked."""
     clone = _clone(tmp_path, THROUGH_LINKS, LINKS)
@@ -128,7 +128,7 @@ def test_tests_that_go_through_a_link_of_their_project_pass_in_lanterns_own_copy
     assert [name for name in LINKS if os.path.islink(clone / name)] == []
 
 
-@only_posix
+@needs_links
 def test_the_twin_in_a_folder_of_the_persons_own_runs_as_before(tmp_path):
     """A folder the person made keeps its links as it always did, and nothing is said about links."""
     repo = _repository(tmp_path / "mine", THROUGH_LINKS, LINKS)
@@ -160,7 +160,7 @@ class Links(unittest.TestCase):
 '''
 
 
-@only_posix
+@needs_links
 def test_a_link_that_leads_out_of_the_project_stays_the_small_file_it_was(tmp_path):
     """The dangerous twin. A repository's links can name any path: one that goes up out of the project, a full
     path, one that only looks as if it stayed (through a link to the project's own top, whose `..` is the folder
@@ -187,7 +187,7 @@ def test_a_link_that_leads_out_of_the_project_stays_the_small_file_it_was(tmp_pa
                     "tests that go through them do not find what they name"], lines
 
 
-@only_posix
+@needs_links
 def test_a_file_the_record_calls_a_link_and_that_is_no_link_text_is_left_alone(tmp_path):
     """What stands at a link's place in Lantern's copy is taken as a link's text only when it can be one: a file
     somebody changed since (longer than a path, more than one line, empty) stays as it is."""
@@ -219,7 +219,7 @@ def _folders(table: dict[str, tuple[int, int, int]]):
     return look
 
 
-@only_posix
+@needs_links
 def test_which_folders_the_tests_user_may_enter():
     """Read from the modes of the folder and of every folder above it, for the user the tests run as (who is in
     no other group): the owner's bits where the folder is that user's, the group's where it is the group's, and
@@ -267,7 +267,7 @@ def _plain_project(folder: Path, source: str) -> Path:
     return folder
 
 
-@only_posix
+@needs_links
 def test_a_program_that_is_nowhere_is_not_found_in_the_sandbox_either(tmp_path):
     """The honest twin, for every user: with nothing closed on PATH the answer is the one tests get at home."""
     res = sandbox.run(_plain_project(tmp_path / "tiny", NOWHERE), UNITTEST, log=QUIET, backend="subprocess")
