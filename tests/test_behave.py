@@ -17,9 +17,8 @@ from lantern import __version__, behave, cli, sandbox
 from lantern import _behave_inside as inside
 
 ROOT = Path(__file__).resolve().parents[1]
-# Where the sandbox starts no app (Windows, `sandbox.NO_APPS`), the tests that start one are skipped with that reason.
-# What a plan may hold, the judge and the token variants are tested everywhere.
-starts_an_app = pytest.mark.skipif(bool(sandbox.NO_APPS), reason=f"no app is started here: {sandbox.NO_APPS}")
+# Every test here runs on every system: until 2026-11-20 the tests that start an app were skipped on Windows, where
+# the sandbox started none (`sandbox.NO_APPS`).
 
 
 def _repo(folder: Path, app: str, plan: dict) -> Path:
@@ -124,7 +123,6 @@ def _expected(broken) -> dict:
     return {f"{c['id']}/the request": BROKEN if c["id"] in broken else ("held", []) for c in PREVIEW_PLAN["checks"]}
 
 
-@starts_an_app
 @pytest.mark.parametrize("app, broken", [
     (FETCHES_ANYTHING, INSIDE),
     (REFUSES_BY_WORDS, ("one-number", "newer-spelling", "inside-name", "inside-name-newer")),
@@ -137,7 +135,6 @@ def test_an_app_that_sets_out_for_an_inside_address_is_reported_and_one_that_onl
     assert _by_case(record) == _expected(broken)
 
 
-@starts_an_app
 def test_what_was_asked_and_what_was_tried_is_written_beside_the_outcome(tmp_path):
     record = _run(_repo(tmp_path / "preview", FETCHES_ANYTHING, PREVIEW_PLAN))
     saw = {o["check"]: o["saw"] for o in record["outcomes"]}
@@ -148,7 +145,6 @@ def test_what_was_asked_and_what_was_tried_is_written_beside_the_outcome(tmp_pat
     assert [name for name, address in known] == ["example.org"] and known[0][1].startswith(("198.51.100.", "203.0.113."))
 
 
-@starts_an_app
 def test_a_site_nobody_listed_is_an_outside_address_and_a_listed_one_is_not(tmp_path):
     plan = {"app": {"asgi": "app:app"}, "may_reach": ["status.example.org"], "checks": [
         _preview("unlisted", "https://evil.test/"),
@@ -161,7 +157,6 @@ def test_a_site_nobody_listed_is_an_outside_address_and_a_listed_one_is_not(tmp_
     assert _by_case(_run(_repo(tmp_path / "known", KNOWN_SITES_ONLY, plan)))["unlisted/the request"] == ("held", [])
 
 
-@starts_an_app
 def test_no_question_about_a_name_leaves_the_sandbox(tmp_path):
     # the app asks for names in every way Python has; none of them may reach the real resolver, which the guard
     # would refuse and write down as a lookup
@@ -239,7 +234,6 @@ FETCH_PLAN = {"app": {"asgi": "app:app"}, "names": {"files.inside.test": "10.0.0
               "checks": [_preview("loopback", "http://127.0.0.1:9/admin"), _preview("inside-name", "http://files.inside.test/")]}
 
 
-@starts_an_app
 @pytest.mark.parametrize("app", [WITH_HTTPX, WITH_HTTPX_NOT_AWAITED, WITH_ASYNCIO], ids=["httpx", "httpx-not-awaited", "asyncio"])
 def test_the_usual_ways_to_fetch_a_page_are_seen_setting_out(app, tmp_path):
     if "httpx" in app:
@@ -248,7 +242,6 @@ def test_the_usual_ways_to_fetch_a_page_are_seen_setting_out(app, tmp_path):
     assert _by_case(record) == {"loopback/the request": BROKEN, "inside-name/the request": BROKEN}
 
 
-@starts_an_app
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the address is laid out the way Linux's C library reads it")
 def test_a_connection_made_below_python_is_not_seen_which_is_a_known_limit(tmp_path):
     """Known and not fixed. The runner reads what the sandbox's guard refused, and the guard sees what Python does.
@@ -580,7 +573,6 @@ NOTES_PLAN = {
 }
 
 
-@starts_an_app
 def test_a_refused_request_that_changed_the_database_all_the_same_is_broken_and_its_safe_twin_holds(tmp_path):
     safe = _by_case(_run(_repo(tmp_path / "safe", DELETES_ITS_OWN, NOTES_PLAN)))
     assert safe == {"delete/amir": ("held", []), "delete/nobody": ("held", [])}
@@ -592,7 +584,6 @@ def test_a_refused_request_that_changed_the_database_all_the_same_is_broken_and_
     assert record["outcomes"][0]["said"] == behave.CODES["refused-but-changed"]
 
 
-@starts_an_app
 def test_an_app_that_a_function_makes_is_started_the_way_its_server_starts_it(tmp_path):
     made = DELETES_THEN_ASKS.replace("async def app(", "async def serve(") + "\n\ndef create_app():\n    return serve\n"
     plan = dict(NOTES_PLAN, app={**NOTES_PLAN["app"], "asgi": "app:create_app", "factory": True})
@@ -608,7 +599,6 @@ def test_an_app_that_a_function_makes_is_started_the_way_its_server_starts_it(tm
             behave.check(dict(NOTES_PLAN, app={**NOTES_PLAN["app"], "factory": bad}))
 
 
-@starts_an_app
 def test_a_set_up_step_that_fails_stops_the_run_and_an_app_that_cannot_start_is_not_run(tmp_path):
     plan = {**NOTES_PLAN, "seed": [{"request": {"method": "POST", "path": "/nothing-here", "json": {}}, "as": "alice"}]}
     record = behave.run(_repo(tmp_path / "seed", DELETES_ITS_OWN, plan), log=lambda line: None)
@@ -620,7 +610,6 @@ def test_a_set_up_step_that_fails_stops_the_run_and_an_app_that_cannot_start_is_
     assert all("could not be started" in o["why"] for o in record["outcomes"])
 
 
-@starts_an_app
 def test_the_command_ends_with_0_only_when_every_case_held_and_the_record_says_what_was_run(tmp_path, capsys):
     safe = _repo(tmp_path / "safe", DELETES_ITS_OWN, NOTES_PLAN)
     assert cli.main(["behave", str(safe), "--out", str(tmp_path / "o1")]) == 0
@@ -676,7 +665,6 @@ def test_the_command_ends_with_2_where_there_is_no_plan_to_run_and_with_3_where_
     assert len(record["of"]["plan_sha256"]) == 64
 
 
-@starts_an_app
 def test_a_run_that_was_not_started_never_counts_as_held(tmp_path, capsys):
     plan = {**NOTES_PLAN, "seed": [], "app": {"asgi": "missing_module:app"},
             "checks": [dict(NOTES_PLAN["checks"][0], request={"method": "DELETE", "path": "/notes/1"})]}
@@ -707,9 +695,10 @@ def test_only_lanterns_own_driver_is_started_this_way(tmp_path):
 
 def test_no_app_is_started_where_the_sandbox_starts_none_and_the_record_and_the_command_say_why(
         tmp_path, monkeypatch, capsys):
-    """On Windows the sandbox cannot yet see what an app's event loop connects to (`sandbox.NO_APPS`), so a case
-    there could come out held while a request left the computer. Nothing is started, and nothing is called held."""
-    assert bool(sandbox.NO_APPS) is (sys.platform == "win32")
+    """Where the sandbox cannot see what an app's event loop connects to (`sandbox.NO_APPS`), a case could come out
+    held while a request left the computer. Nothing is started there, and nothing is called held. Until 2026-11-20
+    that was Windows; since then every system Lantern runs on starts apps."""
+    assert sandbox.NO_APPS == ""
 
     def started(*args, **more):
         raise AssertionError("the sandbox started something")
@@ -828,14 +817,12 @@ def _doors(tmp_path, name: str, app: str) -> dict:
     return _by_case(_run(_repo(tmp_path / name, app, DOORS_PLAN)))
 
 
-@starts_an_app
 def test_a_sign_in_that_was_signed_out_is_refused_straight_after_after_a_restart_and_by_another_copy(tmp_path):
     assert _doors(tmp_path, "safe", ASKS_THE_DATABASE) == {
         "signed-out/straight after": HELD, "signed-out/after a restart": HELD, "signed-out/on another worker": HELD,
         **ANOTHERS}
 
 
-@starts_an_app
 def test_a_sign_out_that_ends_nothing_is_reported_in_every_case(tmp_path):
     record = _run(_repo(tmp_path / "says", ONLY_SAYS_SO, DOORS_PLAN))
     assert _by_case(record) == {
@@ -845,14 +832,12 @@ def test_a_sign_out_that_ends_nothing_is_reported_in_every_case(tmp_path):
     assert first["said"] == behave.CODES["lived-on"] and first["saw"]["status"] == 200
 
 
-@starts_an_app
 def test_a_copy_of_the_app_that_remembers_its_own_yes_is_reported_on_the_other_copy_only(tmp_path):
     assert _doors(tmp_path, "remembers", REMEMBERS_A_YES) == {
         "signed-out/straight after": HELD, "signed-out/after a restart": HELD,
         "signed-out/on another worker": LIVED_ON, **ANOTHERS}
 
 
-@starts_an_app
 def test_a_sign_out_kept_in_memory_is_reported_after_a_restart_and_on_another_copy(tmp_path):
     assert _doors(tmp_path, "memory", ENDED_IN_MEMORY) == {
         "signed-out/straight after": HELD, "signed-out/after a restart": LIVED_ON,
@@ -951,7 +936,6 @@ GATEWAY_PLAN = {
 }
 
 
-@starts_an_app
 def test_lanterns_own_gateway_is_started_as_it_is_and_asked(tmp_path):
     """An app that was not written for the runner: made by a function, set up from the environment, with a store
     of its own. Its code is copied as it is; only the plan is new."""
@@ -1022,7 +1006,6 @@ WEBSITE_PLAN = {
 }
 
 
-@starts_an_app
 def test_lanterns_own_website_refuses_a_sign_in_that_was_ended_at_its_gateway(tmp_path):
     """The website and the gateway as they are, as one app. Asked of the website as it was before 2026-11-15, the
     first and the third case came out broken, `lived-on`: each copy of the website kept the gateway's "yes" for
@@ -1051,7 +1034,6 @@ SHOP_PLAN = {
 }
 
 
-@starts_an_app
 @pytest.mark.skipif(os.name != "posix", reason="the name sent is a line for a POSIX shell")
 def test_the_shop_samples_planted_command_is_seen_as_a_file_the_request_chose(tmp_path):
     """`lantern analyze` reports the shop's backup route as a command built from the request. Here the request is
@@ -1086,14 +1068,12 @@ def corkboard():
     return _bench()
 
 
-@starts_an_app
 def test_the_safe_app_holds_in_every_case_of_the_whole_plan(corkboard, tmp_path):
     row = corkboard.run_one(tmp_path, corkboard.SAFE)
     assert row["differences"] == [], row["log"]
     assert row["summary"] == {"held": 84, "broken": 0, "inconclusive": 0, "not-run": 0}
 
 
-@starts_an_app
 def test_every_planted_problem_is_caught_by_the_cases_written_down_for_it_before_the_first_run(corkboard, tmp_path):
     """Each version runs the checks its problem names (`plan.EXPECTED`): those cases come out broken with those
     codes, the cases the problem leaves undecided come out so, and the other cases of the same checks hold.
@@ -1157,7 +1137,6 @@ HALF_WAY = {"id": "midway", "kind": "ended-midway", "about": "A note is not adde
 MIDWAY_PLAN = dict(DOORS_PLAN, checks=[HALF_WAY])
 
 
-@starts_an_app
 def test_a_change_let_through_before_its_sign_in_was_ended_is_reported(tmp_path):
     assert _by_case(_run(_repo(tmp_path / "before", CHECKED_BEFORE, MIDWAY_PLAN))) == \
         {"midway/ended half-way": ("broken", ["lived-on"])}

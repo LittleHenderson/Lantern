@@ -12,7 +12,7 @@ checks written down for it (what tests/test_behave.py does; a tenth of the time)
 Markdown. `--first-plan` runs no plan a person wrote: for each version Lantern writes the plan itself from that
 version's own code (`lantern behave PATH --init`) and runs it as written; what it must show is in
 `bench/behaviour/first_plan.py`. Result 1 when anything differs from what was written down, or when something outside this computer was
-tried (tools/netguard); 3 where the sandbox starts no app (Windows, `sandbox.NO_APPS`).
+tried (tools/netguard); 3 where the sandbox starts no app (`sandbox.NO_APPS`; no system since 2026-11-20).
 """
 from __future__ import annotations
 

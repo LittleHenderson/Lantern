@@ -1138,8 +1138,8 @@ which the runner does not read: `made_by`, `read_first` (sentences to read befor
 ```
 
 `ran` false with `why_not` means nothing was judged: the project has no plan (`no_plan: true`, the only case that
-key is written in), the sandbox could not be set up or starts no app on this system (Windows, for now; the app was
-then not started), the plan's set-up failed at a
+key is written in), the sandbox could not be set up or starts no app on this system (`sandbox.NO_APPS`; no system
+since 2026-11-20, when Windows started apps too; the app was then not started), the plan's set-up failed at a
 step, or the run left no record. A plan that cannot be used writes no file at all. The command ends with 0 only when
 `ran` is true, at least one case held and none is broken, inconclusive or not run; 1 when a case is; 2 for no plan,
 a plan that cannot be used or a path that is no folder; 3 when the app was not started or the run left nothing to

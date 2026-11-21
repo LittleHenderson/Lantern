@@ -407,12 +407,12 @@ jobs:
           assert "LW-AUTH-MISSING" in rules, rules
 
   windows-box:
-    # The sealed box's tests for Windows alone, and the older tests of what it lets a test do on this computer, so
-    # that what the box lets a project's tests do here is known minutes in: GitHub hands out a job's log only once
-    # the job has ended, and the Windows job above takes about 50 minutes. That job runs these tests again with the
-    # whole suite.
+    # The sealed box's tests for Windows alone, the older tests of what it lets a test do on this computer, and the
+    # behaviour checks' tests, which start apps in the box, so that what the box lets a project's tests and apps do
+    # here is known minutes in: GitHub hands out a job's log only once the job has ended, and the Windows job above
+    # takes about 50 minutes. That job runs these tests again with the whole suite.
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       PYTHONUTF8: "0"
     steps:
@@ -431,7 +431,8 @@ jobs:
           tests/test_sandbox_own_network.py::test_tests_that_start_a_server_on_their_own_computer_run
           tests/test_sandbox_own_network.py::test_the_twin_that_reaches_outside_is_still_refused_and_written_down
           tests/test_sandbox_own_network.py::test_the_guard_lets_this_computer_through_only_in_a_network_the_launcher_made
-        timeout-minutes: 10
+          tests/test_behave.py
+        timeout-minutes: 20
 
   macos:
     # macOS runs no other test of Lantern's. These are the ones whose answer the system itself gives: a name handed

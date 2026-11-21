@@ -9,6 +9,22 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Completing the guard's coverage on Windows: a project's async tests, its tests that start a server of their own and
+  call it, and the app `lantern behave` starts now run in the sandbox there, as at home. Windows gives the run no
+  network of its own, so the guard's own rule decides there: a test may listen at this computer's own address,
+  written as a number, at a port the system picks, and may connect or send only to a port that the run's own
+  programs hold, as Windows' own tables of this computer's sockets and the run's job say; the calls that the event
+  loop Windows uses by default makes, which Python tells no hook about, are judged where the loop makes them. A
+  file's name is read as Windows reads it before anything is opened, looked at or listed: only the run's own pipes,
+  no other computer by its name or by a drive letter, no device but NUL and the console (a refusal of the new kind
+  `device`, "a device of this computer" in the app). The launcher leaves another computer's folders off the tests'
+  PATH and a link of the project to another computer out of their copy. On every system nothing is handed to another
+  program to open, a name is read through a plain copy, and a database name written as an address is read the way
+  SQLite reads it. Until then every listener was refused on Windows, which stopped every event loop there (Python
+  builds a loop's socket pair there from a listener on this computer), and no app was started there
+  (`sandbox.NO_APPS`, now empty). Tests: `tests/test_sandbox_windows.py` (17, each beside twins that must stay
+  refused and be named); the behaviour checks' tests now run on Windows too. GitHub's job `windows-box` runs both
+  first.
 - Completing the separation of the website's steps, second part: only a small program of the website's image stays
   root. The image now starts its switcher (`cloud/lantern_cloud/switcher.py`), which starts the website's service as
   an ordinary user of its own (`app`, number 1000) and stays beside it; when the service asks, it gives a check its

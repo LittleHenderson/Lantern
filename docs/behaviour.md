@@ -201,17 +201,17 @@ wrote for that app catches all 33.
   The seal says which Lantern made the record, not that the record is right, and whoever can read `LANTERN_HOME`
   can make one. Run `lantern behave` yourself.
 * Only what the plan asks is tried. A plan with one check tells one thing.
-* Not on Windows yet: no app is started there, and the command says why and ends with `3`. Python's event loop on
-  Windows makes its connections in a way the sandbox's guard is not told about, so a case could come out held
-  while a request left the computer. Until the guard sees those connections, run the checks on Linux or macOS.
+* On Windows the app is started as on Linux since 2026-11-20 (until then none was, and the command ended with `3`).
+  Windows gives the run no network of its own, so the sandbox's guard decides there what the app may reach: the
+  run's own programs, and no other program of this computer and no other computer (`docs/audit/THREAT_MODEL.md`).
 * The runner sees an app set out for an address when the app's Python code makes the connection: `socket` and what
   is built on it (`urllib`, `requests`, `httpx` and asyncio's own connections were tried). A connection made below
   Python (gRPC, pycurl, an event loop written in C, a database driver in C) is not seen: on Linux the kernel still
   refuses it, but the case comes out held for an app that did set out.
-* On macOS and a Linux kernel without Landlock the sandbox has fewer walls (`docs/audit/THREAT_MODEL.md`): what the
-  app's Python code tries is refused and reported as everywhere, a program the app starts that is not Python is held
-  only by the read-only copy and the rebuilt environment, and a connection made below Python is not refused. Start
-  an app you do not trust on Linux.
+* On macOS, Windows and a Linux kernel without Landlock the sandbox has fewer walls (`docs/audit/THREAT_MODEL.md`):
+  what the app's Python code tries is refused and reported as everywhere, a program the app starts that is not Python
+  is held only by the read-only copy and the rebuilt environment, and a connection made below Python is not refused.
+  Start an app you do not trust on Linux.
 * Python ASGI apps and SQLite only. An app that needs another database, a queue or a second service to start is not
   started (the case comes out `not-run` with the app's own error). Rows of other databases are not compared.
 * The app is asked through its ASGI interface, in one process per copy: what a reverse proxy, a web server or a

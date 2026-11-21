@@ -178,7 +178,7 @@ Windows gave it), no device but NUL and the console; nothing is handed to anothe
 system) and no other computer's settings are asked for. Another computer's folders are left off the tests' PATH,
 and a link of the project to another computer is not copied. What the hook cannot see there is not held: a
 program that is not Python, code that calls the system's own library itself, and links the computer already has to
-another computer's shares. `run_inside` starts no app there yet (`NO_APPS`).
+another computer's shares. Apps are started there as on Linux (`run_inside`; until 2026-11-20 none was, `NO_APPS`).
 
 Nothing the tests start outlives them (2026-11-10). When the test command ends, at the wall clock, when the caller
 asks (`cancel`, the app's Stop) and when Lantern itself ends, every process it started is ended too: on Linux by the
@@ -232,10 +232,11 @@ MEMORY_VARIABLE = "LANTERN_TEST_MEMORY_MB"   # the limit for a whole installatio
 MARK = "LANTERN-SANDBOX-BLOCKED:"
 JS_NOTE = "Tests run; your map upgrades for Python only for now."
 INSIDE = ("lantern._behave_inside",)      # Lantern's own drivers that `run_inside` may start in the sandbox
-# Where `run_inside` starts nothing, and why (2026-11-11). An app is asked on an event loop, and on Windows the guard
-# cannot let one start without losing sight of what it connects to (this module's opening text).
-NO_APPS = ("on Windows the sandbox cannot yet see and refuse every connection an app's event loop makes"
-           if sys.platform == "win32" else "")
+# Where `run_inside` starts nothing, and why. An app is asked on an event loop, and until 2026-11-20 the guard could
+# not let one start on Windows without losing sight of what it connects to, so no app was started there. Since then
+# it judges the calls of either loop there (this module's opening text) and every system Lantern runs on starts
+# apps; a system that cannot is named here with the reason.
+NO_APPS = ""
 
 # Images pinned by digest (multi-arch index digests, Docker Hub). Bump together with a check that they still pull.
 IMAGES = {
