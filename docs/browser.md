@@ -2,9 +2,9 @@
 
 **Status (2026-11-21, a firm pass or fail, stage 5):** this page was written before the checks were built, as the
 contract they are built to. Each check below has a broken example and a safe twin in `tests/browse_sites.py`, and
-`tests/test_browse.py` holds the checks to this page. The checks are built for Linux; on the other systems every check
-comes out `not-run` with the reason `not-built` until the browser is driven there too, and nothing else in Lantern
-reads the record yet.
+`tests/test_browse.py` holds the checks to this page. The checks are built for Linux, macOS and Windows (macOS and
+Windows since the rest of step 2, the same day); on any other system every check comes out `not-run` with the reason
+`not-built`, and nothing else in Lantern reads the record yet.
 
 `lantern analyze` reads the code. The browser checks open the project's own site in a real browser and say what
 happened there: pages that do not open, errors in the page's own script, links and buttons that lead nowhere, forms
@@ -41,6 +41,10 @@ started or no browser could be used.
   have it here, the pages are not opened and the record says why (`no-browser-sandbox`).
 * Lantern drives the browser through a pipe and never through a port, so a page's own script cannot reach the
   browser's controls.
+* The browser is a program of its own: on Linux and macOS in a session of its own (as `nobody` where Lantern runs as
+  root), on Windows made paused, put in a job of its own and only then let run. It is handed the two ends of its pipe
+  and nothing else of Lantern's, and when the run ends it is closed and whatever it started is ended with it (its
+  session's programs, or its job).
 * Clicks and forms go to the site's own address only, and an app's data is thrown away with the run.
 * Pictures of the pages stay on this computer.
 * A browser check only says what the browser saw. It never creates, closes or re-ranks a finding.
@@ -183,7 +187,11 @@ each must give). `tests/test_browse.py` checks that the list on this page is the
 every planted version is the safe site but for its own pieces; that Lantern's reading of the code says the same of the
 app and of each twin where only a browser can tell them apart (the sign-in, the headers); and, where
 `LANTERN_TESTS_BROWSER` names a browser by its full path, that each site written safe breaks no check and that each
-planted problem breaks its own check, with its own code, and changes no other. CI runs those in its browser job.
+planted problem breaks its own check, with its own code, and changes no other. CI runs those in its browser job (Linux,
+Playwright's Chromium, as the ordinary user), and at the end of its macOS job and of the Windows box's job, each on the
+Chrome its machine comes with; no test may be skipped there. `tests/test_browser_driver.py` holds how the browser is
+started and ended, with a stand-in browser that speaks the same pipe (on every system), and `tests/test_winspawn.py`
+the Windows starter, with a stand-in for Windows' own calls (on every system) and on Windows itself.
 
 ## Limits
 

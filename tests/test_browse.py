@@ -9,6 +9,7 @@ with a real browser run where LANTERN_TESTS_BROWSER names one by its full path (
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -105,6 +106,78 @@ def test_with_no_browser_every_check_is_not_run_and_says_why(tmp_path):
         [(c.id, "not-run", "no-browser") for c in browse.CHECKS]
 
 
+def _box(tmp_path: Path):
+    box = browse._Box(tmp_path, {}, 1, lambda line: None)
+    box._where(tmp_path)
+    return box, tmp_path / "browse" / "in", tmp_path / "browse" / "out"
+
+
+def _answer(place: Path, text: str, owner) -> None:
+    place.write_text(text, encoding="utf-8")
+    if owner is not None and hasattr(os, "chown") and owner != os.getuid():
+        os.chown(place, owner, owner)                  # written by the box's own user
+
+
+def _link_folder(target: Path, place: Path) -> None:
+    """`place` made a link to the folder `target` (on Windows a junction, which needs no right of its own)."""
+    if sys.platform == "win32":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(place))
+    else:
+        os.symlink(target, place)
+
+
+def test_the_boxs_folder_takes_a_request_whole_and_reads_an_answer_once(tmp_path):
+    box, inbox, out = _box(tmp_path)
+    try:
+        box._put("00000001.json", {"method": "GET", "path": "/"})
+        assert os.listdir(inbox) == ["00000001.json"]                     # put in place whole, nothing beside it
+        assert json.loads((inbox / "00000001.json").read_text(encoding="utf-8")) == {"method": "GET", "path": "/"}
+        assert box._take("00000001.json") is None                         # no answer yet
+        _answer(out / "00000001.json", '{"status": 200}', box.owner)
+        assert box._take("00000001.json") == {"status": 200}
+        assert os.listdir(out) == [] and box._take("00000001.json") is None
+    finally:
+        box.stop()
+
+
+def test_the_boxs_answer_is_read_only_as_a_plain_file_of_its_own(tmp_path):
+    box, inbox, out = _box(tmp_path)
+    kept = tmp_path / "kept.json"
+    _answer(kept, '{"status": 200, "body": "not the box\'s"}', box.owner)
+    try:
+        os.link(kept, out / "00000001.json")                              # a second name of a file elsewhere
+        assert box._take("00000001.json") is None and kept.exists()
+        if os.name == "posix":
+            os.symlink(kept, out / "00000002.json")                       # a link to it
+            assert box._take("00000002.json") is None and kept.exists()
+        os.mkdir(out / "00000003.json")
+        assert box._take("00000003.json") is None
+        _answer(out / "00000004.json", '{"status": 204}', box.owner)      # the twin: a plain file of its own
+        assert box._take("00000004.json") == {"status": 204}
+    finally:
+        box.stop()
+
+
+def test_a_folder_of_the_box_put_elsewhere_by_a_link_is_not_followed(tmp_path):
+    box, inbox, out = _box(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _answer(elsewhere / "00000001.json", '{"status": 200}', box.owner)
+    try:
+        for part in (inbox, out):
+            os.rename(part, part.with_name(part.name + "-moved"))
+            _link_folder(elsewhere, part)
+        assert box._take("00000001.json") is None
+        try:
+            box._put("00000002.json", {"method": "GET", "path": "/"})
+        except OSError:
+            pass                                                          # refused, or written where it was made
+        assert sorted(os.listdir(elsewhere)) == ["00000001.json"]         # nothing written there, nothing taken
+    finally:
+        box.stop()
+
+
 def _program(path: Path) -> str:
     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -159,7 +232,6 @@ def _browse(monkeypatch, tmp_path, record) -> tuple[int, Path]:
 
 
 def test_the_command_ends_with_0_only_when_a_check_held_and_none_failed(tmp_path, monkeypatch, capsys):
-    import json
     held = _record({"forms": "nothing-to-check", "visitor": "nothing-to-check"})
     code, written = _browse(monkeypatch, tmp_path, held)
     said = capsys.readouterr().out
@@ -191,7 +263,6 @@ def test_what_the_browser_saw_reaches_the_terminal_printable_only(tmp_path, monk
 
 
 def test_the_command_says_why_nothing_was_opened_and_still_writes_the_record(tmp_path, capsys):
-    import json
     from lantern import cli
     assert cli.main(["browse", str(tmp_path / "nothing-here")]) == 2
     assert "is not a folder" in capsys.readouterr().err

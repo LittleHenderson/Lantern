@@ -81,7 +81,7 @@ WHY_NOT = {
     "hosting-unknown": "Plain pages: what a hosting service would send with them is not in the project's folder.",
 }
 
-BUILT_FOR = ("linux",)   # the systems the checks are built for (sys.platform starts with one)
+BUILT_FOR = ("linux", "darwin", "win32")   # the systems the checks are built for (sys.platform starts with one)
 MOST_PAGES = 50          # pages opened in one run
 MOST_CLICKS = 40         # links and buttons clicked on one page
 PAGE_SECONDS = 20        # how long a page has to answer and settle
@@ -296,11 +296,27 @@ class _Pages:
         return 200, [("Content-Type", kind), ("Cache-Control", "no-store")], b"" if method == "HEAD" else data
 
 
+REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)   # Windows: a link or a junction
+
+
+def _plain_folder(place: Path):
+    """(device, number) of `place` when it is a folder and no link or junction, else None."""
+    try:
+        st = os.lstat(place)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(st.st_mode) or getattr(st, "st_file_attributes", 0) & REPARSE:
+        return None
+    return st.st_dev, st.st_ino
+
+
 class _Box:
     """The project's app, started in the sealed box (`sandbox.run_inside` with `lantern._browse_inside`) and asked
     through a folder of the box's own: a request is a file Lantern puts in `in/`, its answer a file the box puts in
     `out/`. Lantern's side opens those two folders before the box starts and reads an answer only when it is a plain
-    file of the box's own user, through no link."""
+    file of the box's own user, through no link. On Windows, where a folder is not held open by Lantern, each of the
+    two is known by its number when it is made and looked at again before each use (`_folder`), and a request is
+    written under a name of its own before it is put in place."""
 
     READY_SECONDS = 120         # the box is set up and the app imported and started in this time
     POLL = 0.005
@@ -314,6 +330,7 @@ class _Box:
         self.failed: tuple[str, str] | None = None
         self.chan: Path | None = None
         self.fds: dict[str, int] = {}
+        self.ids: dict[str, tuple | None] = {}
         self.n = 0
         self.lock = threading.Lock()
         self.owner = 65534 if hasattr(os, "geteuid") and os.geteuid() == 0 else (os.getuid() if hasattr(os, "getuid") else None)
@@ -325,8 +342,17 @@ class _Box:
         if os.name == "posix":
             flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
             self.fds = {part: os.open(chan / part, flags) for part in ("in", "out")}
+        else:
+            self.ids = {part: _plain_folder(chan / part) for part in ("in", "out")}
         self.chan = chan
         self.made.set()
+
+    def _folder(self, part: str) -> Path:
+        """`in` or `out` of the box's folder, still the folder Lantern made (Windows); OSError when it is not."""
+        place = self.chan / part
+        if self.ids.get(part) is None or _plain_folder(place) != self.ids[part]:
+            raise OSError(f"the box's folder {part!r} is not the one Lantern made")
+        return place
 
     def _run(self) -> None:
         from . import sandbox
@@ -373,9 +399,15 @@ class _Box:
                 os.close(fd)
             os.rename(name + ".part", name, src_dir_fd=self.fds["in"], dst_dir_fd=self.fds["in"])
         else:
-            part = self.chan / "in" / (name + ".part")
-            part.write_bytes(text)
-            os.replace(part, self.chan / "in" / name)
+            part = self._folder("in") / f"{name}.{secrets.token_hex(8)}.part"
+            fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+            try:
+                view = memoryview(text)
+                while view:
+                    view = view[os.write(fd, view):]
+            finally:
+                os.close(fd)
+            os.replace(part, self._folder("in") / name)
 
     def _take(self, name: str) -> dict | None:
         """The answer under `name` in `out/`, read and removed, or None while there is none."""
@@ -383,7 +415,11 @@ class _Box:
             if "out" in self.fds:
                 fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fds["out"])
             else:
-                fd = os.open(self.chan / "out" / name, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+                where = self._folder("out") / name
+                st = os.lstat(where)
+                if not stat.S_ISREG(st.st_mode) or getattr(st, "st_file_attributes", 0) & REPARSE:
+                    return None
+                fd = os.open(where, os.O_RDONLY | getattr(os, "O_BINARY", 0))
         except OSError:
             return None
         try:
@@ -404,7 +440,7 @@ class _Box:
             if "out" in self.fds:
                 os.unlink(name, dir_fd=self.fds["out"])
             else:
-                os.unlink(self.chan / "out" / name)
+                os.unlink(self._folder("out") / name)
         except OSError:
             pass
         try:

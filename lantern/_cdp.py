@@ -9,9 +9,13 @@ As root it is started as `nobody` (uid 65534), as an ordinary user never needs a
 profile of the run's own, empty, removed afterwards, an environment of a few variables (no proxy, display or bus of
 the person's), and one way out: the door it is handed (`Browser(door=...)`), with no name looked up by itself.
 
-POSIX: Python starts a small program of its own (`TRAMPOLINE`, `python -I -S`) under the browser's user, which puts
-the two ends of the pipes at 3 and 4 and then becomes the browser. Windows: Chrome reads the same pipe from the
-handles it is given with `--remote-debugging-io-pipes` (to come)."""
+POSIX (Linux, macOS): Python starts a small program of its own (`TRAMPOLINE`, `python -I -S`) under the browser's
+user, which puts the two ends of the pipes at 3 and 4 and then becomes the browser, in a session of its own; what the
+browser started is ended with its process group (`_start_posix`, `_end_group`). Windows: the browser gets the same two ends as its descriptors 3 and
+4 the way Microsoft's C library hands descriptors to a program (`lantern.winspawn`: only those handles and NUL and its
+own lines file, nothing else of Lantern's), is made suspended, put in a Job Object (`lantern.winjob`) before it runs
+one instruction and only then let run, so everything it starts is in the job and ends with it (`_start_windows`,
+`_end_job`). What it is told is the same everywhere (`switches`); `command` is the program and those switches."""
 
 from __future__ import annotations
 
@@ -23,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 START_SECONDS = 30          # the browser has this long to answer its first question
@@ -30,6 +35,14 @@ CALL_SECONDS = 30           # and this long for any other
 CLOSE_SECONDS = 5           # to end after it was asked to
 MOST_MESSAGE = 256 << 20    # bytes of one message from the browser; a longer one ends the run
 NOBODY = 65534
+MEMORY = 4 << 30            # Windows: what the browser and everything it started are given together before Windows
+                            # tells its job so (the job's wall, where Windows refuses more, is twice that)
+# Windows: the variables of this program's environment the browser gets (Windows' own folders and the processors);
+# its home, application data, temp folder and PATH are made for the run (`_windows_env`)
+WINDOWS_KEPT = ("SystemRoot", "SystemDrive", "windir", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE")
+# The folders made in the run's profile for the browser's own files (its home is the profile)
+POSIX_FOLDERS = ("tmp", ".config", ".cache")
+WINDOWS_FOLDERS = ("tmp", "AppData", os.path.join("AppData", "Roaming"), os.path.join("AppData", "Local"))
 
 # Becomes the browser, with the two ends of the pipes at 3 and 4 (`a`, `b` are above 9, so neither is 3 or 4).
 TRAMPOLINE = ("import os,sys\n"
@@ -99,6 +112,26 @@ def _base_python() -> str:
     return os.path.realpath(sys.executable)
 
 
+def _windows_fds(ends: dict[int, int], handle_of) -> dict[int, tuple[int, int]]:
+    """The browser's descriptors on Windows as `winspawn.start` takes them ({descriptor: (handle, flags)}): 0 and 1
+    the NUL device, 2 its lines file, 3 the end of the pipe it reads and 4 the end it writes, each by the handle
+    Windows has for this program's descriptor in `ends` (`handle_of`: msvcrt.get_osfhandle)."""
+    from .winspawn import FDEV, FOPEN, FPIPE
+    kinds = {0: FOPEN | FDEV, 1: FOPEN | FDEV, 2: FOPEN, 3: FOPEN | FPIPE, 4: FOPEN | FPIPE}
+    return {n: (handle_of(ends[n]), kind) for n, kind in kinds.items()}
+
+
+def _windows_env(profile: Path) -> dict[str, str]:
+    """The browser's whole environment on Windows: Windows' own folders and the processors from this program's
+    (`WINDOWS_KEPT`), and a home, application data and temp folder inside the run's profile."""
+    env = {name: os.environ[name] for name in WINDOWS_KEPT if os.environ.get(name)}
+    root = env.get("SystemRoot") or env.get("windir") or r"C:\Windows"
+    tmp = str(profile / "tmp")
+    env.update(PATH=f"{root}\\System32;{root}", TEMP=tmp, TMP=tmp, USERPROFILE=str(profile),
+               APPDATA=str(profile / "AppData" / "Roaming"), LOCALAPPDATA=str(profile / "AppData" / "Local"))
+    return env
+
+
 class Browser:
     """One browser, started by `start()` and ended by `close()`. `call()` asks it something and waits for the
     answer; `send()` asks without waiting; `events` is a callable given each event (method, params, session) on a
@@ -109,7 +142,8 @@ class Browser:
         self.door = door
         self.events = events
         self.log = log or (lambda line: None)
-        self.proc: subprocess.Popen | None = None
+        self.proc = None                # subprocess.Popen, or on Windows winspawn.Process
+        self.job = None                 # Windows: the job that holds the browser and everything it started
         self.profile: Path | None = None
         self.lines: Path | None = None
         self._out = -1                  # Lantern writes here (the browser's 3)
@@ -125,42 +159,34 @@ class Browser:
         self.version: dict = {}
 
     # ------------------------------------------------------------------------------------------------ start, end
+    def switches(self) -> list[str]:
+        """What the browser is told when it starts, after its own path: the same on every system."""
+        return [*ARGS, f"--user-data-dir={self.profile}", f"--proxy-server=http://127.0.0.1:{self.door}",
+                "--proxy-bypass-list=<-loopback>", "about:blank"]
+
+    def command(self) -> list[str]:
+        """The program that is started, with what it is told (the browser's full path first)."""
+        return [self.path, *self.switches()]
+
     def start(self) -> dict:
         """Start the browser and ask it who it is (`Browser.getVersion`). BrowserError when it cannot be used."""
-        if os.name == "nt":
-            raise BrowserError("browser-failed", "this version of Lantern drives the browser on Linux and macOS")
         self.profile = Path(tempfile.mkdtemp(prefix="lantern-browser-"))
         own = Path(tempfile.mkdtemp(prefix="lantern-browser-lines-"))
         self.lines = own / "browser.txt"
-        for sub in ("tmp", ".config", ".cache"):
+        folders = WINDOWS_FOLDERS if os.name == "nt" else POSIX_FOLDERS
+        for sub in folders:
             (self.profile / sub).mkdir()
         if self.as_nobody:
-            for place in (self.profile, *(self.profile / s for s in ("tmp", ".config", ".cache"))):
+            for place in (self.profile, *(self.profile / s for s in folders)):
                 os.chown(place, NOBODY, NOBODY)
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.profile), "TMPDIR": str(self.profile / "tmp"),
-               "XDG_CONFIG_HOME": str(self.profile / ".config"), "XDG_CACHE_HOME": str(self.profile / ".cache"),
-               "LANG": "C.UTF-8", "DBUS_SESSION_BUS_ADDRESS": "disabled:"}
-        args = [self.path, *ARGS, f"--user-data-dir={self.profile}",
-                f"--proxy-server=http://127.0.0.1:{self.door}", "--proxy-bypass-list=<-loopback>", "about:blank"]
-        to_browser, from_lantern = os.pipe()        # the browser reads `to_browser` as its 3
-        from_browser, to_lantern = os.pipe()        # and writes `to_lantern` as its 4
-        a, b = _high(to_browser), _high(to_lantern)
-        err = os.open(self.lines, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            extra = {"user": NOBODY, "group": NOBODY, "extra_groups": []} if self.as_nobody else {}
-            self.proc = subprocess.Popen([_base_python(), "-I", "-S", "-c", TRAMPOLINE, str(a), str(b), *args],
-                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
-                                         pass_fds=(a, b), env=env, cwd=str(self.profile), start_new_session=True,
-                                         **extra)
-        except OSError as e:
-            for fd in (a, b, from_lantern, from_browser):
-                os.close(fd)
-            os.close(err)
+            if os.name == "nt":
+                self._start_windows(self.command())
+            else:
+                self._start_posix(self.command())
+        except BrowserError:
             self._tidy()
-            raise BrowserError("browser-failed", f"the browser could not be started ({e.strerror or e})") from e
-        for fd in (a, b, err):
-            os.close(fd)
-        self._out, self._in = from_lantern, from_browser
+            raise
         for target in (self._read, self._dispatch):
             t = threading.Thread(target=target, daemon=True, name="lantern-browser")
             t.start()
@@ -175,6 +201,64 @@ class Browser:
             raise BrowserError("browser-failed", said[-600:]) from None
         return self.version
 
+    def _start_posix(self, argv: list[str]) -> None:
+        """Linux and macOS: the small program that becomes the browser, as `nobody` where Lantern runs as root, in a
+        session of its own, with the two ends of the pipes at 3 and 4 and nothing else of Lantern's open."""
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.profile), "TMPDIR": str(self.profile / "tmp"),
+               "XDG_CONFIG_HOME": str(self.profile / ".config"), "XDG_CACHE_HOME": str(self.profile / ".cache"),
+               "LANG": "C.UTF-8", "DBUS_SESSION_BUS_ADDRESS": "disabled:"}
+        to_browser, from_lantern = os.pipe()        # the browser reads `to_browser` as its 3
+        from_browser, to_lantern = os.pipe()        # and writes `to_lantern` as its 4
+        a, b = _high(to_browser), _high(to_lantern)
+        err = os.open(self.lines, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            extra = {"user": NOBODY, "group": NOBODY, "extra_groups": []} if self.as_nobody else {}
+            self.proc = subprocess.Popen([_base_python(), "-I", "-S", "-c", TRAMPOLINE, str(a), str(b), *argv],
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
+                                         pass_fds=(a, b), env=env, cwd=str(self.profile), start_new_session=True,
+                                         **extra)
+        except OSError as e:
+            for fd in (from_lantern, from_browser):
+                os.close(fd)
+            raise BrowserError("browser-failed", f"the browser could not be started ({e.strerror or e})") from e
+        finally:
+            for fd in (a, b, err):
+                os.close(fd)
+        self._out, self._in = from_lantern, from_browser
+
+    def _start_windows(self, argv: list[str]) -> None:
+        """Windows: the browser made suspended, with the two ends of the pipes as its descriptors 3 and 4 the way
+        its C library reads them, NUL as its input and output and its lines file as its errors, and no other handle
+        of Lantern's; put in a job of its own before it runs, and only then let run."""
+        import msvcrt
+        from . import winjob, winspawn
+        env = _windows_env(self.profile)
+        to_browser, from_lantern = os.pipe()        # Lantern writes `from_lantern`; the browser reads its 3
+        from_browser, to_lantern = os.pipe()        # the browser writes its 4; Lantern reads `from_browser`
+        ends = {3: to_browser, 4: to_lantern}
+        job = None
+        try:
+            binary = os.O_BINARY | os.O_NOINHERIT
+            ends[0] = os.open(os.devnull, os.O_RDONLY | binary)
+            ends[1] = os.open(os.devnull, os.O_WRONLY | binary)
+            ends[2] = os.open(self.lines, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | binary, 0o600)
+            fds = _windows_fds(ends, msvcrt.get_osfhandle)
+            for handle, _ in fds.values():          # only `winspawn`'s list of handles hands them on
+                os.set_handle_inheritable(handle, True)
+            job = winjob.Job(memory=MEMORY)
+            self.proc = winspawn.start(argv, env=env, cwd=str(self.profile), fds=fds, job=job)
+        except (OSError, ValueError) as e:          # SpawnError and JobError are OSErrors
+            if job is not None:
+                job.close()
+            for fd in (from_lantern, from_browser):
+                os.close(fd)
+            raise BrowserError("browser-failed", f"the browser could not be started ({e})") from e
+        finally:
+            for fd in ends.values():                # the browser has its own now
+                os.close(fd)
+        self.job = job
+        self._out, self._in = from_lantern, from_browser
+
     def said(self) -> str:
         """The last of what the browser wrote on its own lines (stderr), for Lantern's own reading of why it
         stopped; never shown as a reason."""
@@ -187,47 +271,86 @@ class Browser:
             return ""
 
     def alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None and not self._closed.is_set()
+        return self.proc is not None and not self._closed.is_set() and self.proc.poll() is None
 
     def close(self) -> None:
         """End the browser and everything it started, and remove its profile."""
         if self.proc is not None:
-            if self.proc.poll() is None and not self._closed.is_set():
+            if not self._closed.is_set() and self.proc.poll() is None:
                 try:
                     self.send("Browser.close")
                 except BrowserError:
                     pass
             try:
                 self.proc.wait(timeout=CLOSE_SECONDS)
-            except subprocess.TimeoutExpired:
+            except (subprocess.TimeoutExpired, OSError):
                 pass
-            for sig in (signal.SIGTERM, signal.SIGKILL):
-                try:
-                    os.killpg(self.proc.pid, sig)
-                except (ProcessLookupError, PermissionError, OSError):
-                    break
-                try:
-                    self.proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    continue
-            try:
-                os.killpg(self.proc.pid, signal.SIGKILL)     # what the browser started and left in its group
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+            if os.name == "nt":
+                self._end_job()
+            else:
+                self._end_group()
         self._closed.set()
-        for fd in (self._out, self._in):
-            if fd >= 0:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-        self._out = self._in = -1
+        with self._write:
+            out, self._out = self._out, -1
+        if out >= 0:
+            try:
+                os.close(out)
+            except OSError:
+                pass
+        reader = self._threads[0] if self._threads else None
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=5)          # it ends when the browser's end of the pipe is gone with the browser
+        if self._in >= 0 and (reader is None or not reader.is_alive() or os.name != "nt"):
+            try:
+                os.close(self._in)          # (on Windows not under a read that is still waiting, which would wait too)
+            except OSError:
+                pass
+            self._in = -1
+        elif self._in >= 0:
+            self.log("browser: its pipe was left open: the browser's end of it did not close")
         self._queue.put(None)
         for t in self._threads:
             if t is not threading.current_thread():
                 t.join(timeout=5)
         self._fail_waiting()
         self._tidy()
+
+    def _end_group(self) -> None:
+        """POSIX: the browser's process group, which holds what it started, asked to end and then ended."""
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(self.proc.pid, sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                break
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                continue
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)     # what the browser started and left in its group
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    def _end_job(self) -> None:
+        """Windows: every process of the browser's job ended, the job given back, then the browser's handle."""
+        job, self.job = self.job, None
+        if job is not None:
+            try:
+                job.stop()
+                end = time.monotonic() + CLOSE_SECONDS
+                while job.count() and time.monotonic() < end:
+                    time.sleep(0.05)
+                if job.count():
+                    self.log("browser: a program of the browser's job had not ended when it was given back")
+            except OSError as e:
+                self.log(f"browser: its job did not answer ({e})"[:300])
+            finally:
+                job.close()                 # which ends whatever is still in it
+        try:
+            self.proc.wait(timeout=CLOSE_SECONDS)
+        except (subprocess.TimeoutExpired, OSError):
+            self.log("browser: it had not ended when its handle was given back")
+        self.proc.close()
 
     def _tidy(self) -> None:
         from . import removal

@@ -25,10 +25,25 @@ file. New entries go under `## Unreleased`, on top.
   so) and an empty profile of the run's own; every request of a page is stopped inside the browser, the site's own
   address answered by Lantern and every other refused there and written down; the browser's one way out is a door
   of Lantern's own that forwards nothing. On the two small sites the safe versions break no check and each of the 25
-  planted problems breaks its own check with its own code, and no other. Not yet on macOS and Windows (`not-built`).
+  planted problems breaks its own check with its own code, and no other. Not yet on macOS and Windows (`not-built`;
+  since the next entry, they are).
   `lantern browse PATH` runs them and writes what they saw to `browser.json` in the results folder (its shape is in
   `docs/api.md`), also when nothing could be opened; it ends with 0 only when a check held and none was broken,
   undecided or not run, and prints what the site showed with anything that is not printable replaced.
+- Browser checks on macOS and Windows too (the same stage, the rest of step 2): on macOS the browser is started the
+  way it is on Linux; on Windows `lantern/winspawn.py` makes it paused, with the two ends of its pipe where its own C
+  library looks for them (its descriptors 3 and 4) and no other handle of Lantern's, puts it in a job of its own
+  (`winjob.Job`, 4 GB) and only then lets it run. On every system the same switches and the same profile, and when the
+  run ends the browser is closed and whatever it started is ended with it: its process group on Linux and macOS, its
+  job on Windows. On Windows the sealed box's two folders are known by their disk numbers when they are made and
+  looked at again before each use, and a request is written under a name of its own before it is put in place.
+  Tests: `tests/test_browser_driver.py` (8, a stand-in browser that speaks the same pipe, on every system: what it is
+  handed, what it starts ends with it, and one that does not close when asked, says nothing or cannot have its sandbox
+  is not used; on the code before, 6 of the 8 failed), `tests/test_winspawn.py` (20, the Windows starter with a
+  stand-in for Windows' own calls on every system, 1 on Windows itself) and 3 tests of the box's folders in
+  `tests/test_browse.py`. CI runs the browser checks' tests on the Chrome GitHub's macOS and Windows machines come
+  with, at the end of the macOS job and of the Windows box's job (job limits 70 and 60 minutes), where no test may be
+  skipped and the run must name the browser it started.
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
   inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
   the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own

@@ -415,9 +415,10 @@ jobs:
     # Lantern meets a link where it reads or writes its own files, and the behaviour checks' tests, which start apps
     # in the box, so that what the box lets a project's tests and apps do here is known minutes in: GitHub hands out
     # a job's log only once the job has ended, and the Windows job above takes about 50 minutes. That job runs these
-    # tests again with the whole suite.
+    # tests again with the whole suite. Since 2026-11-21 the job ends with the browser checks' tests on the Chrome
+    # GitHub's Windows machines come with (the last step).
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       PYTHONUTF8: "0"
     steps:
@@ -480,14 +481,31 @@ jobs:
           tests/test_hook.py::test_the_line_for_a_hook_of_ones_own_runs_this_lantern_too
           tests/test_behave.py
         timeout-minutes: 20
+      - name: The browser checks' tests on a real browser (the Chrome this machine comes with), with the browser's own sandbox
+        timeout-minutes: 20
+        # docs/browser.md, as in the browser job below: each site written safe breaks no check, and each planted
+        # problem breaks its own check, with its own code, and no other. On Windows the browser is made paused, with
+        # the two ends of its pipe where its C library looks for them, put in a job of its own and only then let run
+        # (lantern/winspawn.py); the tests of that start with a stand-in browser (tests/test_browser_driver.py) and
+        # of the starter itself (tests/test_winspawn.py) run here with them. No test may be skipped here, and the run
+        # must name the browser its tests started.
+        shell: bash
+        run: |
+          set -o pipefail   # piped into tee
+          browser="C:/Program Files/Google/Chrome/Application/chrome.exe"
+          test -f "$browser" || { echo "::error::Chrome is not at $browser"; exit 1; }
+          LANTERN_TESTS_BROWSER="$browser" python -m pytest -q -rs -p no:cacheprovider tests/test_browse.py tests/test_browser_driver.py tests/test_winspawn.py | tee "$RUNNER_TEMP/browse.log"
+          if grep -q '^SKIPPED' "$RUNNER_TEMP/browse.log"; then echo "::error::A test of the browser checks was skipped where a browser was named"; exit 1; fi
+          grep -q '^programs these tests started: .*browser ' "$RUNNER_TEMP/browse.log" || { echo "::error::The run does not name the browser its tests started"; exit 1; }
 
   macos:
     # macOS runs no other test of Lantern's. These are the ones whose answer the system itself gives: a name handed
     # straight to a socket and the question who an address is, under the sandbox's guard and under the guard of
     # Lantern's own tests, each beside its twins; how gitleaks is started, with the real program; and the type-aware
     # pass, with the two real type checkers (tests/test_typecheck.py, the whole file: `-k` takes it by its name).
+    # Since 2026-11-21 also the browser checks' tests, on the Chrome GitHub's macOS machines come with (the last step).
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -536,6 +554,19 @@ jobs:
         timeout-minutes: 20
         run: |
           python -m pytest -q -rs tests/test_sandbox_guards.py tests/test_sandbox.py tests/test_netguard.py tests/test_scanners.py tests/test_typecheck.py -k "name_in_an_address or twins_a_number_this_computer or who_an_address_is or who_this_computer_is or asked_the_older_ways or handed_straight_to_a_socket or socket_class_of_the_tests_own or twins_this_computer_by_name or number_outside_is_still or gitleaks or test_typecheck"
+      - name: The browser checks' tests on a real browser (the Chrome this machine comes with), with the browser's own sandbox
+        timeout-minutes: 20
+        # docs/browser.md, as in the browser job below, as the ordinary user these machines run as. On macOS the
+        # browser starts as it does on Linux; the tests of that start with a stand-in browser
+        # (tests/test_browser_driver.py) run here with them. No test may be skipped here, and the run must name the
+        # browser its tests started.
+        run: |
+          set -o pipefail   # piped into tee
+          browser="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          test -x "$browser" || { echo "::error::Chrome is not at $browser"; exit 1; }
+          LANTERN_TESTS_BROWSER="$browser" python -m pytest -q -rs -p no:cacheprovider tests/test_browse.py tests/test_browser_driver.py | tee "$RUNNER_TEMP/browse.log"
+          if grep -q '^SKIPPED' "$RUNNER_TEMP/browse.log"; then echo "::error::A test of the browser checks was skipped where a browser was named"; exit 1; fi
+          grep -q '^programs these tests started: .*browser ' "$RUNNER_TEMP/browse.log" || { echo "::error::The run does not name the browser its tests started"; exit 1; }
 
   browser:
     # The viewer in a real browser: no JS errors, and hostile text can't break or hijack the page.
