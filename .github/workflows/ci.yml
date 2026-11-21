@@ -407,8 +407,9 @@ jobs:
           assert "LW-AUTH-MISSING" in rules, rules
 
   windows-box:
-    # The sealed box's tests for Windows alone, the tests of a container of the run's own and of what Windows does
-    # in one (tests/test_wincontainer.py, which writes out what it found), the older tests of what the box lets a test
+    # The sealed box's tests for Windows alone, the tests of the wall of Windows' own around a project's Python tests
+    # (tests/test_sandbox_container.py), the tests of such a container and of what Windows does in one
+    # (tests/test_wincontainer.py, which writes out what it found), the older tests of what the box lets a test
     # do on this computer (its own servers and event loops, process pools, moving its files between its folders, the
     # memory a run gets, the job that holds a run, the links of a project in the tests' copy), the tests of how
     # Lantern meets a link where it reads or writes its own files, and the behaviour checks' tests, which start apps
@@ -428,7 +429,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -e ".[scan,dev]"
       - run: >-
-          python -m pytest -q -rs tests/test_sandbox_windows.py
+          python -m pytest -q -rs tests/test_sandbox_container.py tests/test_sandbox_windows.py
           tests/test_wincontainer.py
           tests/test_libraries_run.py::test_a_python_the_tests_start_themselves_runs_on_the_fetched_libraries_too
           tests/test_libraries_run.py::test_where_no_whole_python_can_be_made_on_windows_the_older_one_stands_and_says_what_the_bare_name_starts

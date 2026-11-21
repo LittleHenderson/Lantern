@@ -692,21 +692,13 @@ def npm_env(node, tmp):
 # Node takes a module's path as it is handed, and does not look at the folders above it, which the container may not
 # look at (the sixth round: every folder above the run's folder, the top of the drive too)
 KEEP = ["--preserve-symlinks", "--preserve-symlinks-main"]
-FORK = ("const cp = require('child_process'); "
-        "if (process.argv[2] === 'child') { process.send('k', () => process.exit(0)) } "
-        "else { const c = cp.fork(__filename, ['child']); c.on('message', m => { console.log(m); process.exit(0) }); "
-        "c.on('error', e => { console.log(e.code || 'error'); process.exit(2) }); "
-        "setTimeout(() => { console.log('timeout'); process.exit(3) }, 10000) }")
-CHILDREN = {   # what a test runner does with programs of its own: one word each when it worked
+# What a test runner does with programs of its own (round 7): a worker thread works in the container; every way Node
+# starts a program whose output it reads waits for ever there (Node makes the pipes for it under names the container
+# refuses, and keeps trying): a program started with its output read, the shell, a second Node, a forked Node, 5 of 5
+# stopped at 30 s. So JavaScript tests are not put in a container of the run's own (`lantern.sandbox`); the one
+# such try kept here is written out with the rest and decides nothing.
+CHILDREN = {
     "node_spawn_pipe": ("const r = require('child_process').spawnSync('cmd.exe', ['/d', '/c', 'echo s'], "
-                        "{encoding: 'utf8'}); console.log(r.error ? r.error.code : (r.stdout.trim() || 'empty'))"),
-    "node_spawn_async": ("const c = require('child_process').spawn('cmd.exe', ['/d', '/c', 'echo a']); let o = ''; "
-                         "c.stdout.on('data', d => { o += d }); "
-                         "c.on('close', () => { console.log(o.trim() || 'empty'); process.exit(0) }); "
-                         "c.on('error', e => { console.log(e.code); process.exit(2) }); "
-                         "setTimeout(() => { console.log('timeout'); process.exit(3) }, 10000)"),
-    "node_exec": "console.log(require('child_process').execSync('echo x', {encoding: 'utf8'}).trim())",
-    "node_spawn_node": ("const r = require('child_process').spawnSync(process.execPath, ['-e', \"console.log('n')\"], "
                         "{encoding: 'utf8'}); console.log(r.error ? r.error.code : (r.stdout.trim() || 'empty'))"),
     "node_worker": ("const { Worker } = require('worker_threads'); "
                     "const w = new Worker(\"require('worker_threads').parentPort.postMessage('w')\", { eval: true }); "
@@ -727,11 +719,7 @@ def node_from_files(node, npm_cli, tmp, app):
     facts["node_file"] = program([node, script], word=True, codes=True, env=npm_env(node, tmp))   # without KEEP
     facts["node_file_keep"] = program([node, *KEEP, script], word=True, codes=True, env=env)
     for name, code in CHILDREN.items():
-        facts[name] = program([node, "-e", code], seconds=30, word=True, codes=True, env=env, cwd=app)
-    fork = os.path.join(app, "probe_fork.js")
-    with open(fork, "w", encoding="utf-8") as f:
-        f.write(FORK)
-    facts["node_fork"] = program([node, *KEEP, fork], seconds=30, word=True, codes=True, env=env, cwd=app)
+        facts[name] = program([node, "-e", code], seconds=10, word=True, codes=True, env=env, cwd=app)
     if npm_cli:
         facts["npm_version_keep"] = program([node, *KEEP, npm_cli, "--version"], seconds=90, codes=True, env=env)
         js = os.path.join(tmp, "js7")
@@ -869,11 +857,9 @@ REFUSED_PROGRAMS = {"curl_outside": None, "curl_file": None, "curl_other_listene
 # `own_address_datagram`, `node_copy_datagram`) are counted in `costs["reached"]` and written out with the rest.
 # npm with a home the run may not read (`npm_version`) is written out only: the sandbox gives the tests a home of
 # their own inside the run (`sandbox._env_base`)
-HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "node_file_keep", "node_spawn_pipe",
-                   "node_spawn_async", "node_exec", "node_spawn_node", "node_worker", "node_fork",
-                   "npm_version_keep", "npm_test_keep")
-SAYS = {"node_copy_own_server": "ok", "node_file_keep": "f", "node_spawn_pipe": "s", "node_spawn_async": "a",
-        "node_exec": "x", "node_spawn_node": "n", "node_worker": "w", "node_fork": "k",
+HONEST_PROGRAMS = ("node_copy_start", "node_copy_own_server", "node_file_keep", "node_worker", "npm_version_keep",
+                   "npm_test_keep")
+SAYS = {"node_copy_own_server": "ok", "node_file_keep": "f", "node_worker": "w",
         "npm_test_keep": "t"}      # the one word each prints when it worked
 
 
