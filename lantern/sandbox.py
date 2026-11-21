@@ -643,6 +643,16 @@ def _own_python_words(windows: bool) -> str:
                    "libraries and without Lantern's guard")
 
 
+# Windows, since stage 4 of a firm pass or fail (2026-11-20): the Python of the run's own is a whole Python there
+# (`_whole_python`), so the bare name `python` is that Python too. Where none can be made, the older one stands and
+# `_own_python_words(True)` says what the bare name then starts.
+WHOLE_PYTHON = ("they are started by a whole Python of the run's own (a copy of this computer's Python, without the "
+                "libraries installed on it), in which the fetched libraries are the only ones: a Python the tests "
+                "start themselves finds the same libraries, whatever it is handed, also by the bare name `python`")
+NO_WHOLE_PYTHON = ("a whole Python of the run's own could not be made ({why}), so the tests are started by a Python "
+                   "of the run's own that starts this computer's Python")
+
+
 def held_below_python() -> bool:
     """In the restricted subprocess: is a program of the tests that is not Python (Node, a compiled program, a
     Python started without the guard) held to this run's own rules for connections by something below Python?
@@ -3478,6 +3488,29 @@ def _whole_python(home: Path, named: list[str], timeout: float = 120) -> str:
     return str(exe)
 
 
+def _runs_own_python(root: Path, libs: Path, app: Path, log) -> tuple[str, list[str], str | None] | None:
+    """The Python of the run's own for tests on fetched libraries: (its program, the files it is made of that say
+    where its libraries are, the folder of the environment it is or None for a whole Python), or None where none
+    could be made (the guard then keeps to the fetched libraries for every Python handed the tests' environment).
+    On Windows a whole Python (`_whole_python`), and where that cannot be made the older one (`_own_python`), whose
+    line says what the bare name `python` then starts (`_own_python_words`)."""
+    if sys.platform == "win32":
+        home = root / OWN_PYTHON
+        src = app / "src"
+        try:
+            exe = _whole_python(home, [str(libs), *([str(src)] if src.is_dir() else []), str(app)])
+        except (OSError, subprocess.SubprocessError) as e:
+            why = e.strerror if isinstance(e, OSError) and e.strerror else type(e).__name__
+            log("sandbox: " + NO_WHOLE_PYTHON.format(why=why))
+            _rm(home)
+        else:
+            return exe, [exe, str(home / "Lib" / "site-packages" / "lantern.pth")], None
+    own = _own_python(root, libs, app, log)
+    if own is None:
+        return None
+    return own[0], [str(own[1] / "pyvenv.cfg"), str(own[2] / "lantern.pth")], str(own[1])
+
+
 def _programs_run_by(libs: Path, python: str) -> int:
     """The command-line programs the fetched libraries brought (`libs/bin`) name, in their first line, the Python
     that fetched them, as pip writes it: the full path of the Python that runs Lantern. Have them name `python`
@@ -3588,11 +3621,12 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         env["LANTERN_SANDBOX_SITE"] = os.pathsep.join([str(libs), *([str(src)] if src.is_dir() else [])])
         env["LANTERN_SANDBOX_GUARD"] = "required"
         env["LANTERN_SANDBOX_LIBRARIES"] = "fetched"
-        python, own = sys.executable, _own_python(root, libs, app, log)
-        if own is not None:     # this computer's Python under another name, where the only libraries are the fetched
+        python, own = sys.executable, _runs_own_python(root, libs, app, log)
+        if own is not None:     # a Python of the run's own, where the only libraries are the fetched
             python = own[0]
-            made_of += [str(own[1] / "pyvenv.cfg"), str(own[2] / "lantern.pth")]
-            env["VIRTUAL_ENV"] = str(own[1])
+            made_of += own[1]
+            if own[2] is not None:
+                env["VIRTUAL_ENV"] = own[2]
         # a program a fetched library brings is found by its name, before one of that name on this computer
         first = [os.path.dirname(python)] if own is not None else []
         first += [str(libs / d) for d in ("bin", "Scripts") if (libs / d).is_dir()]
@@ -3605,7 +3639,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         log("sandbox: the tests run on the fetched libraries and Python's own, with the network off; the "
             "libraries installed on this computer are not on their path")
         if own is not None:
-            log("sandbox: " + _own_python_words(sys.platform == "win32"))
+            log("sandbox: " + (WHOLE_PYTHON if own[2] is None else _own_python_words(sys.platform == "win32")))
     elif language == "python":
         made_of = _made_of(pkg_root)
         env["PYTHONPATH"] = os.pathsep.join([str(hook), pkg_root, str(app)])
