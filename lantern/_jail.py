@@ -188,6 +188,9 @@ REASONS = {
                    "for them and keeps the socket files of your other programs out of their reach",
     "closed": "what the tests are made of (Lantern's recorder, the program that runs them or its libraries) lies "
               "where the rules that close your own folders to the tests leave it unreadable",
+    # Windows (lantern.wincontainer): the word its launcher prints, with Windows' own error number
+    "container": "Windows could not put the tests in a container of their own, which is what keeps every program "
+                 "they start from the network and from your own files",
 }
 ASK = 6.0                  # seconds `lantern.sandbox` waits after asking (SIGTERM) before it kills the process group
 _SWEEP = 3.0               # seconds the supervisor spends ending what the command started

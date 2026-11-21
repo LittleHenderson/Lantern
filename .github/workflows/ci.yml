@@ -407,13 +407,14 @@ jobs:
           assert "LW-AUTH-MISSING" in rules, rules
 
   windows-box:
-    # The sealed box's tests for Windows alone, the older tests of what it lets a test do on this computer (its own
-    # servers and event loops, process pools, moving its files between its folders, the memory a run gets, the job
-    # that holds a run, the links of a project in the tests' copy), the tests of how Lantern meets a link where it
-    # reads or writes its own files, and the behaviour checks' tests, which start apps in the box, so that what the
-    # box lets a project's tests and apps do here is known minutes in: GitHub hands out a job's log only once the job
-    # has ended, and the Windows job above takes about 50 minutes. That job runs these tests again with the whole
-    # suite.
+    # The sealed box's tests for Windows alone, the tests of a container of the run's own and of what Windows does
+    # in one (tests/test_wincontainer.py, which writes out what it found), the older tests of what the box lets a test
+    # do on this computer (its own servers and event loops, process pools, moving its files between its folders, the
+    # memory a run gets, the job that holds a run, the links of a project in the tests' copy), the tests of how
+    # Lantern meets a link where it reads or writes its own files, and the behaviour checks' tests, which start apps
+    # in the box, so that what the box lets a project's tests and apps do here is known minutes in: GitHub hands out
+    # a job's log only once the job has ended, and the Windows job above takes about 50 minutes. That job runs these
+    # tests again with the whole suite.
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -428,6 +429,7 @@ jobs:
       - run: pip install -e ".[scan,dev]"
       - run: >-
           python -m pytest -q -rs tests/test_sandbox_windows.py
+          tests/test_wincontainer.py
           tests/test_sandbox.py::test_tests_that_use_an_event_loop_run
           tests/test_sandbox.py::test_an_event_loop_whose_socket_pair_is_made_the_windows_way_starts_on_windows_and_nowhere_else
           tests/test_sandbox.py::test_the_guard_refuses_every_listener_and_every_connection_on_this_computer_too

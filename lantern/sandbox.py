@@ -3399,6 +3399,85 @@ def _own_python(root: Path, libs: Path, app: Path, log) -> tuple[str, Path, Path
     return str(exe), home, site
 
 
+# Windows: what of this computer's Python a whole Python of the run's own is made of (`_whole_python`): the files
+# beside its program and these two folders, and of its library folder all but the libraries installed on this
+# computer and Python's own tests. Python's programs for installing, its documents, tools, headers and files for
+# building other programs are not needed to run it, and are left out.
+WHOLE_FOLDERS = ("DLLs", "Lib")
+WHOLE_LEFT_IN_LIB = ("site-packages", "test")
+# The modules a project's tests commonly load that are made of more than Python: each must load in the copy wherever
+# it loads in this Python (a Python that finds a library of the system outside its own folder, as conda's does, would
+# lose it in the copy).
+WHOLE_MODULES = ("_socket", "select", "_overlapped", "_multiprocessing", "_ssl", "_hashlib", "_sqlite3", "_ctypes",
+                 "pyexpat", "_elementtree", "_decimal", "_lzma", "_bz2", "zlib", "_uuid", "_asyncio", "_queue",
+                 "unicodedata", "_zoneinfo", "_wmi")
+
+
+def _whole_python(home: Path, named: list[str], timeout: float = 120) -> str:
+    """Windows: a whole Python of the run's own in `home` (which must not be there yet), a copy of this computer's
+    Python (`sys.base_prefix`) without the libraries installed on it, whose one library file (`lantern.pth`) names
+    the folders in `named` (the fetched libraries, the project's `src`, the copy). Returns its program.
+
+    The Python of the run's own that `_own_python` makes is, on Windows, a small program that starts this computer's
+    Python, and Windows looks for a program named without its folder beside the program that asks before it looks in
+    PATH: a test that started `python` by that bare name got this computer's Python, with this computer's libraries
+    (`_own_python_words`). A whole Python is its own program, so what Windows finds beside it is itself; and it lies
+    in the run's folder, where a container of the run's own (`lantern.wincontainer`) may read it.
+
+    Raises OSError where it cannot be made: this computer's Python is not of the shape Python documents for Windows,
+    or is an embeddable one (a `._pth` file decides its path, and would decide the copy's), a folder name cannot be
+    written in a path file, or the copy does not start as a Python whose home is `home`, or does not load a module of
+    `WHOLE_MODULES` that this Python loads. `home` is then left for the caller to remove."""
+    import importlib
+    base = Path(sys.base_prefix)
+    program = "python.exe"
+    if not (base / program).is_file() or not (base / "Lib" / "os.py").is_file():
+        raise OSError(errno.ENOENT, "this computer's Python is not of the shape Python documents for Windows")
+    with os.scandir(base) as found:
+        tops = sorted((e for e in found), key=lambda e: e.name)
+    if any(e.name.lower().endswith("._pth") for e in tops):
+        raise OSError(errno.EINVAL, "this computer's Python is an embeddable one, whose path a file of its own decides")
+    if any("\n" in p or "\r" in p or p.lstrip().startswith(("import ", "import\t", "#")) for p in named):
+        raise OSError(errno.EINVAL, "a folder name that cannot be written in a path file")
+    loads_here = set()
+    for name in WHOLE_MODULES:
+        try:
+            importlib.import_module(name)
+            loads_here.add(name)
+        except ImportError:
+            continue
+    home.mkdir()
+    for e in tops:
+        if e.is_file(follow_symlinks=False):
+            shutil.copy2(e.path, home / e.name)
+    lib = base / "Lib"
+    for folder in WHOLE_FOLDERS:
+        if (base / folder).is_dir():
+            shutil.copytree(base / folder, home / folder, symlinks=True,
+                            ignore=lambda at, names: [n for n in names if Path(at) == lib and n in WHOLE_LEFT_IN_LIB])
+    site = home / "Lib" / "site-packages"
+    site.mkdir()
+    exe = home / program
+    # Does it start, is its home the copy, and does it load what this Python loads? Asked of the copy while its path
+    # file is not written yet: Python looks for a start-up file (`sitecustomize`) in every folder on its path, and
+    # neither a fetched library nor the project is to be on the path of a Python outside the sandbox.
+    ask = ("import importlib, os, sys\nprint(os.path.realpath(sys.prefix))\nprint(os.path.realpath(sys.base_prefix))\n"
+           f"for name in {sorted(loads_here)!r}:\n"
+           "    try:\n        importlib.import_module(name)\n    except ImportError:\n        print('missing', name)\n")
+    said = subprocess.run([str(exe), "-I", "-c", ask], capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout, cwd=str(home), env=programs.env({k: os.environ[k] for k in (
+                              "PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR") if k in os.environ}))
+    lines = said.stdout.splitlines()
+    mine = os.path.realpath(home)
+    if said.returncode != 0 or lines[:2] != [mine, mine]:
+        raise OSError(errno.ENOEXEC, "the copy of this computer's Python does not start as a Python of its own")
+    missing = [line.split(" ", 1)[1] for line in lines[2:] if line.startswith("missing ")]
+    if missing:
+        raise OSError(errno.ENOENT, f"the copy of this computer's Python does not load {', '.join(missing[:3])}")
+    (site / "lantern.pth").write_text("".join(p + "\n" for p in named), encoding="utf-8")
+    return str(exe)
+
+
 def _programs_run_by(libs: Path, python: str) -> int:
     """The command-line programs the fetched libraries brought (`libs/bin`) name, in their first line, the Python
     that fetched them, as pip writes it: the full path of the Python that runs Lantern. Have them name `python`
