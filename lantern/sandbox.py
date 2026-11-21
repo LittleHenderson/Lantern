@@ -649,8 +649,9 @@ def _own_python_words(windows: bool) -> str:
 WHOLE_PYTHON = ("they are started by a whole Python of the run's own (a copy of this computer's Python, without the "
                 "libraries installed on it), in which the fetched libraries are the only ones: a Python the tests "
                 "start themselves finds the same libraries, whatever it is handed, also by the bare name `python`")
-NO_WHOLE_PYTHON = ("a whole Python of the run's own could not be made ({why}), so the tests are started by a Python "
-                   "of the run's own that starts this computer's Python")
+# Said before the older one is tried: what starts the tests then is the next line's to say (`_own_python_words`, or
+# that no Python of the run's own could be made at all), so this one names nothing that may not be there.
+NO_WHOLE_PYTHON = "a whole Python of the run's own could not be made ({why})"
 
 
 def held_below_python() -> bool:
