@@ -699,6 +699,71 @@ def closed_port():
     socket.create_connection(("127.0.0.1", port), timeout=4).close()
 
 
+def ancestors(path):
+    """For each folder above `path`, from the top of its drive down: 0 where this program may look at it, else the
+    error number. Names are not kept."""
+    chain, p = [], os.path.abspath(path)
+    while os.path.dirname(p) != p:
+        p = os.path.dirname(p)
+        chain.append(p)
+    out = []
+    for folder in reversed(chain):
+        try:
+            os.lstat(folder)
+            out.append(0)
+        except OSError as e:
+            out.append(getattr(e, "winerror", None) or e.errno or -1)
+    return out
+
+
+def looks(places):
+    """Whether this program may look at each place (`given["roots"]`: a label for each), by label only."""
+    out = {}
+    for label, place in places.items():
+        try:
+            os.lstat(place)
+            out[label] = 0
+        except OSError as e:
+            out[label] = getattr(e, "winerror", None) or e.errno or -1
+    return out
+
+
+def npm_env(node, tmp):
+    """npm as the sandbox starts it: its home, settings, cache and temp folder inside the run (`_env_base`), and the
+    copy of Node first on PATH, so that the shell npm runs a script with finds it."""
+    home = os.path.join(tmp, "home")
+    os.makedirs(home, exist_ok=True)
+    return dict(os.environ, HOME=home, USERPROFILE=home, APPDATA=home, LOCALAPPDATA=home, TEMP=tmp, TMP=tmp,
+                npm_config_cache=os.path.join(tmp, "npm"), npm_config_update_notifier="false",
+                PATH=os.path.dirname(node) + os.pathsep + os.environ.get("PATH", ""))
+
+
+KEEP = ["--preserve-symlinks", "--preserve-symlinks-main"]   # Node takes a module's path as it is handed
+
+
+def node_from_files(node, npm_cli, tmp, app):
+    """Node started from a file of the run, with and without `KEEP`, and npm so started (round 6)."""
+    facts = {}
+    script = os.path.join(app, "probe_file.js")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("console.log('f')")
+    facts["node_file"] = program([node, script], word=True, codes=True)
+    facts["node_file_keep"] = program([node, *KEEP, script], word=True, codes=True)
+    facts["node_realpath_js"] = program([node, "-e", NODE_REALPATH], word=True, cwd=app)
+    facts["node_realpath_native"] = program([node, "-e", NODE_REALPATH.replace("realpathSync(", "realpathSync.native(")],
+                                            word=True, cwd=app)
+    if npm_cli:
+        env = dict(npm_env(node, tmp), NODE_OPTIONS=" ".join(KEEP))
+        facts["npm_version_keep"] = program([node, *KEEP, npm_cli, "--version"], seconds=90, codes=True, env=env)
+        js = os.path.join(tmp, "js6")
+        os.makedirs(js, exist_ok=True)
+        with open(os.path.join(js, "package.json"), "w", encoding="utf-8") as f:
+            json.dump({"name": "probe", "version": "1.0.0", "scripts": {"test": "node -e \"console.log('t')\""}}, f)
+        facts["npm_test_keep"] = program([node, *KEEP, npm_cli, "test", "--silent"], seconds=90, word=True, codes=True,
+                                         env=env, cwd=js)
+    return facts
+
+
 def other_pipe_by_name():
     _winapi.CloseHandle(_winapi.CreateFile(given["pipe"], _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0,
                                            _winapi.NULL, _winapi.OPEN_EXISTING, 0, _winapi.NULL))
@@ -708,6 +773,8 @@ NODE_CONNECT = ("const s = require('net').connect(9, process.argv[1]); s.setTime
                 "process.exit(3) }); s.on('connect', () => { console.log('connected'); process.exit(0) }); "
                 "s.on('error', e => { console.log(e.code); process.exit(2) })")
 NODE_READ = "require('fs').readFileSync(process.argv[1]); console.log('read')"
+NODE_REALPATH = ("try { require('fs').realpathSync(process.cwd()); console.log('done') } "
+                 "catch (e) { console.log(e.code) }")
 NODE_WRITE = "require('fs').writeFileSync(process.argv[1], 'x'); console.log('wrote')"
 NODE_DATAGRAM = ("const d = require('dgram').createSocket('udp4'); "
                  "d.send(Buffer.from('n'), Number(process.argv[1]), '127.0.0.1', e => { console.log(e ? e.code : 'sent'); "
@@ -789,14 +856,7 @@ if __name__ == "__main__":
         facts["node_copy_datagram"] = program([node, "-e", NODE_DATAGRAM, str(given["udp_node"])], word=True)
         if given.get("npm_cli"):
             facts["npm_version"] = program([node, given["npm_cli"], "--version"], seconds=90, codes=True)
-            # npm as the sandbox starts it: its home, settings, cache and temp folder inside the run (`_env_base`),
-            # and the copy of Node first on PATH, so that the shell npm runs a script with finds it
-            home = os.path.join(given["tmp"], "home")
-            os.makedirs(home, exist_ok=True)
-            env = dict(os.environ, HOME=home, USERPROFILE=home, APPDATA=home, LOCALAPPDATA=home, TEMP=given["tmp"],
-                       TMP=given["tmp"], npm_config_cache=os.path.join(given["tmp"], "npm"),
-                       npm_config_update_notifier="false",
-                       PATH=os.path.dirname(node) + os.pathsep + os.environ.get("PATH", ""))
+            env = npm_env(node, given["tmp"])
             facts["npm_version_home"] = program([node, given["npm_cli"], "--version"], seconds=90, codes=True, env=env)
             js = os.path.join(given["tmp"], "js")
             os.makedirs(js, exist_ok=True)
@@ -804,6 +864,9 @@ if __name__ == "__main__":
                 json.dump({"name": "probe", "version": "1.0.0", "scripts": {"test": "node -e \"console.log('t')\""}}, f)
             facts["npm_test_home"] = program([node, given["npm_cli"], "test", "--silent"], seconds=90, word=True,
                                              codes=True, env=env, cwd=js)
+        facts.update(node_from_files(node, given.get("npm_cli", ""), given["tmp"], given["app"]))
+    facts["ancestors"] = ancestors(given["app"])
+    facts["looks"] = looks(given.get("roots") or {})
     # the pipes: Windows' answer to each kind of name, then what multiprocessing and the event loop do once every
     # name is put under the container's own part (as a guard inside it would put them)
     facts["pipe_plain"] = bounded(lambda: pipe_pair(PLAIN), 15)
@@ -846,6 +909,9 @@ if __name__ == "__main__":
         facts["node_copy_start"] = program([node, "-e", "console.log(process.version)"])
         facts["node_copy_own_server"] = program([node, "-e", NODE_OWN_SERVER], word=True)
         facts["node_copy_datagram"] = program([node, "-e", NODE_DATAGRAM, str(given["udp_node"])], word=True)
+        facts.update(node_from_files(node, given.get("npm_cli", ""), given["tmp"], given["app"]))
+    facts["ancestors"] = ancestors(given["app"])
+    facts["looks"] = looks(given.get("roots") or {})
     os.environ["PROBE_LOCAL_PIPES"] = "1"
     local_names()
     facts["pool_local"] = bounded(pool, 60)
@@ -968,6 +1034,17 @@ def _pipe_for(sid: str, label: bool) -> _Broker:
     return _Broker(sid, label)
 
 
+def _roots(tmp: Path) -> dict:
+    """Places a run's folder could be put under, by label (the probe keeps the labels only)."""
+    system = os.environ.get("SYSTEMDRIVE", "C:") + "\\"
+    places = {"system_drive": system, "temp_drive": os.path.splitdrive(str(tmp))[0] + "\\",
+              "users": os.path.join(system, "Users")}
+    for label, name in (("program_data", "PROGRAMDATA"), ("public", "PUBLIC")):
+        if os.environ.get(name):
+            places[label] = os.environ[name]
+    return places
+
+
 def _count(folder: Path) -> tuple[int, int]:
     files = size = 0
     for here, _, names in os.walk(folder):
@@ -1062,7 +1139,7 @@ def tried(tmp_path_factory):
                  "broker": brokers[0].name, "broker_no_label": brokers[1].name,
                  "listener6": listener6.getsockname()[1] if listener6 is not None else 0,
                  "curl": str(curl) if curl.is_file() else "", "node": node, "node_copy": str(node_copy),
-                 "npm_cli": npm_cli}
+                 "npm_cli": npm_cli, "roots": _roots(tmp)}
         (root / "given.json").write_text(json.dumps(given), encoding="utf-8")
         env = sandbox._env_base(tmp)
         env["PATH"] = os.pathsep.join([os.path.dirname(exe), env.get("PATH", "")])
@@ -1119,10 +1196,14 @@ def tried_less(tmp_path_factory):
         exe = sandbox._whole_python(root / "py", [str(app)])
         (root / "less.py").write_text(LESS, encoding="utf-8")
         node = shutil.which("node") or ""
-        node_copy = ""
+        node_copy = npm_cli = ""
         if node.lower().endswith(".exe"):
             (root / "node").mkdir()
             node_copy = shutil.copy2(node, root / "node" / "node.exe")
+            npm = Path(node).resolve().parent / "node_modules" / "npm"
+            if (npm / "bin" / "npm-cli.js").is_file():
+                shutil.copytree(npm, root / "node" / "node_modules" / "npm", symlinks=True)
+                npm_cli = str(root / "node" / "node_modules" / "npm" / "bin" / "npm-cli.js")
         reached: list = []
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -1133,7 +1214,8 @@ def tried_less(tmp_path_factory):
             threading.Thread(target=_take, args=(sock, kind, reached), daemon=True).start()
         given = {"listener": listener.getsockname()[1], "udp": udp.getsockname()[1],
                  "udp_node": udp_node.getsockname()[1], "person_file": str(person / "secret.txt"), "tmp": str(tmp),
-                 "copy": str(root / "py"), "node_copy": str(node_copy)}
+                 "copy": str(root / "py"), "node_copy": str(node_copy), "npm_cli": npm_cli, "app": str(app),
+                 "roots": _roots(tmp)}
         (root / "given.json").write_text(json.dumps(given), encoding="utf-8")
         env = sandbox._env_base(tmp)
         env["PATH"] = os.pathsep.join([os.path.dirname(exe), env.get("PATH", "")])
