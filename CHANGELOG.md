@@ -9,6 +9,35 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- One test machine of its own for each website check, made and removed by the website (a firm pass or fail, stage 3,
+  step 5; `cloud/lantern_cloud/machines.py`; no check uses it yet). For each check the website makes, in a separate
+  organization at the hosting company, an app of the check's own on a private network of its own, an outbound rule
+  made before the machine, one shared address, and one machine of the runner image named by its fingerprint, given
+  the fingerprint of a key made for that check and nothing else; it hands the check's archive over, follows the log,
+  stops the tests past their minutes, takes the result by the shape the machine's program writes, ends the program,
+  and removes the machine and the app whatever happened before. At most two machines at once, first come first
+  served; the hosting company is asked no faster than it allows, and a "too many requests" is waited out. What a
+  check could not remove, and anything of the website's own tag older than any check can be, is removed by a sweep
+  at the website's start and every five minutes, which touches no other app. The key goes to the machine API alone
+  and is named in no error, log line or setting shown. The health page says one word about it (`test_machines`) and
+  the uptime check fails on `misset`, `behind` and `failed`; the owner's statistics have the counts. Off until its
+  key and image are set (`LANTERN_CLOUD_TEST_MACHINES_*`, `docs/deploy.md`). Tests: `tests/test_cloud_machines.py`
+  (67, the hosting company stood in for, and once the machine program's own door on this computer).
+- A limit on the programs a website check's tests run at once (a firm pass or fail, stage 3, step 5): on the test
+  machine the tests are held to 4,096 programs at once, each thread counted (`runner.PROCESSES`,
+  `sandbox.run(processes=)`). The sandbox's supervisor counts them as it counts their memory and stops a run over the
+  limit with everything it started and a sentence of its own, and the kernel refuses that user a new program at twice
+  the limit, so tests that start programs without end get no further between two looks. Tests stopped there did not
+  finish: the release decision says Incomplete, never a failure and never a pass, and "Tests pass" is skipped with its
+  points kept in the sum. The limit is asked for only where the tests run as a user nothing else runs as (the kernel
+  counts a user's programs on the whole computer), and a sandbox asked for it that keeps its own user starts nothing.
+  The test machine now asks five walls before it runs anything. Fixed on the way, found by the image's new case: where
+  the tests' output had a line open when the sandbox stopped them (pytest's dots after a test that passed, `unittest
+  -v` while a test runs), a run stopped at its memory limit read as tests that failed, on a person's own computer too;
+  the sandbox's line is now read wherever it stands in a line. Tests: `tests/test_sandbox_processes.py` (25; the 6
+  that hold a user of the tests' own run in CI's second pass as root), one more in `tests/test_sandbox_memory.py`
+  (pytest's dot; it fails on the reading from before), and a case in `tools/runner_image.py` that starts programs
+  without end. The image's CI job has the time its steps' own limits need (`tests/test_time_limits.py`).
 - The test machine's program and image (a firm pass or fail, stage 3, step 4): `lantern/runner.py` is what will run
   a website check's tests on a machine made for that one check. It opens one door that answers only to the key made
   for the check (the machine is given its fingerprint alone; anything else is told "not allowed"), takes the project

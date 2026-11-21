@@ -314,6 +314,14 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
         return _crit("tests", "passed", "The tests ran in this check and ended with 0 (passed).")
     if rc is None:
         from . import sandbox
+        if tr.get("over_processes") is True:
+            had = sandbox.processes_words(tr.get("processes_limit"))    # only a number of this run's own
+            return _crit("tests", "missing", "The test run did not end by itself: the sandbox stopped it because "
+                         "the tests, with what they started, ran more programs at once than their limit"
+                         + (f" ({had})." if had else ".") + " That is not a pass and not a failure.",
+                         "Find the test that starts programs without end, or keeps starting threads, and run the "
+                         "tests again. The limit is the test machine's own: on your own computer the tests have "
+                         "none (`lantern analyze PATH --trace --sandbox -- <your test command>`).")
         if tr.get("over_memory") is True:
             had = sandbox.memory_words(tr.get("memory_limit"))    # only a number of this run's own
             return _crit("tests", "missing", "The test run did not end by itself: the sandbox stopped it because "

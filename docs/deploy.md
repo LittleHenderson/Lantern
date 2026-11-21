@@ -341,7 +341,7 @@ fetch the libraries on the website's side, try it all on a practice copy and, on
 is `cloud/runner/Dockerfile`, built from the repository root:
 
     docker build -f cloud/runner/Dockerfile --build-arg LANTERN_COMMIT=$(git rev-parse HEAD) -t lantern-runner .
-    python tools/runner_image.py lantern-runner      # 8 cases, each on a machine of its own (CI does this on every push)
+    python tools/runner_image.py lantern-runner      # 8 cases, each on a machine of its own (CI adds a ninth, pytest fetched ready-built, on every push)
 
 It holds Python 3.12 and Node 22, from the pinned images the sandbox names (`lantern/sandbox.py` `IMAGES`), and
 Lantern's own code: no pip, nothing of anyone's project, no key. Its program (`lantern/runner.py`) answers only the key
@@ -349,12 +349,37 @@ made for its check (the machine is given the key's fingerprint, `LANTERN_RUNNER_
 its libraries as one archive, runs the tests with Lantern's sandbox as an ordinary user in a network of their own,
 and keeps the result until the website takes it (`docs/api.md`, "The test machine's program").
 
+The website makes and removes those machines itself (stage 3, step 5; `cloud/lantern_cloud/machines.py`), in an
+organization of their own at the hosting company (`lantern-runs`), so nothing of a check is near the website's own
+apps. No check uses them yet (that is the next step), and they stay off until both of these are set on the website:
+
+    LANTERN_CLOUD_TEST_MACHINES_KEY     # a secret: an organization key of lantern-runs, never shown or pasted
+    LANTERN_CLOUD_TEST_MACHINES_IMAGE   # the runner image named by its fingerprint: <registry>/<name>@sha256:<64 letters>
+
+The others have defaults: `LANTERN_CLOUD_TEST_MACHINES_ORG` (`lantern-runs`), `_TAG` (`live`; the practice copy says
+`practice`, and a website's sweep removes only apps of its own tag), `_REGION` (`sjc`), `_AT_ONCE` (2 machines at once),
+`_MEMORY_MB` (8192, the most memory one machine is given), `_ARCHIVE_MB` (2048, the largest archive one is handed),
+`_EGRESS` (`tcp:0`, the outbound rule) and `_API` (`https://api.machines.dev`). For each check the website makes an app
+named `lt-<tag>-<UTC time>-<8 letters>` with a private network of its own, the outbound rule, a shared address and one
+machine (two performance processors; the tests' memory and 1,024 MB more, at least 4,096 MB; given the fingerprint of a
+key made for that check and nothing else; removed by the hosting company when its program ends), and when the check
+ends it removes the machine and the app, whatever happened before. The tests' time is the minutes the check names and
+room after them, their memory is watched by the sandbox as on a person's computer, their programs are held to 4,096 at
+once, and their disk is the machine's own, emptied with it: the archive is at most `_ARCHIVE_MB`, and the machine's
+program refuses one whose files would not fit with room to spare. What it could not remove, and anything of its tag
+older than any check can be (about five hours), its sweep removes: everything of its tag when the website starts, then
+every five minutes. The health page says one word about it, `test_machines` (`docs/api.md`): `misset` (a setting is
+not right; the owner's statistics say which, under `test_machines`), `behind` (something of its tag is older than any
+check can be, or the sweeps stopped) and `failed` (the last sweep could not ask the hosting company) fail the uptime
+check. What is there can be seen with `fly apps list -o lantern-runs` and removed by hand with
+`fly apps destroy <name> --yes` (only a name that begins with `lt-`; any other app there is not one the website made).
+
 ### Watching the live services (uptime, and "is the live version behind?")
 
 `.github/workflows/uptime.yml` asks both services for `/v1/health` every 30 minutes (`tools/uptime.py`). A run fails,
 and GitHub emails the repository owner, when either service is down, answers without `"ok": true`, takes more than
 5 seconds, when lantern-cloud's engine version is older than the latest GitHub release (the live service is behind;
-redeploy, below), when lantern-cloud's health page says its clean-up is behind ("Clean-up" below), or when it says its checks are not kept apart (`"steps"` is `open` or `shared`: "Each check as a user of its own" above), or that its service runs as root (`"service_user"` is `root`: "The switcher" above). The health pages are public and show versions and limits only, so the check needs no secret.
+redeploy, below), when lantern-cloud's health page says its clean-up is behind ("Clean-up" below), or when it says its checks are not kept apart (`"steps"` is `open` or `shared`: "Each check as a user of its own" above), or that its service runs as root (`"service_user"` is `root`: "The switcher" above), or that its test machines are not right (`"test_machines"` is `misset`, `behind` or `failed`: "The test machine" above). The health pages are public and show versions and limits only, so the check needs no secret.
 `python tools/uptime.py --cloud https://lantern-cloud.fly.dev --gateway https://lantern-gateway.fly.dev` runs the same
 check by hand. Fly's own status page is https://status.flyio.net/. To get the mails, keep "Actions: send notifications
 for failed workflows" on in your GitHub notification settings (it is on by default for the repository owner).

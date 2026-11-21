@@ -235,6 +235,9 @@ MINUTES = (1, 240)        # what a person may set instead, in whole minutes (`ti
 TIME_VARIABLE = "LANTERN_TEST_MINUTES"    # the limit for a whole installation
 MEMORY_MB = 2048          # megabytes of memory in use a test run gets unless the person sets another limit
 MEGABYTES = (128, 1 << 20)                # what a person may set instead, in whole megabytes (`memory_limit`)
+# The programs a run's tests may run at once, their threads counted (`run(processes=)`, 2026-11-21): asked for by the
+# test machine's program alone (`lantern.runner`), where the tests' user runs nothing else.
+PROCESSES = (32, 1 << 16)
 MEMORY_VARIABLE = "LANTERN_TEST_MEMORY_MB"   # the limit for a whole installation
 MARK = "LANTERN-SANDBOX-BLOCKED:"
 JS_NOTE = "Tests run; your map upgrades for Python only for now."
@@ -502,6 +505,19 @@ def memory_words(mb) -> str:
     if isinstance(mb, bool) or not isinstance(mb, int) or not 0 < mb <= MEGABYTES[1]:
         return ""
     return f"{mb // 1024} GB" if mb % 1024 == 0 else f"{mb} MB"
+
+
+def processes_words(n) -> str:
+    """A limit on programs in words: "4,096 programs at once, their threads counted". Nothing is written for a value
+    that is no sane number."""
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 < n <= PROCESSES[1]:
+        return ""
+    return f"{n:,} programs at once, their threads counted"
+
+
+def _too_many_words(n: int) -> str:
+    had = processes_words(n)
+    return "because the tests ran more programs at once than their limit" + (f" ({had})" if had else "")
 
 
 COPY_WORDS = ("a fresh copy of your project in a temp folder, deleted after: the tests can change the copy and "
@@ -3209,18 +3225,32 @@ def _unavailable(rc, output: str) -> str | None:
     return why
 
 
+def _limit_said(output: str, what: str) -> bool:
+    """The launcher's line for a run it stopped at a limit (`LANTERN-SANDBOX-LIMIT: <what> <in use> <the limit>`)
+    is in the output. It ends its line, and it may end a line the tests left open: a test runner that writes a
+    test's name and waits for its outcome (`unittest -v`), which until 2026-11-21 made a run stopped at a limit read
+    as tests that ended with the launcher's number."""
+    from . import _jail
+    for line in output.splitlines():
+        i = line.rfind(_jail.LIMIT_MARK)
+        parts = line[i:].split() if i >= 0 else []
+        if len(parts) == 4 and parts[1] == what and parts[2].isdigit() and parts[3].isdigit():
+            return True
+    return False
+
+
+def _over_processes(rc, output: str) -> bool:
+    """The launcher stopped the command because of the programs it ran at once: its own result together with its
+    own line, as for the memory (`_over_memory`)."""
+    from . import _jail
+    return rc == _jail.OVER_PROCESSES and _limit_said(output, "processes")
+
+
 def _over_memory(rc, output: str) -> bool:
     """The launcher stopped the command because of the memory in use: its own result together with its own line.
     Either alone is the tests' own (a test may print anything and end with any number)."""
     from . import _jail
-    if rc != _jail.OVER_MEMORY:
-        return False
-    for line in output.splitlines():
-        parts = line.split()
-        if (len(parts) == 4 and parts[0] == _jail.LIMIT_MARK and parts[1] == "memory" and parts[2].isdigit()
-                and parts[3].isdigit()):
-            return True
-    return False
+    return rc == _jail.OVER_MEMORY and _limit_said(output, "memory")
 
 
 # How long Docker is asked whether a container was over its memory, in seconds: after a command that was ended by
@@ -3382,7 +3412,8 @@ def _map_pairs(data: dict, inner_root: str, repo: Path) -> dict:
 
 
 def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, backend: str | None = None,
-        cwd_rel: str = "", cancel=None, memory=None, offline: bool | None = None, given=None) -> Result:
+        cwd_rel: str = "", cancel=None, memory=None, offline: bool | None = None, given=None,
+        processes=None) -> Result:
     """Run the test command `words` for `repo` in the sandbox. Returns trace data for `trace.merge_trace` (`pairs`)
     plus `backend`, `language`, `traced`, `returncode`, `timed_out`, `over_memory` (the tests were stopped because
     they, with what they started, used more memory than `memory_limit`, the megabytes they had), `cancelled`,
@@ -3407,12 +3438,24 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
     `given`: the libraries another place fetched for this run before it began (`libraries.given`, the test machine's
     program, `lantern.runner`): nothing is read of the project's own files about its libraries and nothing is
     fetched; the tests run on exactly those, put where a fetch of the run's own puts them, and the result's
-    `libraries` is the record they came with. Not for a tests' container (ValueError)."""
+    `libraries` is the record they came with. Not for a tests' container (ValueError).
+
+    `processes`: the programs the tests and everything they started may run at once, their threads counted (a whole
+    number in `PROCESSES`; ValueError for anything else, and on any system but Linux or in a tests' container, where
+    nothing counts them). The result's `over_processes` says the run was stopped there, `processes_limit` the number.
+    The limit counts every program of the user the tests run as, so it is asked for only where that user runs
+    nothing else: the test machine's program (`lantern.runner`); the launcher starts nothing where the tests would
+    keep its own user (`_jail.REASONS["processes"]`)."""
     from . import libraries
     repo = Path(repo).resolve()
     language = check_command(words)
     backend = backend or backend_for(language)
     memory = memory_limit(memory)
+    if processes is not None and (isinstance(processes, bool) or not isinstance(processes, int)
+                                  or not PROCESSES[0] <= processes <= PROCESSES[1]):
+        raise ValueError(f"the limit on the tests' programs is a whole number from {PROCESSES[0]} to {PROCESSES[1]}")
+    if processes is not None and (backend == "docker" or not _LINUX):
+        raise ValueError("a limit on the tests' programs is counted by the launcher's supervisor, on Linux only")
     if given is not None and (backend == "docker" or given.language != language):
         raise ValueError("libraries fetched before the run go to the restricted process, for tests of their language")
     # `Unavailable`: the tests are not started
@@ -3428,7 +3471,7 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
                 res = _run_docker(repo, words, language, root, log, timeout, cwd_rel, me, memory=memory, plan=found)
             else:
                 res = _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, me, memory=memory,
-                                      plan=found)
+                                      plan=found, processes=processes)
         finally:
             if not _rm(root):
                 log(f"sandbox: its temp folder could not be deleted and is still there: {root}")
@@ -3438,13 +3481,15 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
             _GOING.discard(me)
         me.done.set()            # stop_all() waits for this, so the program does not leave in the middle of the lines above
     res.update(backend=backend, language=language, traced=language == "python", memory_limit=memory,
-               libraries=found.record)
+               libraries=found.record, processes_limit=processes)
     res.setdefault("own_network", False)
     res.setdefault("own_sockets", False)
     res.setdefault("windows_wall", False)
     res["off_network"] = _was_off_network(backend, language, bool(res["own_network"]))
     res.setdefault("over_memory", False)
-    res["cancelled"] = res.get("returncode") is None and not res.get("timed_out") and not res.get("over_memory")
+    res.setdefault("over_processes", False)
+    res["cancelled"] = (res.get("returncode") is None and not res.get("timed_out") and not res.get("over_memory")
+                        and not res.get("over_processes"))
     res["blocked"] = blocked_reasons(res.get("output_tail", "") + "\n" + res.pop("_full", ""),
                                      no_memory_folder=_LINUX and backend == "subprocess" and bool(own_memory()))
     res["stderr_tail"] = res.get("output_tail", "")[-2000:]
@@ -3778,7 +3823,7 @@ def _programs_run_by(libs: Path, python: str, was: str | None = None) -> int:
 
 
 def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=None, inside=None,
-                    memory: int = MEMORY_MB, plan=None) -> Result:
+                    memory: int = MEMORY_MB, plan=None, processes: int | None = None) -> Result:
     from . import _jail
     app, tmp, hook = root / "app", root / "tmp", root / "hook"
     as_nobody = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -3919,6 +3964,8 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
                   "sockets": _LINUX and not no_doorman}
         if wall is not None:
             policy["read"] = wall
+        if processes:           # the programs the tests may run at once (`run(processes=)`): the launcher counts them
+            policy["processes"] = processes
         # One of Lantern's own drivers (`run_inside`) gets the network too, which no other language's code can
         # leave, and is not told: `lantern.behave` reads what an app reached for from what the guard refused,
         # this computer's own address included, so there the guard goes on refusing every address.
@@ -3974,14 +4021,19 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
     why = _unavailable(rc, output)
     if why:
         raise Unavailable(why)
+    many = False
     if os.name == "posix":
         left += _left_by_launcher(output)
         over = _over_memory(rc, output)
+        many = bool(processes) and _over_processes(rc, output)
     else:                             # the job's own word, not a number the tests may end with themselves
         over = rc == _jail.OVER_MEMORY and any(getattr(j, "refused", False) is True for j in jobs)
     if over:        # stopped by the launcher, which had ended everything before it said so: no result of the tests' own
         rc = None
         log(_stopped(_over_words(memory), left, "every process it started was ended"))
+    elif many:      # ... the same, for the programs the tests ran at once
+        rc = None
+        log(_stopped(_too_many_words(processes), left, "every process it started was ended"))
     elif timed_out:
         log(_stopped(f"after {int(timeout)} s (the wall clock)", left, "every process it started was ended"))
     elif rc is None:
@@ -3995,8 +4047,8 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
     # `own_network` and `own_sockets` are what the launcher was told to make: a launcher that could not make
     # them starts nothing; and a wall the tests' Python is not inside runs no test (`lantern.tracehook`)
     return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, over_memory=over,
-                  output_tail=output[-6000:], _full=output, not_ended=left, own_network=not no_own,
-                  own_sockets=_LINUX and not no_doorman, windows_wall=box is not None)
+                  over_processes=many, output_tail=output[-6000:], _full=output, not_ended=left,
+                  own_network=not no_own, own_sockets=_LINUX and not no_doorman, windows_wall=box is not None)
 
 
 def _wall_for(root: Path, tmp: Path, app: Path):

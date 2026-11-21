@@ -29,9 +29,10 @@ makes one (`links_npm_makes`). What does not fit on the machine's disk is refuse
 
 **The walls** (`walls`): the tests run only where every wall the design counts on stands on this machine: a network
 of the tests' own (which holds nothing but its own address, so the tests cannot even reach the door), the doorman
-that makes every connection of their programs, the watch on the memory they use together, and an ordinary user for
-them (the program is root for that switch alone). Where one does not stand, no test is run and the result says
-which and why (`state: "unable"`).
+that makes every connection of their programs, the watch on the memory they use together, a limit on the programs
+they run at once (`PROCESSES`, their threads counted: a flood of programs is stopped there with its own sentence,
+`over_processes`), and an ordinary user for them (the program is root for that switch alone). Where one does not
+stand, no test is run and the result says which and why (`state: "unable"`).
 
 **The check** (`check`): the tests run with `sandbox.run(..., given=...)`, on exactly the libraries the website
 fetched (`libraries.given`) and on no others; nothing is fetched on the machine. The result says what ran where
@@ -103,6 +104,9 @@ CHUNK = 1 << 16
 WAIT_FOR_ARCHIVE = 600.0           # seconds the program waits for the archive
 WAIT_FOR_TAKER = 600.0             # seconds a result waits for the website, and the website then has to end it
 LONGEST = (sandbox.MINUTES[1] + 30) * 60.0   # seconds the program lives at most: the longest tests, and room
+# The programs the tests may run at once, their threads counted (`sandbox.run(processes=)`): a flood of programs is
+# stopped there, with its own sentence. The tests' user runs nothing else on this machine, so the count is theirs.
+PROCESSES = 4096
 
 WEBSITE_ENDED = "the website ended it"
 END_STATES = ("done", "refused", "unable", "stopped")
@@ -477,12 +481,24 @@ def _ordinary_user() -> str:
     return ""
 
 
+def _programs_limit() -> str:
+    if not sys.platform.startswith("linux"):
+        return "the tests' programs are counted on Linux only"
+    import resource
+    if not hasattr(resource, "RLIMIT_NPROC"):
+        return "this system has no limit on the programs of a user"
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return "the limit counts the programs of a user of the tests' own, which this program cannot give them"
+    return ""
+
+
 def walls() -> list[dict]:
     """The walls the design counts on, asked of this system: [{wall, stands, why}] (`why` is "" where it stands)."""
     rows = []
     for wall, ask in (("the tests' own network", sandbox.own_network),
                       ("a doorman for every connection", sandbox.own_sockets),
                       ("the memory watch", _memory_watch),
+                      ("a limit on the tests' programs", _programs_limit),
                       ("an ordinary user for the tests", _ordinary_user)):
         try:
             why = ask()
@@ -550,6 +566,7 @@ def check(archive_path: Path, work: Path, log=print, cancel=None, free=None) -> 
         s = taken["settings"]
         result["taken"] = {"files": taken["files"], "bytes": taken["bytes"], "links": taken["links"]}
         result["check"] = {k: s[k] for k in ("command", "cwd", "minutes", "memory", "language")}
+        result["check"]["processes"] = PROCESSES
         fetched = s["libraries"]["state"] == "fetched"
         result["runner"]["reach"] = sandbox.reach(s["language"], fetched)
         if cancel.is_set():
@@ -560,7 +577,7 @@ def check(archive_path: Path, work: Path, log=print, cancel=None, free=None) -> 
         try:
             tests = sandbox.run(taken["project"], s["command"], log=log, timeout=sandbox.time_limit(s["minutes"]),
                                 backend="subprocess", cwd_rel=s["cwd"], cancel=cancel, memory=s["memory"],
-                                offline=True, given=plan)
+                                offline=True, given=plan, processes=PROCESSES)
         except sandbox.Unavailable as e:
             result.update(state="unable", why_not=f"The sandbox could not be set up on this machine ({e}), so no test "
                           "was run.")

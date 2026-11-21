@@ -443,9 +443,11 @@ def test_no_test_runs_where_a_wall_the_design_counts_on_does_not_stand(tmp_path,
 def test_the_walls_are_asked_of_this_system():
     rows = {w["wall"]: w for w in runner.walls()}
     assert set(rows) == {"the tests' own network", "a doorman for every connection", "the memory watch",
-                         "an ordinary user for the tests"}
+                         "a limit on the tests' programs", "an ordinary user for the tests"}
     assert rows["the tests' own network"]["stands"] == (sandbox.own_network() == "")
     assert rows["an ordinary user for the tests"]["stands"] == LINUX_ROOT
+    # the limit counts every program of the tests' user, so it holds only where they get a user of their own
+    assert rows["a limit on the tests' programs"]["stands"] == LINUX_ROOT
     assert all(isinstance(w["why"], str) and (w["why"] == "") == w["stands"] for w in rows.values())
 
 

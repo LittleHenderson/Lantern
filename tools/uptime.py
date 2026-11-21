@@ -15,6 +15,11 @@ when last asked ("steps", 2026-11-18; cloud/lantern_cloud/apart.py): "open" (tha
 no check), "shared" (the service is not root, and cannot give a check a user of its own) and any word but "apart" and
 "unchecked" (said in the seconds after a start, before the first proof) fail this check. A service that says nothing
 about it (a version from before that day) passes.
+And it says one word about the test machines each check's tests run on ("test_machines", 2026-11-21;
+cloud/lantern_cloud/machines.py): "misset" (they were asked for and a setting is not right), "behind" (a check's
+machine was left at the hosting company longer than any check can take, or the sweeps that remove such machines
+stopped) and "failed" (the last sweep could not ask the hosting company) fail this check; "off", "ok" and "not yet"
+pass, and so does a service that says nothing about them.
 """
 from __future__ import annotations
 
@@ -101,6 +106,20 @@ def main(argv: list[str] | None = None) -> int:
                    else f"the service could not say which user it runs as (it said {word!r}); look at its logs")
             rows.append(("lantern-cloud service user", url, "ROOT" if word == "root" else "UNKNOWN", why))
             bad.append(f"lantern-cloud service user: {why}")
+        if name == "lantern-cloud" and ok and body.get("test_machines") not in (None, "off", "ok", "not yet"):
+            # None: a service from before the test machines (2026-11-21)
+            word = str(body.get("test_machines"))[:40]
+            why = {"behind": "a test machine of a check has been left at the hosting company longer than any check "
+                             "can take, or the sweeps that remove such machines stopped; /v1/admin/stats says which "
+                             "under \"test_machines\" (docs/deploy.md)",
+                   "failed": "the last sweep of the test machines could not ask the hosting company; /v1/admin/stats "
+                             "says more under \"test_machines\" (docs/deploy.md)",
+                   "misset": "the test machines were asked for and a setting of theirs is not right, so no check's "
+                             "tests run; /v1/admin/stats says which under \"test_machines\" (docs/deploy.md)"}.get(
+                word, f"the service could not say how its test machines are (it said {word!r}); look at its logs")
+            rows.append(("lantern-cloud test machines", url,
+                         word.upper() if word in ("behind", "failed", "misset") else "UNKNOWN", why))
+            bad.append(f"lantern-cloud test machines: {why}")
     md = "| service | url | status | detail |\n|---|---|---|---|\n" + "\n".join(f"| {n} | {u} | {s} | {w} |" for n, u, s, w in rows)
     print(md)
     if a.summary:

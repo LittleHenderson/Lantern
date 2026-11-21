@@ -669,11 +669,15 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
                           if tr.get("not_run_for") == "libraries" else
                           "not run: the sandbox the tests run in could not be set up on this computer", run_them,
                           required=True))
-    elif "returncode" in tr and tr["returncode"] is None and (tr.get("over_memory") is True or tr.get("timed_out")):
+    elif "returncode" in tr and tr["returncode"] is None and (tr.get("over_memory") is True or tr.get("timed_out")
+                                                               or tr.get("over_processes") is True):
         # Stopped at a limit of the run, its memory or its time: the tests did not finish, which is no failure and no
         # pass (until 2026-11-13 a run stopped by the clock read "fail" here, beside a release decision that said
         # "not a pass and not a failure").
-        if tr.get("over_memory") is True:
+        if tr.get("over_processes") is True:
+            said, more = ("not finished: the sandbox stopped the tests because they ran more programs at once than "
+                          "their limit", "Find the test that starts programs without end, and run them again.")
+        elif tr.get("over_memory") is True:
             said, more = ("not finished: the sandbox stopped the tests because they used more memory than their limit",
                           "Give the tests more memory (`--test-memory`, or the memory field of “Watch my tests "
                           "run”) and run them again.")

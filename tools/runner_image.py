@@ -10,7 +10,9 @@ in, the check is followed to its end, the machine is ended and must stop with 0.
 ordinary user; tests that fail; tests that try to reach the door and to read what the program holds, each of which
 passes only where it was refused, beside a server of their own that answers; JavaScript tests run by npm; tests on a
 library handed in with the project, and the same tests without it; an archive that is no check, which runs nothing;
-and with `--pytest FOLDER` (a folder made by `pip install --target`), pytest from that folder. Exit 0 only when
+tests that start programs without end, stopped at the limit on programs with nothing of them left (the twin is the
+first case, which passes); and with `--pytest FOLDER` (a folder made by `pip install --target`), pytest from that
+folder. Exit 0 only when
 every case held. `--host-network` gives each machine this computer's network (for a container program with no
 network of its own for containers); without it each machine has a network of its own and its door is published on
 127.0.0.1 alone.
@@ -140,7 +142,7 @@ def _ran(said: dict, broken: list[str], returncode: int) -> dict:
     tests = result.get("tests") or {}
     _check(tests.get("returncode") == returncode, f"the tests ended {tests.get('returncode')}, not {returncode}", broken)
     _check(all(w.get("stands") for w in (result.get("runner") or {}).get("walls", [])) and
-           len((result.get("runner") or {}).get("walls", [])) == 4, "a wall of the four did not stand", broken)
+           len((result.get("runner") or {}).get("walls", [])) == 5, "a wall of the five did not stand", broken)
     _check(tests.get("backend") == "subprocess", "the tests did not run in Lantern's sandbox", broken)
     _check(tests.get("own_network") is True and tests.get("off_network") is True,
            "the tests did not run in a network of their own", broken)
@@ -322,6 +324,36 @@ def not_a_check(folder: Path, m: Machine):
     return out, judge
 
 
+def flood(folder: Path, m: Machine):
+    project = _python(folder, "flood", """
+        import os, time, unittest
+        class T(unittest.TestCase):
+            def test_programs_without_end(self):
+                while True:
+                    try:
+                        pid = os.fork()
+                    except OSError:
+                        time.sleep(0.01)      # refused at the kernel's wall: tried again, as a flood does
+                        continue
+                    if pid == 0:
+                        time.sleep(600)
+                        os._exit(0)
+    """)
+    out = folder / "flood.zip"
+    runner.pack(project, out, ["python", "-m", "unittest", "-v"], minutes=3, memory=2048)
+
+    def judge(said, broken):
+        _check(said["state"] == "done", f"the check ended {said['state']}, not done", broken)
+        tests = (said.get("result") or {}).get("tests") or {}
+        _check(tests.get("over_processes") is True and tests.get("processes_limit") == runner.PROCESSES,
+               "the tests were not stopped at the limit on programs", broken)
+        _check(tests.get("returncode") is None and tests.get("timed_out") is False and tests.get("over_memory") is False,
+               f"the tests ended {tests.get('returncode')} (time {tests.get('timed_out')}, memory "
+               f"{tests.get('over_memory')}), not at the limit on programs", broken)
+        _check(tests.get("not_ended") == [], "something the tests started could not be ended", broken)
+    return out, judge
+
+
 def pytest_from(libs: Path):
     """pytest from a folder `pip install --target` made: each library's row read from its own record there."""
     rows = []
@@ -401,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pytest", type=Path, help="a folder made by `pip install --target FOLDER pytest`")
     ap.add_argument("--only", default="", help="names of cases, with commas")
     a = ap.parse_args(argv)
-    cases = [passes, fails, hostile, javascript, library, no_library, not_a_check]
+    cases = [passes, fails, hostile, javascript, library, no_library, not_a_check, flood]
     if a.pytest:
         cases.append(pytest_from(a.pytest))
     if a.only:

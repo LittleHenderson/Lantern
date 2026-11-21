@@ -177,6 +177,9 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
                 extra["time_limit"] = limit
                 extra["over_memory"] = bool(data.get("over_memory"))
                 extra["memory_limit"] = room
+                if data.get("processes_limit"):     # the test machine's own limit (`sandbox.run(processes=)`)
+                    extra["over_processes"] = bool(data.get("over_processes"))
+                    extra["processes_limit"] = data.get("processes_limit")
                 if data.get("traced"):
                     m = older.merge_trace(g, data)
                 else:
@@ -199,6 +202,10 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
             had = sbx.minutes_words(extra.get("time_limit"))
             log("trace   the tests were stopped at the time limit" + (f" ({had})" if had else "") + ": that is not "
                 "a pass and not a failure. They can be given more time (from 1 to 240 minutes).")
+        if extra.get("over_processes"):
+            had = sbx.processes_words(extra.get("processes_limit"))
+            log("trace   the tests were stopped because they ran more programs at once than their limit"
+                + (f" ({had})" if had else "") + ": that is not a pass and not a failure.")
         if extra.get("over_memory"):
             had = sbx.memory_words(extra.get("memory_limit"))
             log("trace   the tests were stopped because they used more memory than their limit"

@@ -193,7 +193,7 @@ def hosted(token: str, gateway_url: str):
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None,
-               start_worker: bool = True, provider_for=None) -> FastAPI:
+               start_worker: bool = True, provider_for=None, test_machines=None) -> FastAPI:
     s = settings or Settings()
     Path(s.results_dir).mkdir(parents=True, exist_ok=True)
     store = Store(s.db_path)
@@ -208,6 +208,16 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     cleanup.retention = lambda: sweep(store, s.results_dir, cleanup.days, cleanup)
     upkeep_over = threading.Event()
     threading.Thread(target=cleanup.run_forever, args=(upkeep_over,), name="lantern-upkeep", daemon=True).start()
+    # The test machines (a firm pass or fail, stage 3; `machines.py`): off until their key and image are set (a test
+    # hands its own, with the hosting company stood in for). Their sweep runs beside the clean-up: at the start every
+    # app of this website's (none of its checks is going yet), then what a check left or what is older than any
+    # check can be.
+    tm, tm_why = (test_machines, "") if test_machines is not None else s.test_machines()
+    if tm_why:
+        log.warning("test machines: not switched on: %s", tm_why)
+    if tm is not None:
+        threading.Thread(target=tm.sweep_forever, args=(upkeep_over,), name="lantern-test-machines",
+                         daemon=True).start()
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -220,6 +230,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.settings, app.state.identity, app.state.worker = store, s, ident, worker
     app.state.cleanup = cleanup
+    app.state.test_machines = tm
     provider_for = provider_for or (lambda token: hosted(token, s.gateway_url))
     # A sign-out the gateway has not heard of yet is work under way too: the service does not go to sleep on it.
     idle = IdleExit(s.idle_minutes, busy=lambda: store.busy() > 0 or bool(ident.unfinished))
@@ -281,6 +292,18 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         except Exception:  # noqa: BLE001 - the health page answers whatever happens
             return "unknown"
 
+    def test_machines_word() -> str:
+        """One word for the public health page: "off" (not asked for), "misset" (asked for, and a setting is not
+        right: /v1/admin/stats says which), or the sweep's own word (`Machines.word`: "not yet", "ok", "behind",
+        "failed"). A service that has just started is given two seconds to end its first sweep."""
+        if tm is None:
+            return "misset" if tm_why else "off"
+        try:
+            tm.first_sweep.wait(2.0)
+            return tm.word()
+        except Exception:  # noqa: BLE001 - the health page answers whatever happens
+            return "unknown"
+
     @app.get("/v1/health")
     def health():
         # Public: versions and limits only, never counters, accounts or links.
@@ -289,10 +312,11 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         # not root and no switcher started it, and its steps run as its own user). `service_user`: "own" (the
         # service runs as an ordinary user: the website's image has its switcher start it so, `switcher.py`) or
         # "root". The uptime check fails on "open", "shared" and "root" (`apart.py`, `tools/uptime.py`).
+        # `test_machines`: one word (`test_machines_word`); the uptime check fails on "misset", "behind", "failed".
         return {"ok": True, "service": "lantern-cloud", "version": __version__, "engine": _engine_version(),
                 "limits": s.limits(), "hosts": s.hosts() or "all", "cleanup": cleanup_word(),
                 "steps": worker.steps if worker is not None else ("unchecked" if apart.can_keep_apart() else "shared"),
-                "service_user": "root" if apart.as_root() else "own"}
+                "service_user": "root" if apart.as_root() else "own", "test_machines": test_machines_word()}
 
     @app.get("/v1/me")
     async def me(request: Request):
@@ -1159,7 +1183,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     def admin_stats(authorization: str | None = Header(default=None)):
         admin(authorization)
         # "cleanup": what is still to be removed (counts and reasons, never a run id or a path), what in the
-        # service's folders is not its own and was left alone, and how the last pass went.
-        return {**store.stats(), "cleanup": cleanup.state()}
+        # service's folders is not its own and was left alone, and how the last pass went. "test_machines": this
+        # website's apps at the hosting company the last sweep left in place, the oldest one's age and how old one
+        # may be, what is left for the next sweep, the checks going (`Machines.health`); or why they are off.
+        machines_now = tm.health() if tm is not None else {"on": False, **({"why": tm_why} if tm_why else {})}
+        return {**store.stats(), "cleanup": cleanup.state(), "test_machines": machines_now}
 
     return app
