@@ -158,17 +158,26 @@ def test_where_no_python_of_the_runs_own_can_be_made_the_guard_still_keeps_to_th
 
 def test_the_python_of_the_runs_own_is_not_the_tests_to_change(tmp_path, monkeypatch, pystore):
     """Where its libraries come from is written in a file of the run's own Python. A test that could change that
-    file would choose the libraries of every Python started after it."""
+    file would choose the libraries of every Python started after it.
+
+    The tests' Python is the run's own when it is neither this computer's Python nor the one that runs Lantern,
+    whichever kind it is: an environment of its own (`_own_python`), or on Windows a whole Python (`_whole_python`),
+    whose `sys.prefix` is its `sys.base_prefix`. Until 2026-11-21 the test asked for an environment, and on Windows,
+    where the run's own has been a whole Python since 2026-11-20, it stopped there, before any of its checks."""
     _online(monkeypatch, python=pystore)
     repo = _py_project(tmp_path / "proj")
+    not_these = sorted({os.path.normcase(os.path.abspath(p)) for p in (sys.prefix, sys.base_prefix)})
     (repo / "test_it.py").write_text(
         "import os\nimport sys\nimport unittest\n\n\nclass T(unittest.TestCase):\n    def test_it(self):\n"
-        "        self.assertNotEqual(sys.prefix, sys.base_prefix)\n"
+        f"        self.assertNotIn(os.path.normcase(os.path.abspath(sys.prefix)), {not_these!r})\n"
+        "        tried = 0\n"
         "        for folder, names, files in os.walk(sys.prefix):\n"
         "            for name in files:\n"
         "                if name.endswith('.pth'):\n"
+        "                    tried += 1\n"
         "                    with self.assertRaises(OSError):\n"
         "                        open(os.path.join(folder, name), 'a').close()\n"
+        "        self.assertGreater(tried, 0)\n"
         "        with self.assertRaises(OSError):\n"
         "            open(os.path.join(sys.prefix, 'pyvenv.cfg'), 'a').close()\n", encoding="utf-8")
     res = sandbox.run(repo, UNITTEST, log=QUIET, backend="subprocess")
