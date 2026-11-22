@@ -1796,3 +1796,76 @@ def test_threads_started_by_a_test_are_guarded_too():
     t.start()
     t.join(30)
     assert seen[0] == "address ok" and ng.MARK not in seen[-1]
+
+
+# ----------------------------------------------------------------------------- Python 3.11's one flag for tracing
+# Python 3.11 guards the switching on of a trace or a profile function with one flag for the whole program, held while
+# the audit hooks hear of it. The guard's hook is Python, and Python may hand the processor to another thread at a
+# hook's first line: a thread that switches its own tracing on in that moment is refused ("Cannot install a trace
+# function while another trace function is being installed"), and one refused at its start never runs. Where every new
+# thread switches a trace function on (`threading.settrace`: coverage's way, which CI's test jobs use), such a thread
+# was lost and a test that waited for it waited with no end (2026-11-21, CI's Python 3.11 job: the web library's thread
+# of a test's website). Each case below holds one thread inside its own switch until the other has had its turn, so
+# the moment is not left to chance; the twin without the guard shows that the moment is Python's flag on 3.11 alone.
+ONE_FLAG = """
+    switch, how = sys.argv[1], sys.argv[2]
+    if sys.argv[3] == "guard":
+        ng.install()
+    event = "sys." + switch
+    held, ran = threading.Event(), threading.Event()
+    other, holder, said = [], [], []
+
+    def hook(name, args):                     # a Python hook that holds one thread inside its own switch
+        if name == event and held.is_set() and threading.current_thread() is holder[0]:
+            held.clear()
+            b = threading.Thread(target=own if how == "own" else ran.set)
+            other.append(b)
+            b.start()                         # the other thread starts, and switches, in that very moment
+            b.join(20)
+    sys.addaudithook(hook)
+
+    def own():                                # coverage's own step, on a new thread's first line
+        try:
+            getattr(sys, switch)(lambda *a: None)
+            getattr(sys, switch)(None)
+            ran.set()
+        except RuntimeError as e:
+            said.append(str(e))
+
+    if how == "start":                        # every new thread switches a function on at its start
+        getattr(threading, switch)(lambda *a: None)
+
+    def first():
+        held.set()
+        getattr(sys, switch)(lambda *a: None)
+        getattr(sys, switch)(None)
+    a = threading.Thread(target=first)
+    holder.append(a)
+    a.start()
+    a.join(30)
+    print(json.dumps({"ran": ran.is_set(), "said": said, "held": not held.is_set() and bool(other),
+                      "python": list(sys.version_info[:2])}))
+"""
+
+
+@pytest.mark.parametrize(("switch", "how"), [("settrace", "start"), ("setprofile", "start"), ("settrace", "own")])
+def test_a_thread_that_switches_its_tracing_on_while_another_is_in_the_guards_hook_runs(switch, how):
+    r = _program(ONE_FLAG, switch, how, "guard")
+    out = _json(r)
+    assert out["held"], out                    # the moment came: one thread held inside its switch, the other started
+    assert out["ran"] and out["said"] == [], (out, r.stderr)
+    assert "Cannot install" not in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize(("switch", "how"), [("settrace", "start"), ("setprofile", "start"), ("settrace", "own")])
+def test_the_twin_without_the_guard_that_moment_loses_the_thread_on_python_3_11_alone(switch, how):
+    r = _program(ONE_FLAG, switch, how, "plain")
+    out = _json(r)
+    assert out["held"], out
+    word = "trace" if switch == "settrace" else "profile"
+    refused = f"Cannot install a {word} function while another {word} function is being installed"
+    if tuple(out["python"]) == (3, 11):
+        assert not out["ran"], out             # Python's own flag: the thread is refused
+        assert refused in r.stderr + " ".join(out["said"]), (out, r.stderr)
+    else:
+        assert out["ran"] and out["said"] == [] and "Cannot install" not in r.stderr, (out, r.stderr)

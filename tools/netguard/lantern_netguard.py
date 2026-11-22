@@ -471,6 +471,49 @@ def _ask_before_names() -> None:
 
 
 
+# ------------------------------------------------------------------------------------------------ Python 3.11's one flag
+# Python 3.11 guards the switching on of a trace or a profile function (`sys.settrace`, `sys.setprofile`) with one flag
+# for the whole program, held while the audit hooks hear of it. This guard's hook is Python, and Python may hand the
+# processor to another thread at a hook's first line: a thread that switches its own tracing on in that moment is
+# refused with one of these words, and the flag is down again. A thread refused at its start (`threading` switches on
+# the function `threading.settrace` gave it, which is how coverage traces every thread, and CI's test jobs measure
+# coverage) never runs, and a test that waits for it waits with no end (2026-11-21, CI's Python 3.11 job: the thread
+# of a test's website). So on 3.11 the two are asked again while that flag is what refused them, `ASK_AGAIN` seconds
+# at most. Python 3.12 has no such flag. Not asked again: a C program's own switch (coverage's C tracer), which Python
+# turns into a printed warning and a thread that runs untraced.
+ONE_FLAG = ("Cannot install a trace function while another trace function is being installed",
+            "Cannot install a profile function while another profile function is being installed")
+ASK_AGAIN = 2.0
+
+
+def _asked_again(switch):
+    def again(function):
+        until = None
+        while True:
+            try:
+                return switch(function)
+            except RuntimeError as e:
+                if str(e) not in ONE_FLAG:
+                    raise
+                if until is None:
+                    until = time.monotonic() + ASK_AGAIN
+                elif time.monotonic() > until:
+                    raise
+                time.sleep(0)            # the thread that holds the flag finishes its own switch
+    again.__name__, again.__qualname__, again.__doc__ = switch.__name__, switch.__qualname__, switch.__doc__
+    again.__wrapped__ = switch
+    return again
+
+
+def _one_flag() -> None:
+    if sys.version_info[:2] != (3, 11):
+        return
+    for name in ("settrace", "setprofile"):
+        switch = getattr(sys, name)
+        if getattr(switch, "__wrapped__", None) is None:
+            setattr(sys, name, _asked_again(switch))
+
+
 def install(log: str | None = None, allow=None, deny_ports=None) -> None:
     """Start refusing in this process. Safe to call again: the log, the declared hosts and the forwarding proxies'
     ports are updated, the hook is added once."""
@@ -489,6 +532,7 @@ def install(log: str | None = None, allow=None, deny_ports=None) -> None:
         except OSError:
             _S.hostname = ""
         sys.addaudithook(_hook)
+        _one_flag()
         _ask_before_names()
         _S.installed = True
 

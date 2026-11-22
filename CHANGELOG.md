@@ -9,6 +9,17 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Lantern's own tests keep every thread they start on Python 3.11 (`tools/netguard/lantern_netguard.py`,
+  `_one_flag`). Python 3.11 guards the switching on of a trace or a profile function with one flag for the whole
+  program, held while the audit hooks hear of it, and the tests' network guard is such a hook: a thread whose
+  switch came while another thread's was inside it was refused, and a thread refused at its start never runs.
+  Coverage switches a function on at the start of every thread, so in CI's Python 3.11 job a test waited for its
+  website's thread with no end: 701 tests passed and 37 were skipped, then nothing until the runner's deadline of
+  100 minutes ended the run. On 3.11 the guard now asks again while that refusal is what came back, 2 seconds at
+  most; 3.12 has no such flag. Tests: `tests/test_netguard.py` (each of the two switches at a thread's start, and
+  one on a thread's own first line, in that moment held on purpose: the thread runs under the guard; the twins
+  without the guard lose the thread on 3.11 alone). The sandbox's guard in a project's own tests is the same kind
+  of hook and is not changed yet (`CLAUDE.md`, Known gaps).
 - The doorkeeper that is a test run's one way to its library store (`lantern/_stores.py`, `Door._pipe`) and the relay
   of the guard's proxy for Lantern's own tests (`tools/netguard/lantern_netguard.py`, `_relay`) watch their
   connections with the system's own selector (`selectors.DefaultSelector`), no longer with `select()`, which takes no
