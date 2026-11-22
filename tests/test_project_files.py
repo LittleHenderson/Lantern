@@ -203,6 +203,8 @@ OWN_FILES = {
     ("browse.py", "_Box._where"): "a folder handle on each of the box's own two folders, never through a link",
     ("browse.py", "_Box._put"): "writes: a request for the app, a new file in the box's own folder, never through a link",
     ("browse.py", "_Box._take"): "an answer the driver inside wrote into the box's own folder: never through a link, never waiting on a pipe",
+    ("pictures.py", "keep"): "writes: LANTERN_HOME/pictures, a picture of a page as a new file of the run's own folder, never through a link",
+    ("pictures.py", "read"): "LANTERN_HOME/pictures: a picture, never through a link, only this user's plain file holding what its name says",
     ("kept.py", "_digest_of"): "Lantern's own code and the parser libraries it runs with, for the stamp of the code",
     ("kept.py", "Shelf._read"): "LANTERN_HOME/cache: an entry, never through a link, only this user's plain file",
     ("kept.py", "Shelf.put"): "LANTERN_HOME/cache: writes", ("kept.py", "tidy"): "LANTERN_HOME/cache: the mark of the last tidy",

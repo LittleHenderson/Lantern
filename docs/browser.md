@@ -4,7 +4,9 @@
 contract they are built to. Each check below has a broken example and a safe twin in `tests/browse_sites.py`, and
 `tests/test_browse.py` holds the checks to this page. The checks are built for Linux, macOS and Windows (macOS and
 Windows since the rest of step 2, the same day); on any other system every check comes out `not-run` with the reason
-`not-built`, and nothing else in Lantern reads the record yet.
+`not-built`. Since step 3 (the same day) the release decision counts what the browser saw wherever the project has a
+site to open (below, "In the release decision"), the report shows it on its Advanced readiness page, and a picture of
+each page that showed something is kept on this computer only (below, "Pictures of the pages").
 
 `lantern analyze` reads the code. The browser checks open the project's own site in a real browser and say what
 happened there: pages that do not open, errors in the page's own script, links and buttons that lead nowhere, forms
@@ -46,7 +48,8 @@ started or no browser could be used.
   and nothing else of Lantern's, and when the run ends it is closed and whatever it started is ended with it (its
   session's programs, or its job).
 * Clicks and forms go to the site's own address only, and an app's data is thrown away with the run.
-* Pictures of the pages stay on this computer.
+* Pictures of the pages stay on this computer: never in the results folder, the report or anything else that is
+  shared (below).
 * A browser check only says what the browser saw. It never creates, closes or re-ranks a finding.
 
 Browsers: Chrome, Chromium, Edge and Brave, which Lantern drives the same way. `LANTERN_BROWSER` names one by its full
@@ -203,12 +206,76 @@ have done.
 
 ## What comes out
 
-`browser.json` in the results folder (the shape to come): `of` (the code it is of, as in `behaviour.json`), `ran`,
-`why_not`, `browser` (`name`, `version`, `own_sandbox`, `keyboard_end`: `leaves`, `wraps`, `stays` or `unknown`),
-`site` (`how`: `pages` or `app`; `address`), `opened` (each page: its path, status and seconds), `checks` (one a
-check: `id`, `outcome`, `codes` of the decided things only, `saw` with `undecided` on each undecided thing, `why`),
-`asked_outside` (every request for another computer: address, kind, page; each refused) and `browser_own` (what the
-browser itself asked for, not the pages, which is not counted for the site).
+`browser.json` in the results folder (every field: `docs/api.md`): `of` (the code it is of: the commit, whether files
+differed from it, Lantern's version, and `code_sha256`, the SHA-256 over every file of the project as the release
+decision counts it, taken before anything is opened; the results folder is not part of it), `ran`, `why_not`,
+`browser` (`name`, `version`, `own_sandbox`, `keyboard_end`: `leaves`, `wraps`, `stays` or `unknown`), `site` (`how`:
+`pages` or `app`; `address`), `opened` (each page: its path, status and seconds), `checks` (one a check: `id`,
+`outcome`, `codes` of the decided things only, `saw` with `undecided` on each undecided thing, `why`),
+`asked_outside` (every request for another computer: address, kind, page; each refused), `browser_own` (what the
+browser itself asked for, not the pages, which is not counted for the site), `pictures` (below) and `seal`: this
+computer's seal over the record, as on `behaviour.json` (`lantern/seal.py`; absent where `LANTERN_HOME` cannot be
+written, and such a record counts for nothing).
+
+## In the release decision
+
+The release decision (`lantern/release.py`) has a criterion `browser`, "A browser opened the site and saw nothing that
+blocks a release". It is required wherever a run would find something to open (`browse.site_kind`: an app Lantern
+can start, or a folder of plain pages); a project with neither has it `not-applicable`, and the reason says that
+sites of other kinds are not opened yet. A record counts only when it carries this computer's seal and is of exactly
+this code (`of.code_sha256`), because the results folder usually lies in the project and a project can bring a
+`browser.json` of its own that says every check held.
+
+* `failed` (the release is Blocked) when a check that blocks a release came out `broken`: `opens`, `script`, `forms`,
+  `visitor` and `protections` (`release.BROWSER_BLOCKS`). These are faults a visitor meets: a page that does not open,
+  the page's own script failing, a form that cannot be sent, a visitor let in where the code asks for a sign-in, and a
+  protection the code sets that the site does not send.
+* `missing` (Incomplete) when there is no record, its seal does not hold, it is of other code, the run did not open
+  the pages or opened none, it has no row for one of those five checks, or one of them came out `inconclusive` or
+  `not-run`. For plain pages `protections` is `not-run` with `hosting-unknown`: what a host sends is not in the
+  project's folder, so that alone does not make it missing, and the reason says it was not checked.
+* `passed` when each of the five held or had nothing to check, and `opens` held.
+
+`leads`, `outside` and `keyboard` (`release.BROWSER_SHOWN`) block nothing: what they saw is said in the reason beside
+the decision. What a browser saw never stands in for tests (the owner's answer of 2026-11-21): a project with no tests
+stays Incomplete, and its `tests` criterion names the tests to write first, read from the code (`lantern/firsttests.py`:
+the sign-in, the changes only a signed-in person may make, the changes anyone can make, the routes that reach a paid
+service, what the routes that only read answer, and that each page and screen opens; at most three named of each
+kind, the rest counted), says, where a browser opened the site on this code, that this does not count in their
+place, and, for a FastAPI app Lantern can import, offers a first test file with the other starter files
+(`tests/test_first.py`: each page answers without an error of the server, a visitor who is not signed in cannot make
+a change the code shows needs a sign-in, and the other tests of the list written out as still to write).
+
+## In the report
+
+The Advanced readiness page has a card "What the browser saw" (`report.html`'s `seenBox`, from the `browser` part of
+the report's data, `browse.view`): the browser, how many pages were opened, and each check with its outcome, its
+codes, Lantern's reason and the first rows it saw, the checks that block a release marked as such. It is shown only
+for a record this computer sealed on this code; any other record is said in the release decision and nothing of it is
+shown. The rows hold the site's own text (addresses, console lines, the names of controls), so a report made with
+`--privacy structure` leaves them out. Simple shows nothing new: its release box already gives the site's part of the
+decision in one line.
+
+## Pictures of the pages
+
+Each page that shows something gets one picture, taken by the browser itself once the page has settled
+(`Page.captureScreenshot`), at most `MOST_PICTURES` a run, each a PNG of at most 8 MB. A picture shows what the
+project's pages hold, so it stays on this computer (`lantern/pictures.py`):
+
+* in `LANTERN_HOME/pictures/`, in a folder of the run's own with a random name, closed to other users, each picture a
+  file named by its own SHA-256 and written as a new file, never through a link;
+* the record names them by that fingerprint only (`pictures`: `set`, the run's folder; `shots`, each page with its
+  picture's name and size; `not_kept`, how many were not kept), and nothing of them goes into the results folder, the
+  report, the Evidence Report, Ask Lantern or the connector: the report says how many there are, and `lantern browse`
+  says where they are;
+* the app (`lantern serve`) shows them behind its session key ("Show the pictures" on the report's card, Advanced),
+  and only the ones a record sealed by this computer names, each read back only as a plain file of this user's whose
+  content is what its name says (`GET /api/projects/<id>/browser/pictures`, `docs/api.md`);
+* the folders of the `KEEP_RUNS` newest runs are kept, and an older run's folder is removed by its exact name, only
+  when it is a plain folder of this user's that Lantern named: nothing else in `LANTERN_HOME/pictures/` is touched.
+
+To remove every picture, delete `LANTERN_HOME/pictures/` (by default `~/.lantern/pictures/`); a report or a record
+that named them is not changed by it, and the app then shows none.
 
 ## How it is held to this
 

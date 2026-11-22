@@ -10,8 +10,9 @@ short and honest). Prints every check that is not a pass, the skipped ones too, 
 missing.
 
 This step reads Lantern's code and never runs its tests, so its decision cannot be Passed: the tests are run by
-CI's test jobs, on every push, and a release is cut only when those are green. That one gap is allowed here, by
-name; anything else that is missing stops CI.
+CI's test jobs, on every push, and a release is cut only when those are green. Nor does it open a browser on
+Lantern's own pages (`site/`), whose script needs React from another website, which a browser run refuses. Those two
+gaps are allowed here, by name; anything else that is missing stops CI.
 """
 import json
 import re
@@ -151,6 +152,9 @@ ALLOWED_SKIP: dict[str, str] = {
 # Criteria of the release decision that may be missing here, and nothing else may.
 ALLOWED_MISSING: dict[str, str] = {
     "tests": "this step reads the code and does not run the tests; CI's test jobs run them on every push",
+    "browser": "this step opens no browser; and `lantern browse .` on Lantern's own pages (site/) cannot decide "
+               "what their script does, which asks another website for React, refused in every browser run "
+               "(the browser job's tests open Lantern's browser checks on sites of their own)",
 }
 MIN_SCORE = 90
 

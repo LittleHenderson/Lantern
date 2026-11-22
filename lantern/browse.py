@@ -40,7 +40,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import programs
+from . import pictures, programs
 
 
 @dataclass(frozen=True)
@@ -270,6 +270,18 @@ def _site(repo: Path, g) -> Site | None:
         return None
     pages = _page_files(folder, repo)
     return Site("pages", folder, pages) if pages else None
+
+
+def site_kind(repo: Path, g) -> str | None:
+    """What a run of the project at `repo` (its map `g`) would open, as `_site` finds it, without opening anything
+    or reading more of the code than that takes: `app`, `pages`, or None when there is nothing to open. The release
+    decision asks it whether the project has a site that a browser must have opened (`release._browser`)."""
+    from . import behave_init
+    repo = Path(repo)
+    if behave_init.app_of(g) is not None:
+        return "app"
+    folder = _pages_folder(repo)
+    return "pages" if folder is not None and _page_files(folder, repo) else None
 
 
 class _Pages:
@@ -752,6 +764,7 @@ class _Walk:
         self.scripts = 0
         self.visitor_judged = 0
         self.keyboard_end = "unknown"
+        self.shots: list[tuple[str, bytes]] = []    # (page, picture) of the first pages that showed something
 
     # ------------------------------------------------------------------------------------------- events
     def tab_of(self, session: str | None) -> _Tab | None:
@@ -1025,11 +1038,28 @@ class _Walk:
         if measured and not measured.get("seen"):
             self.saw["opens"].append({"code": "empty", "page": path, "status": status,
                                       "what": "the page shows nothing that can be seen"})
+        elif measured.get("seen") and len(self.shots) < pictures.MOST_PICTURES:
+            self.picture(tab, path)
         controls = self.eval(tab, CONTROLS) or []
         forms = self.eval(tab, FORMS) or []
         self.keyboard(tab, path)
         self.leads(tab, path, controls)
         self.forms(tab, path, forms)
+
+    def picture(self, tab: _Tab, path: str) -> None:
+        """A picture of the page as it settled, taken by the browser itself (`Page.captureScreenshot`), kept for the
+        record with the others of this run (`pictures.keep`, on this computer only). A page that went away, an
+        answer that is not a PNG picture or is too large: no picture, and nothing else changes."""
+        try:
+            r = self.b.call("Page.captureScreenshot", {"format": "png"}, tab.session, timeout=20)
+            text = r.get("data") if isinstance(r, dict) else None
+            if not isinstance(text, str) or len(text) > (pictures.MOST_BYTES // 3 + 1) * 4:
+                return
+            data = base64.b64decode(text, validate=True)
+        except Exception:  # noqa: BLE001 - the page or the browser would not: no picture
+            return
+        if pictures.is_picture(data):
+            self.shots.append((path, data))
 
     # ------------------------------------------------------------------------------------------- leads
     def leads(self, tab: _Tab, path: str, controls: list) -> None:
@@ -1577,6 +1607,66 @@ class _Walk:
         return out
 
 
+# ================================================================================================== the report
+VIEW_ROWS = 3          # what one check saw, shown in the report (the record keeps up to 200)
+VIEW_KEYS = 8          # fields of one such row
+VIEW_TEXT = 300        # characters of one value
+
+
+def view(record, code_sha256: str | None, privacy: str = "full") -> dict | None:
+    """What the report shows of the record `lantern browse` left in the results folder (`report.write_report`; the
+    card "What the browser saw" on the Advanced readiness page). None when there is no record, or when it does not
+    carry this computer's seal or is of other code than `code_sha256`: the release decision says why it does not
+    count (`release._browser`), and nothing of it is shown. Otherwise the browser, how many pages were opened, and
+    each check with its outcome, its codes, Lantern's own reason and, unless `privacy` is `structure` (the rows hold
+    the site's own text: addresses, console lines, the names of controls), the first rows it saw. Only values of the
+    shapes Lantern writes are taken, each cut to a bounded length; the viewer escapes every one."""
+    from . import release, seal
+    if not isinstance(record, dict) or not seal.holds(record):
+        return None
+    of = record.get("of") if isinstance(record.get("of"), dict) else {}
+    if not isinstance(code_sha256, str) or not code_sha256 or of.get("code_sha256") != code_sha256:
+        return None
+
+    def text(v, n: int = VIEW_TEXT) -> str | None:
+        return v[:n] if isinstance(v, str) else None
+
+    def reason(v) -> str | None:
+        return WHY_NOT[v] if isinstance(v, str) and v in WHY_NOT else text(v)
+
+    b = record.get("browser") if isinstance(record.get("browser"), dict) else {}
+    named = " ".join(x for x in (text(b.get("name"), 60), text(b.get("version"), 40)) if x)
+    if record.get("ran") is not True:
+        return {"ran": False, "why": reason(record.get("why_not")), "browser": named or None}
+    seconds = record.get("seconds")
+    out: dict = {"ran": True, "why": None, "browser": named or None,
+                 "pages": len(record["opened"]) if isinstance(record.get("opened"), list) else 0,
+                 "seconds": seconds if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else None,
+                 "pictures": len(pictures.listed(record)[1]), "checks": []}
+    got = {}
+    for c in record.get("checks") if isinstance(record.get("checks"), list) else []:
+        if isinstance(c, dict) and isinstance(c.get("id"), str) and c["id"] in BY_ID and c["id"] not in got:
+            got[c["id"]] = c
+    for check in CHECKS:
+        c = got.get(check.id)
+        if c is None or c.get("outcome") not in OUTCOMES:
+            continue
+        codes = [k for k in c.get("codes") or [] if isinstance(k, str) and k in check.codes] \
+            if isinstance(c.get("codes"), list) else []
+        row = {"id": check.id, "title": check.title, "outcome": c["outcome"], "codes": codes,
+               "why": reason(c.get("why")), "blocks": check.id in release.BROWSER_BLOCKS}
+        if privacy == "full":
+            seen = []
+            for s in (c.get("saw") if isinstance(c.get("saw"), list) else [])[:VIEW_ROWS]:
+                if isinstance(s, dict):
+                    seen.append({k: text(v) if isinstance(v, str) else v for k, v in list(s.items())[:VIEW_KEYS]
+                                 if isinstance(k, str) and len(k) <= 40
+                                 and (isinstance(v, (str, bool)) or (isinstance(v, int) and not isinstance(v, bool)))})
+            row["saw"] = seen
+        out["checks"].append(row)
+    return out
+
+
 def _unique(saw: list[dict]) -> list[dict]:
     seen, out = set(), []
     for s in saw:
@@ -1620,18 +1710,39 @@ def _own_sandbox(b) -> tuple[bool, str]:
             pass
 
 
-def run(repo, *, browser: str | None = None, page_seconds: float = PAGE_SECONDS, log=None) -> dict:
+def run(repo, *, browser: str | None = None, page_seconds: float = PAGE_SECONDS, log=None,
+        out: Path | None = None) -> dict:
     """Open the site of the project at `repo` in a browser and give the record (docs/browser.md, "What comes out").
     `browser`: the browser's full path; None looks for one (`find_browser`). `page_seconds`: how long a page has to
-    answer and settle. Never raises for what the project, its pages or the browser do: a run that could not be made
-    says why (`ran` false, `why_not`)."""
-    from . import _cdp, __version__, engine, gitfacts
+    answer and settle. `out`: the results folder the record goes to, which is not part of the code the record says
+    it was made on when it lies in the project. Never raises for what the project, its pages or the browser do: a
+    run that could not be made says why (`ran` false, `why_not`).
+
+    Every record says which code it is of (`of.code_sha256`: `release.code_digest` over the project's files, taken
+    before anything is opened) and carries this computer's seal (`seal.py`), whatever came out: the release decision
+    counts a record only for exactly this code and only with that seal (`release._browser`), because the results
+    folder usually lies in the project, and a project can bring a record of its own that says every check held."""
+    from . import __version__, gitfacts, release, seal
     log = log or (lambda line: None)
     repo = Path(repo).resolve()
+    git = gitfacts.info(repo)
+    of = {"commit": git.get("commit"), "dirty": git.get("dirty"), "lantern": __version__,
+          "code_sha256": release.code_digest(repo, leave_out=out)["sha256"]}
+    record = _run(repo, of, browser, page_seconds, log)
+    made = seal.sign(record)
+    if made is None:
+        log("browse: this record carries no seal (LANTERN_HOME cannot be written), so a release decision will not "
+            "count it")
+    else:
+        record["seal"] = made
+    return record
+
+
+def _run(repo: Path, of: dict, browser: str | None, page_seconds: float, log) -> dict:
+    """The run itself, for `run`: the record without its seal."""
+    from . import _cdp, engine
     found = (os.path.normpath(browser) if _program(browser) else None) if browser else find_browser()
     log(f"browser {found or 'none found'}")
-    git = gitfacts.info(repo)
-    of = {"commit": git.get("commit"), "dirty": git.get("dirty"), "lantern": __version__}
     if found is None:
         return _not_run("no-browser", of=of)
     if not sys.platform.startswith(BUILT_FOR):
@@ -1693,6 +1804,9 @@ def run(repo, *, browser: str | None = None, page_seconds: float = PAGE_SECONDS,
         door.close()
     with door.lock:
         record["browser_own"] = list(door.seen)
+    record["pictures"] = pictures.keep(walk.shots if walk is not None else [])   # on this computer only
+    if walk is not None:
+        walk.shots = []
     record["seconds"] = round(time.monotonic() - t0, 3)
     if site.notes:
         record["notes"] = site.notes[:10]

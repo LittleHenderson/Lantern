@@ -11,6 +11,9 @@
 //   dropped into Ask Lantern (read on this computer), and Settings → Analysis packs (one pack off, then on again) and the coding agent (off by default).
 //   Fails on any JavaScript error or when one of those does not answer as it should. The phone pass loads the
 //   same screens.
+// Pictures mode: node tools/viewer_smoke.js --pictures 'http://127.0.0.1:8874/#token=…' OUT_PREFIX PAGE…
+//   the app's "Show the pictures" on the Advanced readiness page: each PAGE, in order, must come back as a PNG picture
+//   named by that page as text (lantern/pictures.py; tools/audit.sh makes the record and the pictures)
 // PW_BROWSER=firefox|webkit runs the same smoke in another engine (CI runs all three on the report and the app's home).
 const BROWSER = process.env.PW_BROWSER || 'chromium';
 const chromium = require('playwright')[BROWSER];
@@ -264,7 +267,63 @@ async function appSmoke(url, out, image, expectText, slowTests) {
   if (errs.length) process.exitCode = 1;
 }
 
+// The app's "Show the pictures" (lantern/pictures.py): the pictures of the pages a browser check opened stay on the
+// computer that ran it, and only the app shows them. The report is opened as the app's Atlas opens it (a pass for the
+// result file, so it carries the app's live actions), Advanced readiness, the button: every picture the record names
+// must come back as a PNG picture shown from a data: address, each named by its page as text (the set-up names one
+// page like markup), with no script error and nothing asked of another computer.
+async function picturesSmoke(url, out, want) {
+  const b = await outside.launch(chromium);
+  const errs = [];
+  const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+  await outside.watch(p, errs, outside.FONTS);
+  p.on('pageerror', e => errs.push(`pictures: ${e.message}`));
+  p.on('console', m => { if (m.type() === 'error' && !outside.refusedFont(m)) errs.push(`pictures console: ${m.text()}${outside.where(m)}`); });
+  p.on('dialog', d => { errs.push(`pictures: a dialog opened (script from the data ran): ${d.message()}`); d.dismiss(); });
+  try {
+    await p.goto(url);
+    await p.waitForSelector('[data-open]', { timeout: 180000 });
+    const api = (path, body) => p.evaluate(([path, body]) => fetch(path, body === undefined ? {headers: {'X-Lantern-Token': TOKEN}} : {method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN}, body: JSON.stringify(body)}).then(r => r.json()), [path, body]);
+    const id = (await api('/api/state')).projects[0].id;
+    await api('/api/settings', { view_mode: 'advanced' });
+    const pass = await api('/api/view', { path: `/p/${id}/report.html` });
+    await p.goto(new URL(pass.url, url).href);
+    await p.waitForSelector('#center');
+    await p.click('#tabs button[data-t="ready"]'); await p.waitForTimeout(150);
+    if (await p.$('[data-vm="advanced"]')) { await p.click('[data-vm="advanced"]'); await p.waitForTimeout(150); }
+    const btn = await p.$('#seenpics');
+    if (!btn) errs.push('pictures: the Advanced readiness page shows no "Show the pictures" button');
+    else {
+      await btn.click();
+      await until(p, () => document.querySelectorAll('#seenpicsbox img').length > 0 || /could not|rror/.test(document.getElementById('seenpicsbox').textContent), 15000);
+      await p.waitForTimeout(300);
+      const got = await p.evaluate(() => [...document.querySelectorAll('#seenpicsbox figure')].map(f => {
+        const img = f.querySelector('img'), cap = f.querySelector('figcaption');
+        return { data: !!img && img.src.startsWith('data:image/png;base64,'), wide: img ? img.naturalWidth : 0, page: cap ? cap.textContent : null };
+      }));
+      console.log(`pictures: ${JSON.stringify(got.map(g => ({ ...g, page: g.page && g.page.slice(0, 60) })))}`);
+      if (got.length !== want.length) errs.push(`pictures: ${got.length} pictures shown, ${want.length} kept`);
+      got.forEach((g, i) => {
+        if (!g.data || g.wide < 1) errs.push(`pictures: picture ${i + 1} is not a PNG picture shown from a data: address (${JSON.stringify(g)})`);
+        if (g.page !== want[i]) errs.push(`pictures: picture ${i + 1} is named ${JSON.stringify(g.page)}, not ${JSON.stringify(want[i])}`);
+      });
+      if (await p.$$eval('[data-pwn]', els => els.length)) errs.push('pictures: a page name landed in the page as markup');
+      await p.screenshot({ path: `${out}-pictures.png`, fullPage: true });
+      await a11y.axe(p, 'pictures', errs);
+    }
+  } catch (e) { errs.push(`pictures: the smoke test could not drive the app: ${e.message.split('\n')[0]}`); }
+  console.log(await outside.close(b, errs));
+  console.log(errs.length ? errs.join('\n') : 'no JS errors');
+  if (errs.length) process.exitCode = 1;
+}
+
 (async () => {
+  if (process.argv[2] === '--pictures') {
+    const [url, out, ...pages] = process.argv.slice(3);
+    if (!url || !out || !pages.length) { console.error('usage: node tools/viewer_smoke.js --pictures URL OUT_PREFIX PAGE...'); process.exit(2); }
+    return picturesSmoke(url, out, pages);
+  }
   if (process.argv[2] === '--app') {
     const a = process.argv.slice(3), opt = k => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : null; };
     if (!a[0] || !a[1]) { console.error('usage: node tools/viewer_smoke.js --app URL OUT_PREFIX [--image PNG --expect-text WORD --slow-tests COMMAND]'); process.exit(2); }
@@ -408,6 +467,16 @@ async function appSmoke(url, out, image, expectText, slowTests) {
       await pwned('readiness');
       await p.screenshot({ path: `${out}-${name}-ready.png`, fullPage: true });
       await a11y.axe(p, `${name} readiness`, errs);
+      // the Advanced page has the cards Simple leaves out: what a browser saw (lantern browse) among them
+      if (name === 'desk' && await p.$('[data-vm="advanced"]')) {
+        await p.click('[data-vm="advanced"]'); await p.waitForTimeout(150);
+        await pwned('readiness, advanced');
+        const seen = await p.evaluate(() => ({ data: !!(DATA && DATA.browser), card: !!document.querySelector('[aria-label="What the browser saw"]') }));
+        if (seen.data && !seen.card) errs.push(`${name}: the report carries what a browser saw, and the Advanced readiness page does not show it`);
+        await p.screenshot({ path: `${out}-${name}-ready-advanced.png`, fullPage: true });
+        await a11y.axe(p, `${name} readiness, advanced`, errs);
+        await p.click('[data-vm="simple"]'); await p.waitForTimeout(100);
+      }
     }
     await p.click('#tabs button[data-t="about"]'); await p.waitForTimeout(150);
     await pwned('about');

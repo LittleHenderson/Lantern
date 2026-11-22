@@ -632,13 +632,14 @@ def cmd_browse(a) -> int:
     written as `browser.json` in the results folder whatever came out. 0 only when a check held and every other one
     held or had nothing to check; 1 when a check is broken, undecided or was not run, or none held; 2 when there is
     nothing to open; 3 when the site was not started or no browser could be used."""
-    from . import browse, results
+    from . import browse, pictures, results
     repo = Path(a.path).resolve()
     if not repo.is_dir():
         print(f"error: {a.path} is not a folder", file=sys.stderr)
         return 2
     out = _out(repo, a.out)
-    record = browse.run(repo, browser=a.browser, log=lambda line: print(_printable(line), file=sys.stderr))
+    record = browse.run(repo, browser=a.browser, log=lambda line: print(_printable(line), file=sys.stderr),
+                        out=out)
     results.write(out / browse.RESULT_NAME, json.dumps(record, indent=2, ensure_ascii=False) + "\n")
     if not record["ran"]:
         print(f"not run       {record['why']}")
@@ -658,6 +659,9 @@ def cmd_browse(a) -> int:
     print(f"browse        {counts['held']} held, {counts['broken']} broken, {counts['inconclusive']} undecided, "
           f"{counts['nothing-to-check']} with nothing to check, {counts['not-run']} not run "
           f"({record.get('seconds')} s; {len(record.get('opened') or [])} pages opened)")
+    run, shots = pictures.listed(record)
+    if shots:       # pictures of the pages: on this computer only, never in the results folder
+        print(_printable(f"pictures      {len(shots)} of the pages, kept on this computer only: {pictures.place() / run}"))
     print(f"wrote         {out / browse.RESULT_NAME}")
     return 0 if counts["held"] and not (counts["broken"] or counts["inconclusive"] or counts["not-run"]) else 1
 

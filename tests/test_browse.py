@@ -52,9 +52,13 @@ def test_the_outcomes_and_the_reasons_are_the_pages_own():
     assert bullets == list(browse.OUTCOMES)
     reasons = re.search(r"^\* `not-run`, with the reason: (.+?)(?=^\S|\Z)", section, flags=re.M | re.S).group(1)
     assert set(re.findall(r"`([a-z-]+)`", reasons)) - set(browse.BY_ID) == set(browse.WHY_NOT)
+    from lantern import pictures
     limits = {n for n in re.findall(r"`([A-Z]+_[A-Z_]+)`", text) if not n.startswith("LANTERN_")}
-    assert limits == {"MOST_PAGES", "MOST_CLICKS", "PAGE_SECONDS"}, limits
-    assert all(type(getattr(browse, n)) is int and getattr(browse, n) > 0 for n in limits)   # the code's own
+    held = {**{n: getattr(browse, n) for n in ("MOST_PAGES", "MOST_CLICKS", "PAGE_SECONDS")},
+            **{n: getattr(pictures, n) for n in ("MOST_PICTURES", "KEEP_RUNS")}}
+    assert limits == set(held), limits
+    assert all(type(v) is int and v > 0 for v in held.values())     # the code's own
+    assert "each a PNG of at most 8 MB" in text and pictures.MOST_BYTES == 8 << 20
 
 
 @pytest.mark.parametrize("name", sorted(PLANTED))
@@ -124,6 +128,225 @@ def test_with_no_browser_every_check_is_not_run_and_says_why(tmp_path):
     assert record["ran"] is False and record["why_not"] == "no-browser" and record["why"] == browse.WHY_NOT["no-browser"]
     assert [(c["id"], c["outcome"], c["why"]) for c in record["checks"]] == \
         [(c.id, "not-run", "no-browser") for c in browse.CHECKS]
+
+
+def test_the_record_says_which_code_it_is_of_and_carries_this_computers_seal(tmp_path):
+    """The release decision counts a record only of this code and with this computer's seal (`release._browser`),
+    as it does the behaviour record; so every record says which code it was made on, whatever came out of the run,
+    and the results folder is not part of that code."""
+    from lantern import release, seal
+    repo = browse_sites.write(tmp_path / "s", "pages")
+    out = repo / "results"
+    out.mkdir()
+    (out / "earlier.txt").write_text("a result of an earlier run, not the project's code\n", encoding="utf-8")
+    record = browse.run(repo, browser=str(tmp_path / "no-browser-here"), out=out)
+    assert record["of"]["code_sha256"] == release.code_digest(repo, leave_out=out)["sha256"], record["of"]
+    assert record["of"]["code_sha256"] != release.code_digest(repo)["sha256"]
+    assert seal.holds(record), record
+    assert not seal.holds({**record, "ran": True}) and not seal.holds({**record, "checks": []})   # changed after
+
+
+def test_the_command_writes_the_record_sealed_and_of_this_code(tmp_path, capsys):
+    from lantern import cli, release, seal
+    repo = browse_sites.write(tmp_path / "s", "pages")
+    out = repo / "results"
+    assert cli.main(["browse", str(repo), "--out", str(out), "--browser", str(tmp_path / "no-browser-here")]) == 3
+    record = json.loads((out / browse.RESULT_NAME).read_text(encoding="utf-8"))
+    assert seal.holds(record), capsys.readouterr()
+    assert record["of"]["code_sha256"] == release.code_digest(repo, leave_out=out)["sha256"], record["of"]
+
+
+SAMPLES = sorted(p.name for p in (Path(__file__).resolve().parent / "fixtures").iterdir()
+                 if p.is_dir() and p.name != "old_results")
+
+
+@pytest.mark.parametrize("where", ["app", "pages", "nothing", *SAMPLES])
+def test_what_a_run_would_open_is_told_without_opening_it(tmp_path, where):
+    """`site_kind`, which the release decision asks whether the project has a site a browser run must open, says
+    what a run itself finds (`_site`), for the two test sites, a project with nothing to open and every sample."""
+    from lantern import engine
+    if where in ("app", "pages"):
+        repo = browse_sites.write(tmp_path / where, where)
+    elif where == "nothing":
+        repo = tmp_path / "sums"
+        repo.mkdir()
+        (repo / "sums.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    else:
+        repo = Path(__file__).resolve().parent / "fixtures" / where
+    g = engine.build_graph(repo)
+    site = browse._site(repo, g)
+    assert browse.site_kind(repo, g) == (site.how if site is not None else None), where
+    if where in ("app", "pages"):
+        assert browse.site_kind(repo, g) == where
+    elif where == "nothing":
+        assert browse.site_kind(repo, g) is None
+
+
+def _sealed(repo: Path, **over) -> dict:
+    """A record as `lantern browse` writes it for `repo` (below: `_record`), every check broken with one row that
+    holds a long value, a table and a number, of this code and sealed by this computer; `over` changes it first."""
+    from lantern import release, seal
+    rec = _record({c.id: "broken" for c in browse.CHECKS},
+                  saw=[{"code": "x", "page": "/", "what": "w" * 1000, "nested": {"a": 1}, "n": 3}])
+    rec["of"]["code_sha256"] = release.code_digest(repo)["sha256"]
+    rec.update(over)
+    rec["seal"] = seal.sign(rec)
+    return rec
+
+
+def test_the_report_shows_a_record_only_of_this_computer_and_this_code(tmp_path):
+    from lantern import release
+    repo = browse_sites.write(tmp_path / "s", "pages")
+    code = release.code_digest(repo)["sha256"]
+    rec = _sealed(repo)
+    v = browse.view(rec, code)
+    assert (v["ran"], v["pages"], v["browser"]) == (True, 1, "Chromium 1"), v
+    assert [c["id"] for c in v["checks"]] == [c.id for c in browse.CHECKS]
+    first = v["checks"][0]
+    assert first["outcome"] == "broken" and first["codes"] == [browse.CHECKS[0].codes[0]], first
+    assert first["saw"] == [{"code": "x", "page": "/", "what": "w" * browse.VIEW_TEXT, "n": 3}], first  # cut; no table
+    assert {c["id"]: c["blocks"] for c in v["checks"]} == {c.id: c.id in release.BROWSER_BLOCKS for c in browse.CHECKS}
+    assert all("saw" not in c for c in browse.view(rec, code, "structure")["checks"])   # the site's own text left out
+    unsealed = {k: x for k, x in rec.items() if k != "seal"}
+    for near in (None, "not a record", unsealed, {**rec, "ran": False}):
+        assert browse.view(near, code) is None, near
+    assert browse.view(rec, "0" * 64) is None and browse.view(rec, None) is None     # other code; nothing to compare
+    odd = _sealed(repo, checks=[{"id": "opens", "outcome": "fine", "codes": [], "saw": []},
+                                {"id": "script", "outcome": "broken", "codes": ["raised", "made-up"], "saw": "x"},
+                                {"id": "elsewhere", "outcome": "held"}])
+    assert [(c["id"], c["codes"], c.get("saw")) for c in browse.view(odd, code)["checks"]] == [("script", ["raised"], [])]
+    not_run = _sealed(repo, ran=False, why_not="no-browser")
+    assert browse.view(not_run, code) == {"ran": False, "why": browse.WHY_NOT["no-browser"], "browser": "Chromium 1"}
+
+
+def test_the_report_carries_what_the_browser_saw_only_with_this_computers_seal(tmp_path):
+    from lantern import pipeline, report
+    repo = browse_sites.write(tmp_path / "s", "pages")
+    out = repo / ".lantern"
+    out.mkdir()
+    rec = _sealed(repo)
+    for record, shown in ((rec, True), ({k: x for k, x in rec.items() if k != "seal"}, False)):
+        (out / browse.RESULT_NAME).write_text(json.dumps(record), encoding="utf-8")
+        pipeline.analyze(repo, out, log=lambda m: None, offline=True)
+        seen = report.read_bundle(out / "report.html").get("browser")
+        assert (seen is not None) is shown and (not shown or seen["ran"] is True), seen
+
+
+# The pictures of the pages: kept on this computer only (lantern/pictures.py).
+
+def _png(seed: int = 0) -> bytes:
+    """A small picture in PNG's own form (signature, header, data, end), a different one for each seed."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    rows = b"".join(b"\x00" + bytes((seed % 256, seed // 256 % 256, 7)) * 2 for _ in range(2))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def _named(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest() + ".png"
+
+
+def test_the_pictures_of_a_run_are_kept_on_this_computer_named_by_what_they_hold(tmp_path):
+    from lantern import pictures
+    one, two = _png(1), _png(2)
+    kept = pictures.keep([("/", one), ("/about", two), ("/broken", b"<html>not a picture</html>"), ("/again", one),
+                          ("/big", one + b"\0" * pictures.MOST_BYTES)])
+    assert pictures.SET.fullmatch(kept["set"] or ""), kept
+    assert kept["shots"] == [{"page": "/", "name": _named(one), "bytes": len(one)},
+                             {"page": "/about", "name": _named(two), "bytes": len(two)},
+                             {"page": "/again", "name": _named(one), "bytes": len(one)}], kept
+    assert kept["not_kept"] == 2, kept                              # not a picture; too large
+    home = Path(os.environ["LANTERN_HOME"]).resolve()
+    folder = pictures.place() / kept["set"]
+    assert folder.resolve().is_relative_to(home), folder          # Lantern's own folder of this computer
+    assert sorted(p.name for p in folder.iterdir()) == sorted({_named(one), _named(two)})   # one file for one picture
+    assert pictures.read(kept["set"], _named(one)) == one and pictures.read(kept["set"], _named(two)) == two
+    if os.name == "posix":                                         # closed to other users
+        assert stat.S_IMODE(pictures.place().stat().st_mode) == 0o700 and stat.S_IMODE(folder.stat().st_mode) == 0o700
+        assert {stat.S_IMODE(p.stat().st_mode) for p in folder.iterdir()} == {0o600}
+    many = pictures.keep([(f"/p{i}", _png(10 + i)) for i in range(pictures.MOST_PICTURES + 3)])
+    assert (len(many["shots"]), many["not_kept"]) == (pictures.MOST_PICTURES, 3), many
+    assert pictures.keep([]) == {"set": None, "shots": [], "not_kept": 0}       # nothing taken: no folder made
+    assert sorted(p.name for p in pictures.place().iterdir()) == sorted((kept["set"], many["set"]))
+
+
+def test_a_picture_is_read_back_only_as_a_plain_file_of_lanterns_own_that_holds_what_its_name_says(tmp_path):
+    from lantern import pictures
+    kept = pictures.keep([("/", _png(1)), ("/b", _png(2))])
+    s, n = kept["set"], kept["shots"][0]["name"]
+    assert pictures.read(s, n) == _png(1)                                       # the honest twin
+    for bad_set, bad_name in ((s, "../" + n), (s, n.upper()), (s, n[:-4]), (s, "x.png"), (s, n + "/"),
+                              ("../" + s, n), (s.upper(), n), (s + "/..", n), (None, n), (s, None), (1, n),
+                              ("0" * len(s), n)):
+        assert pictures.read(bad_set, bad_name) is None, (bad_set, bad_name)
+    changed = pictures.place() / s / kept["shots"][1]["name"]
+    changed.write_bytes(_png(3))                     # changed after it was kept: not the picture its name says
+    assert pictures.read(s, kept["shots"][1]["name"]) is None
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / _named(_png(4))).write_bytes(_png(4))
+    try:                                             # a link named like a picture, to a file that holds exactly it
+        os.symlink(elsewhere / _named(_png(4)), pictures.place() / s / _named(_png(4)))
+    except (OSError, NotImplementedError):
+        pass                                         # this user may make no link here (Windows without the right)
+    else:
+        assert pictures.read(s, _named(_png(4))) is None
+    other = "f" * len(s)                             # a run's folder that is a link to a folder elsewhere
+    _link_folder(elsewhere, pictures.place() / other)
+    assert pictures.read(other, _named(_png(4))) is None
+    assert (elsewhere / _named(_png(4))).read_bytes() == _png(4)
+
+
+def test_only_the_newest_runs_pictures_are_kept_and_nothing_else_there_is_touched(tmp_path, monkeypatch):
+    from lantern import pictures
+    monkeypatch.setattr(pictures, "KEEP_RUNS", 3)
+    root = pictures.place()
+    root.mkdir(parents=True)
+    (root / "notes.txt").write_text("mine", encoding="utf-8")
+    (root / "mine").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x", encoding="utf-8")
+    _link_folder(outside, root / ("e" * 32))         # a link named like a run's folder
+    made = []
+    for i in range(5):
+        k = pictures.keep([("/", _png(i))])
+        made.append(k["set"])
+        os.utime(root / k["set"], (1_000_000 + i, 1_000_000 + i))          # the earlier, the older
+    left = {p.name for p in root.iterdir()}
+    assert {s for s in made if s in left} == set(made[-3:]), (made, left)
+    assert {"notes.txt", "mine", "e" * 32} <= left, left
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "x"
+
+
+def test_a_record_names_its_pictures_and_the_report_only_counts_them(tmp_path):
+    import base64
+
+    from lantern import pictures, pipeline, release, report
+    repo = browse_sites.write(tmp_path / "s", "pages")
+    out = repo / ".lantern"
+    out.mkdir()
+    kept = pictures.keep([("/", _png(1)), ("/about", _png(2))])
+    rec = _sealed(repo, pictures=kept)
+    code = release.code_digest(repo)["sha256"]
+    assert browse.view(rec, code)["pictures"] == 2 and browse.view(rec, code, "structure")["pictures"] == 2
+    assert browse.view(_sealed(repo), code)["pictures"] == 0                    # a record from before them
+    odd = _sealed(repo, pictures={"set": "x", "shots": [{"page": "/", "name": "../a.png", "bytes": 1}, "no"]})
+    assert browse.view(odd, code)["pictures"] == 0
+    (out / browse.RESULT_NAME).write_text(json.dumps(rec), encoding="utf-8")
+    pipeline.analyze(repo, out, log=lambda m: None, offline=True)
+    assert report.read_bundle(out / "report.html")["browser"]["pictures"] == 2
+    named = [kept["set"], *(s["name"][:-4] for s in kept["shots"]), base64.b64encode(_png(1)).decode()[8:40]]
+    for f in out.rglob("*"):
+        if f.is_file() and f.name != browse.RESULT_NAME:
+            data = f.read_bytes()
+            assert not any(x.encode() in data for x in named), f        # not in the report or any other result
+    assert not [p for p in repo.rglob("*") if p.is_file() and p.read_bytes()[:8] == pictures.PNG]   # no picture there
 
 
 def _box(tmp_path: Path):
@@ -282,6 +505,17 @@ def test_what_the_browser_saw_reaches_the_terminal_printable_only(tmp_path, monk
     assert "Uncaught TypeError: x is not a function" in said and "/index.html" in said, said   # the twin is said as it is
 
 
+def test_the_command_says_how_many_pictures_it_kept_and_where(tmp_path, monkeypatch, capsys):
+    from lantern import pictures
+    kept = pictures.keep([("/", _png(1)), ("/about", _png(2))])
+    with_them = dict(_record({"forms": "nothing-to-check", "visitor": "nothing-to-check"}), pictures=kept)
+    assert _browse(monkeypatch, tmp_path, with_them)[0] == 0
+    said = capsys.readouterr().out
+    assert f"pictures      2 of the pages, kept on this computer only: {pictures.place() / kept['set']}" in said, said
+    assert _browse(monkeypatch, tmp_path, _record({"forms": "nothing-to-check", "visitor": "nothing-to-check"}))[0] == 0
+    assert "pictures" not in capsys.readouterr().out                            # none taken, none said
+
+
 def test_the_command_says_why_nothing_was_opened_and_still_writes_the_record(tmp_path, capsys):
     from lantern import cli
     assert cli.main(["browse", str(tmp_path / "nothing-here")]) == 2
@@ -354,6 +588,14 @@ def test_each_site_written_safe_breaks_no_check(tmp_path, site, the_browser):
     assert not any(c["codes"] or c["saw"] for c in record["checks"]), _told(record)
     assert record["asked_outside"] == [], record["asked_outside"]        # the safe sites ask nothing of another computer
     assert record["browser"]["keyboard_end"] in browse.KEYBOARD_ENDS, _told(record)    # what this browser does
+    from lantern import pictures                     # a picture of each page that shows something, kept here only
+    kept = record.get("pictures") or {}
+    assert kept.get("shots") and kept.get("not_kept") == 0, kept
+    assert {s["page"] for s in kept["shots"]} <= {p["path"] for p in record["opened"]}, kept
+    for s in kept["shots"]:
+        data = pictures.read(kept["set"], s["name"])
+        assert data is not None and data[:8] == pictures.PNG and len(data) == s["bytes"], s
+    assert not [p for p in tmp_path.rglob("*") if p.is_file() and p.read_bytes()[:8] == pictures.PNG]
 
 
 @needs_browser

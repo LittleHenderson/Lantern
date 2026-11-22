@@ -888,11 +888,13 @@ def test_what_ends_at_the_proxy_is_counted_only_where_it_is_known_and_fails_the_
     browser asks for that is not listed fails the check."""
     assert _console_handlers("p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });\np.on('pageerror', e => 1);") \
         == ["p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });"]
-    app, report = _console_handlers((ROOT / "tools" / "viewer_smoke.js").read_text(encoding="utf-8"))
+    app, pictures, report = _console_handlers((ROOT / "tools" / "viewer_smoke.js").read_text(encoding="utf-8"))
     (site,) = _console_handlers((ROOT / "tools" / "cloud_site_smoke.js").read_text(encoding="utf-8"))
     assert "!outside.refusedFont(m)" in app and "!outside.refusedFont(m)" in site
+    # the pictures check (2026-11-21) starts on the app's home page, which may ask for the font sheet, as the app's check does
+    assert "!outside.refusedFont(m)" in pictures and "pictures console: " in pictures
     assert "refusedFont" not in report and "if (m.type() === 'error') errs.push(" in report
-    for line in (app, report, site):
+    for line in (app, pictures, report, site):
         assert "${outside.where(m)}" in line                   # an error line says which address it is about
     assert _console_handlers((ROOT / "tools" / "report_perf.js").read_text(encoding="utf-8")) == []
     helper = (ROOT / "tools" / "outside.js").read_text(encoding="utf-8")

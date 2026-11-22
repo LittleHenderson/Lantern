@@ -9,6 +9,41 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- What a browser saw, in the release decision and the report (a firm pass or fail, stage 5, step 3). The release
+  decision has a sixth criterion, `browser`, required wherever `lantern browse` finds something to open (an app
+  Lantern can start, or a folder of plain pages): a page that does not open, the page's own script failing, a form
+  that cannot be sent, a visitor let in where the code asks for a sign-in and a protection the code sets that the
+  site does not send block a release; dead links and buttons, things asked of another computer and what keeps the
+  site from being used without a mouse are said beside the decision and block nothing (the owner's answer of
+  2026-11-21). `browser.json` now says which code it is of (`of.code_sha256`, taken before anything is opened) and
+  carries this computer's seal, as `behaviour.json` does, and a record counts only for exactly this code and with
+  that seal: the results folder usually lies in the project, which can bring a record of its own. The Evidence
+  Report's limits say when a project has nothing a browser can open. The report's Advanced readiness page has a card
+  "What the browser saw" (only for a record this computer sealed on this code; the site's own text left out of a
+  report made with `--privacy structure`); Simple gets nothing new. Lantern's own check (`tools/self_readiness.py`)
+  may miss the browser's part only for the reason it is missing there.
+- A project with no tests is told which tests to write first (the same step; the owner's answer of 2026-11-21: what
+  a browser saw never counts in place of tests). The `tests` criterion of the release decision names them, read from
+  the code (`lantern/firsttests.py`: the sign-in, the changes only a signed-in person may make, the changes anyone can
+  make, the routes that reach a paid service, what the routes that only read answer, and that each page and screen
+  opens; at most three named of each kind, the rest counted), and says, where a browser opened the site on this
+  code, that this does not count in their place. For a FastAPI app Lantern can import, a first test file is offered
+  with the other starter files (`tests/test_first.py`): each page answers without an error of the server, a visitor
+  who is not signed in cannot make a change the code shows needs a sign-in, and the other tests of the list written
+  out as still to write; a secret the app signs with is made by the file each time it runs, never written in it.
+  On the app it is written from it passes; on the same app with the sign-in taken off one route it fails that
+  route's test.
+- Pictures of the pages, kept on this computer only (the same step). A browser run keeps one picture of each page
+  that shows something, taken by the browser itself once the page has settled (at most 10 a run, each a PNG of at
+  most 8 MB), in `LANTERN_HOME/pictures/`, in a folder of the run's own closed to other users, each picture a new
+  file named by its own SHA-256 and written never through a link (`lantern/pictures.py`); the 20 newest runs are
+  kept, and an older run's folder is removed only when it is a plain folder of this user's that Lantern named.
+  `browser.json` names them by their fingerprint only, and nothing of them goes into the results folder, the report,
+  the Evidence Report, Ask Lantern or the connector: the report says how many there are, and `lantern browse` says
+  where. The app shows them behind its session key ("Show the pictures" on the report's card, Advanced; `GET
+  /api/projects/<id>/browser/pictures`), only those a record sealed by this computer names, each read back only as a
+  plain file of this user's whose content is what its name says. `tools/audit.sh` opens them in a real browser,
+  one of them for a page whose name is written like markup, which stays text.
 - Browser checks, written down before they are built (a firm pass or fail, stage 5, step 1): `docs/browser.md` says
   what a real browser will check on the project's own site (pages that do not open, errors in the page's own script,
   links and buttons that lead nowhere, forms, what a visitor who is not signed in can open, the protections the site

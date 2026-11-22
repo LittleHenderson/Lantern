@@ -10,6 +10,8 @@ the twin that must pass, and each pass beside a deceptive near-miss that must no
 """
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,9 +50,36 @@ BROKEN = {**CLEAN, "app.py": "import subprocess\nfrom fastapi import FastAPI\n\n
                              "    return subprocess.run(cmd, shell=True).returncode\n"}
 
 
-def _assess(root: Path, files: dict[str, str], run_meta: dict | None = None, **kw) -> dict:
+def _assess(root: Path, files: dict[str, str], run_meta: dict | None = None, *, seen: bool = True, **kw) -> dict:
+    """The readiness of the project in `root` with `files` written into it. `seen`: hand in the record of a browser
+    run of this code in which every check held (`_seen`), so that a test of another criterion is about that one
+    alone; the tests of the browser's own criterion are below ("the browser")."""
     g = build_graph(_write(root, files))
+    if seen and "browser" not in kw:
+        kw["browser"] = _seen(root)
     return assess(g, scan(g, offline=True), run_meta if run_meta is not None else dict(RAN_OK), git=GIT, **kw)
+
+
+def _seen(root: Path, outcomes: dict | None = None, drop: tuple = (), **over) -> dict:
+    """A record as `lantern browse` writes it for the project in `root`, sealed by this computer: every check held
+    but those `outcomes` names (`{check: outcome}`, or `{check: (outcome, [codes], why)}`), and none of `drop`."""
+    from lantern import browse
+    checks = []
+    for c in browse.CHECKS:
+        got = (outcomes or {}).get(c.id, "held")
+        outcome, codes, why = got if isinstance(got, tuple) else (got, [c.codes[0]] if got == "broken" else [], None)
+        if c.id not in drop:
+            checks.append({"id": c.id, "outcome": outcome, "codes": list(codes),
+                           "saw": [{"code": k, "page": "/"} for k in codes], "why": why})
+    rec = {"of": {"commit": None, "dirty": None, "lantern": "test", "code_sha256": release.code_digest(root)["sha256"]},
+           "ran": True, "why_not": None,
+           "browser": {"name": "Chrome", "version": "153", "own_sandbox": True, "how": "test", "keyboard_end": "leaves"},
+           "site": {"how": "app", "address": "http://localhost:20001", "pages": 1},
+           "opened": [{"path": "/health", "status": 200, "seconds": 0.1}], "checks": checks, "asked_outside": [],
+           "browser_own": [], "seconds": 0.5}
+    rec.update(over)
+    rec["seal"] = seal.sign(rec)
+    return rec
 
 
 def _state(rd: dict, cid: str) -> str:
@@ -63,7 +92,8 @@ def test_a_clean_project_whose_tests_ran_and_passed_reads_passed(tmp_path):
     rel = rd["release"]
     assert rel["decision"] == "Passed", rel["words"]
     assert rel["blocking"] == [] and rel["missing"] == []
-    assert rel["profile"]["required"] == ["findings", "scanners", "tests"]
+    # an app Lantern can start is a site: what a browser saw of it on this code is part of the proof (`_seen`)
+    assert rel["profile"]["required"] == ["findings", "scanners", "tests", "browser"]
     # what the profile did not ask for is said, with the reason: "Passed" is not more than it is
     assert {x["id"] for x in rel["profile"]["not_required"]} == {"dependencies", "behaviour"}
     assert "no app was started" in next(x["why"] for x in rel["profile"]["not_required"] if x["id"] == "behaviour")
@@ -170,12 +200,12 @@ def test_a_project_with_no_tests_is_incomplete_not_passed(tmp_path):
 def test_a_scanner_that_did_not_finish_makes_the_release_incomplete(tmp_path):
     g = build_graph(_write(tmp_path, CLEAN))
     sec = scan(g, offline=True)
-    ok = assess(g, sec, dict(RAN_OK), git=GIT)
+    ok = assess(g, sec, dict(RAN_OK), git=GIT, browser=_seen(tmp_path))
     assert ok["release"]["decision"] == "Passed"
     hurt = copy.deepcopy(sec)
     b = next(t for t in hurt["tools"] if t["tool"] == "bandit")
     b.update(state="failed", status="error: exit 2", why="exit 2")
-    rd = assess(g, hurt, dict(RAN_OK), git=GIT)
+    rd = assess(g, hurt, dict(RAN_OK), git=GIT, browser=_seen(tmp_path))
     assert rd["release"]["decision"] == "Incomplete" and rd["release"]["missing"] == ["scanners"]
     assert "bandit" in rd["release"]["words"]
 
@@ -273,7 +303,7 @@ def test_libraries_that_were_all_looked_up_pass(tmp_path):
     pa = next(t for t in sec["tools"] if t["tool"] == "pip-audit")
     pa.update(state="ok", status="ok", why="", applicable=True, checked=1, unpinned=0)
     sec["incomplete"] = []
-    rd = assess(g, sec, dict(RAN_OK), git=GIT)
+    rd = assess(g, sec, dict(RAN_OK), git=GIT, browser=_seen(tmp_path))
     assert _state(rd, "dependencies") == "passed" and rd["release"]["decision"] == "Passed", rd["release"]["words"]
     assert "dependencies" in rd["release"]["profile"]["required"]
 
@@ -325,7 +355,7 @@ def _record(root: Path, outcomes=None, **over) -> dict:
 
 def _with_record(root: Path, rec) -> dict:
     g = build_graph(root)
-    return assess(g, scan(g, offline=True), dict(RAN_OK), git=GIT, behaviour=rec)
+    return assess(g, scan(g, offline=True), dict(RAN_OK), git=GIT, behaviour=rec, browser=_seen(root))
 
 
 def test_a_project_with_a_plan_needs_the_plan_run_on_this_code(tmp_path):
@@ -408,6 +438,338 @@ def test_a_plan_that_cannot_be_used_is_missing_evidence_not_no_plan(tmp_path):
     _write(tmp_path, {**CLEAN, behave.PLAN_NAME: json.dumps({"app": {"asgi": "app:app"}, "checks": []})})
     rd = _with_record(tmp_path, None)
     assert _state(rd, "behaviour") == "missing" and "cannot be used" in rd["release"]["words"]
+
+
+# ------------------------------------------------------------------------------------------------ the browser
+# A site is what `lantern browse` opens (an app Lantern can start, or a folder of plain pages). Page errors, failed
+# forms, a visitor let in and protections not sent block a release; dead links, loads from another computer and
+# keyboard issues are shown and block nothing. The record counts only with this computer's seal, for this code.
+PAGES = {"index.html": "<!doctype html><title>Home</title><h1>Home</h1>\n",
+         "tests/test_pages.py": "def test_pages():\n    assert True\n"}
+
+
+def _crit(rd: dict, cid: str) -> dict:
+    return next(c for c in rd["release"]["criteria"] if c["id"] == cid)
+
+
+def test_a_site_counts_only_once_a_browser_opened_it_on_this_code(tmp_path):
+    rd = _assess(tmp_path, CLEAN, seen=False)
+    rel = rd["release"]
+    assert "browser" in rel["profile"]["required"] and rel["missing"] == ["browser"], rel["words"]
+    assert rel["decision"] == "Incomplete" and rd["score"] <= release.NOT_PASSED_CAP
+    c = _crit(rd, "browser")
+    assert c["state"] == "missing" and "browser.json" in c["why"] and "lantern browse" in c["fix"], c
+    rd = _assess(tmp_path, {}, browser=_seen(tmp_path), seen=False)
+    assert _crit(rd, "browser")["state"] == "passed" and rd["release"]["decision"] == "Passed", rd["release"]["words"]
+
+
+def test_a_project_with_nothing_to_open_is_not_asked_for_a_browser_run(tmp_path):
+    rd = _assess(tmp_path, SUMS, seen=False)
+    rel = rd["release"]
+    assert "browser" not in rel["profile"]["required"] and _crit(rd, "browser")["state"] == "not-applicable"
+    assert rel["decision"] == "Passed", rel["words"]
+    why = next(x["why"] for x in rel["profile"]["not_required"] if x["id"] == "browser")
+    assert "nothing to open" in why and "not opened yet" in why, why     # other kinds of site: said, not passed over
+    # and the Evidence page's limits say it, so a "Passed" there does not read as a site a browser saw
+    from lantern import evidence
+    g = build_graph(tmp_path)
+    said = evidence.limits(g, scan(g, offline=True), rd, dict(RAN_OK), "full", None)
+    assert [line for line in said if line.startswith("What a browser shows of the project.")] == [
+        "What a browser shows of the project. " + why], said
+    rd = _assess(tmp_path, CLEAN, seen=True)        # a site a browser opened: the limits say nothing of the kind
+    g = build_graph(tmp_path)
+    said = evidence.limits(g, scan(g, offline=True), rd, dict(RAN_OK), "full", None)
+    assert _crit(rd, "browser")["state"] == "passed" and not [x for x in said if "What a browser shows" in x], said
+
+
+def test_plain_pages_count_too_and_what_their_host_sends_is_named_as_not_checked(tmp_path):
+    rd = _assess(tmp_path, PAGES, seen=False)
+    assert _crit(rd, "browser")["state"] == "missing" and "browser" in rd["release"]["profile"]["required"]
+    rec = _seen(tmp_path, {"protections": ("not-run", [], "hosting-unknown"),
+                           "visitor": ("nothing-to-check", [], "no page asks for a sign-in")},
+                site={"how": "pages", "address": "http://localhost:20001", "pages": 1})
+    rd = _assess(tmp_path, {}, browser=rec, seen=False)
+    c = _crit(rd, "browser")
+    assert c["state"] == "passed" and rd["release"]["decision"] == "Passed", c
+    assert "hosting" in c["why"] and "not checked" in c["why"], c
+
+
+BLOCKS = {"opens": "server-error", "script": "raised", "forms": "form-error", "visitor": "let-in",
+          "protections": "said-not-sent"}
+
+
+@pytest.mark.parametrize("check", sorted(BLOCKS))
+def test_a_real_fault_the_browser_saw_blocks_the_release(tmp_path, check):
+    _write(tmp_path, CLEAN)
+    rd = _assess(tmp_path, {}, browser=_seen(tmp_path, {check: ("broken", [BLOCKS[check]], None)}), seen=False)
+    rel = rd["release"]
+    assert rel["decision"] == "Blocked" and rel["blocking"] == ["browser"], rel["words"]
+    assert BLOCKS[check] in _crit(rd, "browser")["why"] and rd["score"] <= release.BLOCKED_CAP
+
+
+SHOWN = {"leads": "dead-link", "outside": "outside-script", "keyboard": "no-label"}
+
+
+@pytest.mark.parametrize("outcome", ["broken", "inconclusive", "not-run"])
+@pytest.mark.parametrize("check", sorted(SHOWN))
+def test_dead_links_outside_loads_and_keyboard_issues_are_shown_and_block_nothing(tmp_path, check, outcome):
+    _write(tmp_path, CLEAN)
+    got = (outcome, [SHOWN[check]] if outcome == "broken" else [], "browser-failed" if outcome == "not-run" else None)
+    rd = _assess(tmp_path, {}, browser=_seen(tmp_path, {check: got}), seen=False)
+    c = _crit(rd, "browser")
+    assert c["state"] == "passed" and rd["release"]["decision"] == "Passed", rd["release"]["words"]
+    assert ("shown" in c["why"] and check in c["why"]), c
+    if outcome == "broken":
+        assert SHOWN[check] in c["why"], c
+
+
+def _b_planted(root):         # what a project can bring in its own results folder: "every check held", no seal
+    rec = _seen(root)
+    rec.pop("seal")
+    return rec
+
+
+def _b_edited(root):          # a sealed record of a run where a page did not open, made to say held afterwards
+    rec = _seen(root, {"opens": ("broken", ["server-error"], None)})
+    rec["checks"][0].update(outcome="held", codes=[], saw=[])
+    return rec
+
+
+def _b_other_code(root):      # a sealed record, and then a file of the project changed
+    rec = _seen(root)
+    (root / "app.py").write_text(CLEAN["app.py"] + "\n\n@app.get('/debug')\ndef debug():\n    return {'x': 1}\n",
+                                 encoding="utf-8")
+    return rec
+
+
+def _b_not_run(root):
+    from lantern import browse
+    return _seen(root, {c.id: ("not-run", [], "no-browser") for c in browse.CHECKS}, ran=False, why_not="no-browser")
+
+
+B_NEAR_MISSES = {
+    "planted without a seal": _b_planted, "edited after it was sealed": _b_edited, "made on other code": _b_other_code,
+    "the browser checks were not run": _b_not_run,
+    "the page's script could not be decided": lambda root: _seen(root, {"script": ("inconclusive", [], "undecided")}),
+    "the forms were not looked at": lambda root: _seen(root, {"forms": ("not-run", [], "browser-failed")}),
+    "the record has no visitor check": lambda root: _seen(root, drop=("visitor",)),
+    "no page was opened": lambda root: _seen(root, opened=[]),
+    "protections not run for a reason other than the host": lambda root: _seen(
+        root, {"protections": ("not-run", [], "browser-failed")}),
+}
+
+
+@pytest.mark.parametrize("case", sorted(B_NEAR_MISSES))
+def test_a_browser_record_that_is_not_of_this_code_and_computer_or_not_whole_does_not_count(tmp_path, case):
+    _write(tmp_path, CLEAN)
+    rd = _assess(tmp_path, {}, browser=B_NEAR_MISSES[case](tmp_path), seen=False)
+    c = _crit(rd, "browser")
+    assert c["state"] == "missing" and rd["release"]["decision"] == "Incomplete", c
+    assert c["fix"], c
+
+
+def test_a_browser_record_that_could_not_be_read_is_said(tmp_path):
+    rd = _assess(tmp_path, CLEAN, seen=False, browser_unread="it is not a plain file")
+    c = _crit(rd, "browser")
+    assert c["state"] == "missing" and "it is not a plain file" in c["why"], c
+
+
+def test_analyze_counts_the_browser_record_beside_its_results_only_with_this_computers_seal(tmp_path):
+    from lantern import browse, pipeline
+    repo = _write(tmp_path / "proj", CLEAN)
+    out = repo / ".lantern"
+    out.mkdir()
+
+    def analyzed(rec) -> dict:
+        (out / browse.RESULT_NAME).write_text(json.dumps(rec), encoding="utf-8")
+        pipeline.analyze(repo, out, log=lambda m: None, offline=True)
+        return json.loads((out / "readiness.json").read_text(encoding="utf-8"))
+
+    assert _crit(analyzed(_seen(repo)), "browser")["state"] == "passed"
+    assert _crit(analyzed(_b_planted(repo)), "browser")["state"] == "missing"
+    (out / browse.RESULT_NAME).unlink()
+    (out / browse.RESULT_NAME).mkdir()                    # a folder under the record's name: said, never guessed at
+    pipeline.analyze(repo, out, log=lambda m: None, offline=True)
+    c = _crit(json.loads((out / "readiness.json").read_text(encoding="utf-8")), "browser")
+    assert c["state"] == "missing" and "could not be used" in c["why"], c
+
+
+# ------------------------------------------------------------------------------------------ which tests to write
+# A project with no tests stays Incomplete whatever a browser saw (the owner's answer of 2026-11-21: what a browser
+# saw never counts in place of tests). The decision names, read from the code, the tests to write first, and a first
+# test file is offered where Lantern can import the app (a FastAPI app made in the code). That file is run below:
+# on the app it was written from, where it passes, and on the same app after a change that lets a visitor delete,
+# where it fails.
+NOTES_MAIN = (
+    "import os\nimport sqlite3\n\n"
+    "from fastapi import Depends, FastAPI, Header, HTTPException\n\n"
+    "from notes import ai\n\n"
+    "DB = os.environ.get('NOTES_DB', 'notes.db')\n"
+    "SECRET_KEY = os.environ.get('SECRET_KEY', '')\n"
+    "with sqlite3.connect(DB) as _db:\n"
+    "    _db.execute('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT)')\n"
+    "app = FastAPI()\n\n\n"
+    "def require_login(authorization: str = Header('')):\n"
+    "    if not SECRET_KEY or authorization != 'Bearer ' + SECRET_KEY:\n"
+    "        raise HTTPException(401, 'sign in first')\n"
+    "    return 'alice'\n\n\n"
+    "@app.get('/')\ndef home():\n    return {'page': 'home'}\n\n\n"
+    "@app.get('/health')\ndef health():\n    return {'ok': True}\n\n\n"
+    "@app.post('/login')\ndef login(name: str, password: str):\n    return {'token': 'made later'}\n\n\n"
+    "@app.post('/notes')\ndef add(text: str, user: str = Depends(require_login)):\n"
+    "    with sqlite3.connect(DB) as db:\n        db.execute('INSERT INTO notes (text) VALUES (?)', (text,))\n"
+    "    return {'added': True}\n\n\n"
+    "@app.delete('/notes/{note_id}')\ndef remove(note_id: int, user: str = Depends(require_login)):\n"
+    "    with sqlite3.connect(DB) as db:\n        db.execute('DELETE FROM notes WHERE id = ?', (note_id,))\n"
+    "    return {'removed': note_id}\n\n\n"
+    "@app.post('/contact')\ndef contact(text: str):\n    return {'thanks': True}\n\n\n"
+    "@app.post('/ask')\ndef ask(text: str, user: str = Depends(require_login)):\n"
+    "    return {'answer': ai.ask_model(text)}\n")
+NOTES = {"notes/__init__.py": "",
+         "notes/main.py": NOTES_MAIN,
+         # the library is asked for only when the route runs, so the tests need nothing but FastAPI
+         "notes/ai.py": "def ask_model(text):\n    from openai import OpenAI\n"
+                        "    return OpenAI().chat.completions.create(model='m', messages=[{'role': 'user', "
+                        "'content': text}])\n",
+         "README.md": "# Notes\n\nA sample.\n"}
+FIRST = "tests/test_first.py"
+
+
+def test_a_project_with_no_tests_is_told_which_to_write_first_from_its_code(tmp_path):
+    rd = _assess(tmp_path, NOTES)
+    c = _crit(rd, "tests")
+    assert c["state"] == "missing" and c["why"].startswith("The project has no tests."), c
+    assert [(w["kind"], w["where"]) for w in c["write"]] == [
+        ("sign-in", "POST /login"),
+        ("signed-in-change", "POST /notes"), ("signed-in-change", "DELETE /notes/{note_id}"),
+        ("signed-in-change", "POST /ask"),
+        ("open-change", "POST /contact"),
+        ("paid", "POST /ask"),
+        ("read", "GET /"), ("read", "GET /health")], c["write"]
+    assert all(w["file"] == "notes/main.py" and isinstance(w["line"], int) for w in c["write"]), c["write"]
+    for words in ("the sign-in (POST /login)", "(POST /notes, DELETE /notes/{note_id} and POST /ask)",
+                  "(POST /contact)", "a paid service", "(GET / and GET /health)", FIRST):
+        assert words in c["fix"], c["fix"]
+    assert rd["release"]["decision"] == "Incomplete" and "tests" in rd["release"]["missing"]
+    assert FIRST in rd["starter"] and not rd["starter"][FIRST].get("snippet")
+
+
+def test_a_project_with_tests_or_with_nothing_to_name_is_not_given_a_list(tmp_path):
+    rd = _assess(tmp_path / "a", {**NOTES, "tests/test_notes.py": "def test_x():\n    assert True\n"}, run_meta={})
+    c = _crit(rd, "tests")
+    assert c["state"] == "missing" and "were not run" in c["why"] and "write" not in c, c
+    assert FIRST not in rd["starter"]
+    rd = _assess(tmp_path / "b", {"sums.py": SUMS["sums.py"]}, seen=False)
+    c = _crit(rd, "tests")
+    assert c["state"] == "missing" and c["write"] == [] and "most important flows" in c["fix"], c
+    assert FIRST not in rd["starter"] and FIRST not in c["fix"]
+
+
+def test_many_routes_of_a_kind_are_counted_and_not_all_named(tmp_path):
+    more = "".join(f"\n\n@app.delete('/n{i}')\ndef d{i}(user: str = Depends(require_login)):\n    return {{}}\n"
+                   for i in range(7))
+    rd = _assess(tmp_path, {**NOTES, "notes/main.py": NOTES_MAIN + more})
+    c = _crit(rd, "tests")
+    assert "(POST /notes, DELETE /notes/{note_id}, POST /ask and 7 more)" in c["fix"], c["fix"]
+    assert len([w for w in c["write"] if w["kind"] == "signed-in-change"]) == 10
+
+
+def test_what_a_browser_saw_shows_beside_missing_tests_and_does_not_stand_in_for_them(tmp_path):
+    rd = _assess(tmp_path, NOTES)
+    c = _crit(rd, "tests")
+    assert _crit(rd, "browser")["state"] == "passed" and rd["release"]["decision"] == "Incomplete"
+    assert "A browser opened the site on this code" in c["why"] and "not count in place of tests" in c["why"], c
+    rd = _assess(tmp_path, {}, seen=False)           # no browser run: nothing is said of one
+    c = _crit(rd, "tests")
+    assert _crit(rd, "browser")["state"] == "missing" and "browser" not in c["why"], c
+
+
+def _first_run(root: Path) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", FIRST], cwd=root,
+                          capture_output=True, text=True, encoding="utf-8", timeout=300)
+
+
+def test_the_first_test_file_passes_on_its_app_and_catches_a_visitor_let_in_after_a_change(tmp_path):
+    root = _write(tmp_path / "notes", NOTES)
+    first = _assess(root, {})["starter"][FIRST]
+    text = first["content"]
+    compile(text, FIRST, "exec")
+    assert "answers without a server error" in first["why"] and "visitor" in first["why"], first["why"]
+    for words in ("from notes.main import app", "('DELETE', '/notes/1')", "('POST', '/notes')", "'/health'",
+                  "NOTES_DB", "SECRET_KEY"):
+        assert words in text, text
+    for words in ("POST /login", "POST /contact", "POST /ask"):     # what only the person can write: named, not run
+        assert any(words in line for line in text.splitlines() if line.startswith("#")), text
+    _write(root, {FIRST: text})
+    ran = _first_run(root)
+    assert ran.returncode == 0 and "5 passed" in ran.stdout, ran.stdout + ran.stderr
+    # the same tests, after a change to the code that drops the sign-in from one route
+    twin = _write(tmp_path / "twin", {**NOTES, FIRST: text, "notes/main.py": NOTES_MAIN.replace(
+        "def remove(note_id: int, user: str = Depends(require_login)):", "def remove(note_id: int):")})
+    ran = _first_run(twin)
+    assert ran.returncode == 1 and "1 failed, 4 passed" in ran.stdout, ran.stdout + ran.stderr
+    assert "DELETE /notes/1 let a visitor in" in ran.stdout, ran.stdout
+
+
+def test_the_first_test_file_makes_the_apps_secret_each_time_it_runs_and_writes_none_down(tmp_path):
+    # The secret the app signs with is made by the test file when it runs, never a text written down: one text in
+    # Lantern's code would be the same in every project the file is written for, a secret anyone can read. Lantern's
+    # own file is read by the rule that finds a secret written in the code (Lantern must pass its own audit), and so
+    # is the project with the file in it.
+    from lantern import firsttests, websec
+    root = _write(tmp_path / "notes", NOTES)
+    text = _assess(root, {})["starter"][FIRST]["content"]
+    assert "import secrets\n" in text and "os.environ.setdefault('SECRET_KEY', secrets.token_hex(32))" in text, text
+    assert "'SECRET_KEY', '" not in text, text
+    own = _write(tmp_path / "own", {"lantern/firsttests.py": Path(firsttests.__file__).read_text(encoding="utf-8")})
+    assert websec.inline_secrets(own) == [], websec.inline_secrets(own)
+    _write(root, {FIRST: text})
+    found = [f for f in scan(build_graph(root), offline=True)["findings"] if f.get("file") == FIRST]
+    assert not [f for f in found if f["tool"] in ("gitleaks", "lantern-secrets") or f.get("cwe") == 798], found
+    # a project whose app reads no secret gets no `secrets` line
+    text = _assess(tmp_path / "plain", MADE_LATER, seen=False)["starter"][FIRST]["content"]
+    assert "secrets" not in text and "import os\n" in text, text
+
+
+HOME_ROUTE ="\n\n@router.get('/')\ndef home():\n    return {'page': 'home'}\n"
+MADE_LATER = {  # the app made by a function, its routes on a router of their own
+    "notes/__init__.py": "",
+    "notes/main.py": "from fastapi import FastAPI\n\nfrom notes.routes import router\n\n\ndef create_app():\n"
+                     "    app = FastAPI()\n    app.include_router(router)\n    return app\n",
+    "notes/routes.py": "from fastapi import APIRouter\n\nrouter = APIRouter()\n" + HOME_ROUTE}
+IN_A_FOLDER = {  # the app in a folder that is no package, loaded the way Python loads it there
+    "backend/main.py": "from fastapi import APIRouter, FastAPI\n\nfrom pages import router\n\napp = FastAPI()\n"
+                       "app.include_router(router)\n",
+    "backend/pages.py": "from fastapi import APIRouter\n\nrouter = APIRouter()\n" + HOME_ROUTE}
+
+
+@pytest.mark.parametrize("files, says", [(MADE_LATER, ("from notes.main import create_app", "app = create_app()")),
+                                         (IN_A_FOLDER, ("'backend'", "from main import app"))],
+                         ids=["made-by-a-function", "in-a-folder"])
+def test_the_first_test_file_makes_the_app_the_way_the_code_does(tmp_path, files, says):
+    root = _write(tmp_path / "p", files)
+    text = _assess(root, {}, seen=False)["starter"][FIRST]["content"]
+    for words in says:
+        assert words in text, text
+    _write(root, {FIRST: text})
+    ran = _first_run(root)
+    assert ran.returncode == 0 and "1 passed" in ran.stdout, ran.stdout + ran.stderr
+
+
+def test_the_first_test_file_is_written_only_where_lantern_can_import_the_app(tmp_path):
+    # a path written in the code that is no plain path: never put into the file as code or as a comment
+    odd = NOTES_MAIN.replace("@app.post('/contact')", "@app.post('/contact\\nimport os; os.remove(\"x\")')")
+    text = _assess(tmp_path / "o", {**NOTES, "notes/main.py": odd})["starter"][FIRST]["content"]
+    assert "os.remove" not in text and "\nimport os;" not in text, text
+    compile(text, FIRST, "exec")
+    # Express, or a FastAPI app in a folder whose name Python cannot import: the list, and no file
+    rd = _assess(tmp_path / "e", {"server.js": "const express = require('express');\nconst app = express();\n"
+                                               "app.delete('/notes/:id', (req, res) => res.json({}));\n"
+                                               "app.listen(3000);\n"}, seen=False)
+    assert FIRST not in rd["starter"] and _crit(rd, "tests")["write"], _crit(rd, "tests")
+    rd = _assess(tmp_path / "d", {"my-app/__init__.py": "", "my-app/main.py": NOTES_MAIN.replace(
+        "from notes import ai\n", "")}, seen=False)
+    assert FIRST not in rd["starter"], rd["starter"].get(FIRST)
 
 
 # ------------------------------------------------------------------------------------------------ what it is tied to
@@ -568,7 +930,7 @@ def test_the_apps_card_carries_the_decision_and_only_one_of_the_three_words(tmp_
 def _own(decision, missing=(), failed=(), skips=(), score=95, grade="A"):
     crit = [{"id": i, "title": i.title(), "required": True, "why": f"why {i}", "fix": "",
              "state": "failed" if i in failed else "missing" if i in missing else "passed"}
-            for i in ("findings", "scanners", "dependencies", "tests")]
+            for i in ("findings", "scanners", "dependencies", "tests", "browser")]
     checks = [{"id": "tests-exist", "status": "pass", "evidence": "12 test files"}]
     checks += [{"id": i, "status": "skip", "evidence": "not run", **({"required": True} if req else {})}
                for i, req in skips]
@@ -584,6 +946,8 @@ OWN_CHECK = {
     "passed": (_own("Passed"), 0),
     "incomplete only because this check does not run the tests":
         (_own("Incomplete", missing=("tests",), skips=(("tests-pass", True),)), 0),
+    "incomplete only because this check runs neither the tests nor a browser":
+        (_own("Incomplete", missing=("tests", "browser"), skips=(("tests-pass", True),)), 0),
     "a skipped check nothing depends on": (_own("Passed", skips=(("secrets-gitignore", False),)), 0),
     # ... and what must stop CI
     "blocked": (_own("Blocked", failed=("findings",), score=59, grade="F"), 1),
@@ -619,6 +983,8 @@ def test_lanterns_own_check_reads_the_decision_and_names_every_skip(tmp_path, ca
     if case.startswith("incomplete only"):
         assert "release Incomplete" in out and "allowed missing tests" in out and "allowed skip" in out, out
         assert "tests-pass" in out and "CI" in out, out            # the reason says who does run them
+    if case == "incomplete only because this check runs neither the tests nor a browser":
+        assert "allowed missing browser" in out and "lantern browse" in out, out   # and why its pages are not opened
     if case == "a skipped check nothing depends on":
         assert "skip" in out and "secrets-gitignore" in out, out   # said, even though it stops nothing
     if case == "no release decision in the file":
