@@ -67,6 +67,22 @@ for that answer). Until 2026-11-21 a page that was still moving counted as settl
 page opens was looked at and clicked while it was still there or after it had gone, and two runs on the same code gave
 two answers.
 
+Each step is a first visit (2026-11-22). The first load of a page, each click and each form is made in a browser
+context of its own, made for that step and thrown away after it, so what a step leaves in the browser (the page's
+storage and its session's storage, cookies, a small database, the window's name) is not there for the next one. A
+click is for the control first seen on the page: on the page opened anew it is found again by its kind, its words
+and, for a link, its address, at its old place when that control is still there, else as the one control of the page
+that has them. A form is found again the same way, by its address, its method and the names of its fields (not by what
+they hold: a hidden field often holds a token the site makes anew at each visit). Where none has them, or more than
+one has, nothing is clicked or sent, the log names the page, and the check's reason says how many controls were not
+clicked (`leads`) or forms not sent (`forms`); a `leads` check that clicked none of what it was to click and had no
+link to look at, or a `forms` check that sent no form, is `inconclusive`. What an app keeps on its own server is not
+emptied between steps: it is the site's own, and it is thrown away with the run. Until 2026-11-22 every step but the
+visitor's was made in one tab, and a click went to the control, and a form to the form, at the same place on the page
+opened anew, whatever it was: on the browser benchmark's first trial a task list that keeps its tasks in the browser
+opened with one task fewer after the first click, the next click landed on another button, and a button that works
+was reported as doing nothing.
+
 ### `opens`: every page opens
 
 Looks at the start page and every page the site itself says it has: a route of the app's code that answers GET and
@@ -183,7 +199,9 @@ Codes: `no-name`, `no-label`, `not-reached`, `no-focus-ring`, `trapped`.
 * `held`: looked at, and nothing of this kind was found.
 * `broken`, with codes; `saw` lists each thing seen: the code, the page, what it was (the control, the address asked
   for, the answer's status) and how the page was reached.
-* `inconclusive`: everything the check saw is undecided (below): it may come from something the run itself refused.
+* `inconclusive`: everything the check saw is undecided (below): it may come from something the run itself refused;
+  or every control it was to click (`leads`, which had no link to look at either), or every form it was to send
+  (`forms`), was not found again on the page opened anew (above).
 * `nothing-to-check`: the site has nothing of this kind (no form, no page that asks for a sign-in), with why.
 * `not-run`, with the reason: `not-built` (not built for this system yet), `no-browser` (no browser Lantern can drive
   was found), `no-browser-sandbox`, `browser-failed` (the browser stopped, or did not answer, before the pages were
@@ -281,11 +299,14 @@ that named them is not changed by it, and the app then shows none.
 
 `tests/browse_sites.py` writes two small sites at test time: a folder of plain pages and a FastAPI app. Each is
 written safe, or with one of 25 planted problems that changes only its own pieces (`PLANTED`: the check and the code
-each must give), or as one of seven look-alikes (`LOOKALIKES`, each written before the fix it guards): a version that
-looks like a problem to a careless check and is none, or where the run itself can only say undecided (a page of the
-site in a frame, a date field, a part with a tree of its own, a page with one link that listens for keys, a hidden
-element that answers a click, a library from another computer that the run refuses, a cover that fades away as the
-page opens), each with what it must give. `tests/test_browse.py` checks that the list on this page is the list in
+each must give), or as one of thirteen look-alikes (`LOOKALIKES`, each written before the fix it guards): a version
+that looks like a problem to a careless check and is none, or where the run itself can only say undecided, not clicked
+or not sent (a page of the site in a frame, a date field, a part with a tree of its own, a page with one link that
+listens for keys, a hidden element that answers a click, a library from another computer that the run refuses, a cover
+that fades away as the page opens, a button on two pages that keeps in the browser that it was used, two orders a
+click marks collected on the app's server, a button whose words count the visits to its page, a form whose address
+does, two orders each with a form of its own, a form with a hidden token made anew at each visit), each with what it
+must give and, where a held check gives a reason, the words of that reason. `tests/test_browse.py` checks that the list on this page is the list in
 `lantern/browse.py`; that every planted version and look-alike is the safe site but for its own pieces; that Lantern's
 reading of the code says the same of the app and of each twin where only a browser can tell them apart (the sign-in,
 the headers); and, where `LANTERN_TESTS_BROWSER` names a browser by its full path, that each site written safe breaks
@@ -303,6 +324,11 @@ the Windows starter, with a stand-in for Windows' own calls (on every system) an
 * Only what is opened is seen: the pages the site says it has, at most `MOST_PAGES`, and the controls on them, at most
   `MOST_CLICKS` a page, in one order. A problem that needs another order, or a signed-in person, is not found here
   (what a signed-in person may do is `lantern behave`'s).
+* A control whose words change each time its page is opened (a count, a time) is not found again for its click and is
+  not clicked, and a form whose address or fields change so is not sent; the check's reason says how many there were.
+  Among controls of the same kind and words, or forms of the same address and fields, the one at the same place is
+  taken. Each step starts from an empty browser, so a problem that shows only on a second visit, after a page has kept
+  something in the browser, is not seen.
 * Forms are sent once with made-up values: a form that takes only a real value (a code that must exist) comes out as
   refused by the site, which is not broken.
 * The visitor check reads "let in" from the answer: a page that asks for a sign-in in words only, with a 200 and no

@@ -79,6 +79,23 @@ UNDECIDED = {"opens": ("empty",), "script": ("raised", "console-error"),
 UNDECIDED_WHY = "what was seen came on pages where a script from another computer was refused, and may come from " \
                 "that script being missing"
 
+
+def not_sent(n: int) -> str:
+    """The `forms` check's reason where forms were not sent (2026-11-22): on the page opened anew no form, or more than
+    one, had the address, the method and the fields of the one first seen. With none sent, the check is
+    `inconclusive`."""
+    return (f"{n} form{'' if n == 1 else 's'} not sent: on the page opened anew Lantern could not tell which form was "
+            "the one first seen (none had its address, its method and its fields, or more than one had)")
+
+
+def not_clicked(n: int) -> str:
+    """The `leads` check's reason where controls were not clicked (2026-11-22): on the page opened anew for a click no
+    control, or more than one, had the kind, the words and, for a link, the address of the one first seen, so Lantern
+    could not tell which it was and clicked none. With nothing else looked at, the check is `inconclusive`."""
+    return (f"{n} control{'' if n == 1 else 's'} not clicked: on the page opened anew Lantern could not tell which "
+            "control was the one first seen (none had its kind, its words and, for a link, its address, or more than "
+            "one had)")
+
 # Why a check, or a whole run, was not run: Lantern's own words, never text of a page, a browser or an app.
 WHY_NOT = {
     "not-built": "The browser checks are not built for this system yet.",
@@ -591,29 +608,59 @@ MEASURE = """(() => {
 })()"""
 
 CONTROL_SEL = "a[href], area[href], button, input[type=button], input[type=submit], input[type=reset], input[type=image]"
-CONTROLS = """(() => Array.from(document.querySelectorAll(%s)).map((e, i) => {
-  const link = e.matches('a[href], area[href]');
+# What a control is, asked the same way wherever it is asked: its kind, its words and, for a link, where it points
+ABOUT_CONTROL = """(e) => ({tag: e.tagName.toLowerCase(),
+  text: (e.innerText || e.value || e.getAttribute('aria-label') || '').trim().slice(0, 60),
+  href: e.matches('a[href], area[href]') ? e.getAttribute('href') : null})"""
+CONTROLS = """(() => { const about = %s;
+  return Array.from(document.querySelectorAll(%s)).map((e, i) => {
+  const d = about(e), link = d.href !== null;
   const r = e.getBoundingClientRect();
   const frag = link && e.hash ? decodeURIComponent(e.hash.slice(1)) : '';
-  return {i, link, href: link ? e.getAttribute('href') : null, url: link ? e.href : null,
+  return {i, link, href: d.href, url: link ? e.href : null,
           inForm: !link && !!(e.form || e.closest('form')),
           shown: r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden',
           named: !!(frag && (document.getElementById(frag) || document.getElementsByName(frag).length)),
-          tag: e.tagName.toLowerCase(), text: (e.innerText || e.value || e.getAttribute('aria-label') || '').trim().slice(0, 60)};
-}))()""" % json.dumps(CONTROL_SEL)
+          tag: d.tag, text: d.text};
+}); })()""" % (ABOUT_CONTROL, json.dumps(CONTROL_SEL))
 
-POINT = """((i) => { const e = Array.from(document.querySelectorAll(%s))[i]; if (!e) return null;
+# The control a click is for, on the page opened anew for the click: the one at its place when it is the same control
+# (the same kind, words and address), else the one control of the page that is, else none. A page may differ from
+# the one its controls were listed on: what a site keeps on its own server is not emptied between the steps
+# (2026-11-22: until then the control at the same place was clicked whatever it was, and after a click that changed
+# what the site keeps, the next click landed on another control).
+POINT = """((i, want) => { const about = %s, all = Array.from(document.querySelectorAll(%s));
+  const same = (e) => { const d = about(e); return d.tag === want.tag && d.text === want.text && d.href === want.href; };
+  let e = all[i];
+  if (!e || !same(e)) { const found = all.filter(same); e = found.length === 1 ? found[0] : null; }
+  if (!e) return null;
   e.scrollIntoView({block: 'center', inline: 'center'}); const r = e.getBoundingClientRect();
-  return {x: r.left + r.width / 2, y: r.top + r.height / 2, tag: e.tagName.toLowerCase()}; })""" % json.dumps(CONTROL_SEL)
+  return {x: r.left + r.width / 2, y: r.top + r.height / 2, tag: e.tagName.toLowerCase()}; })""" % (
+    ABOUT_CONTROL, json.dumps(CONTROL_SEL))
 
-FORMS = """(() => Array.from(document.forms).map((f, i) => {
-  const r = f.getBoundingClientRect();
-  return {i, action: f.action, method: (f.getAttribute('method') || 'get').toLowerCase(),
+# What a form is, asked the same way wherever it is asked: where it is sent, how, and the names of its fields. Not
+# what its fields hold: a hidden field often holds a token the site makes anew for each visit, and each step is one
+ABOUT_FORM = """(f) => ({action: f.action, method: (f.getAttribute('method') || 'get').toLowerCase(),
+  names: Array.from(f.elements).map(e => e.name || '').join('&')})"""
+
+FORMS = """(() => { const about = %s;
+  return Array.from(document.forms).map((f, i) => {
+  const r = f.getBoundingClientRect(), d = about(f);
+  return {i, action: d.action, method: d.method, names: d.names,
           shown: r.width > 0 && r.height > 0, id: f.id || '', fields: f.elements.length};
-}))()"""
+}); })()""" % ABOUT_FORM
 
-FILL = """((i) => {
-  const f = document.forms[i]; if (!f) return null;
+# The form a sending is for, on the page opened anew (2026-11-22: until then the form at the same place among the
+# page's forms was sent, whatever it was): the one at the same place when it is the same form (`ABOUT_FORM`), else the
+# one form of the page that is, else none (null): Lantern cannot tell which it is, and sends nothing. Filled with
+# made-up values by the kind of each field; gives the place of its submit button, or none, and the form's place.
+FILL = """((i, want) => {
+  const about = %s, all = Array.from(document.forms);
+  const same = (g) => { const d = about(g); return d.action === want.action && d.method === want.method && d.names === want.names; };
+  let f = all[i];
+  if (!f || !same(f)) { const found = all.filter(same); f = found.length === 1 ? found[0] : null; }
+  if (!f) return null;
+  const at = all.indexOf(f);
   const kind = (el) => ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.labels && el.labels[0] ? el.labels[0].innerText : '')).toLowerCase();
   for (const el of Array.from(f.elements)) {
     if (el.disabled || el.readOnly) continue;
@@ -641,10 +688,10 @@ FILL = """((i) => {
   }
   const s = f.querySelector('button:not([type]), button[type=submit], input[type=submit], input[type=image]')
     || Array.from(document.querySelectorAll('button[form], input[form]')).find(b => b.form === f && ['submit', 'image'].includes(b.type));
-  if (!s) return {submitter: false};
+  if (!s) return {submitter: false, at};
   s.scrollIntoView({block: 'center', inline: 'center'}); const r = s.getBoundingClientRect();
-  return {submitter: true, x: r.left + r.width / 2, y: r.top + r.height / 2};
-})"""
+  return {submitter: true, at, x: r.left + r.width / 2, y: r.top + r.height / 2};
+})""" % ABOUT_FORM
 
 STYLE = """(e) => { const c = getComputedStyle(e); return [c.outlineStyle, c.outlineWidth, c.outlineColor, c.outlineOffset,
   c.boxShadow, c.borderTopColor, c.borderTopWidth, c.borderBottomColor, c.borderBottomWidth, c.backgroundColor, c.color,
@@ -727,6 +774,7 @@ SIGN_IN_COOKIE = re.compile(r"(?i)(?:^|[^a-z])(?:session|sess|sessid|sessionid|s
 class _Tab:
     session: str
     target: str
+    context: str | None = None          # the browser context made for this tab alone (`_Walk.fresh`)
     phase: tuple = ("idle",)
     frame: str | None = None
     url: str = ""
@@ -761,6 +809,8 @@ class _Walk:
         self.pages: list[dict] = []
         self.saw: dict[str, list[dict]] = {c.id: [] for c in CHECKS}
         self.looked: dict[str, int] = {c.id: 0 for c in CHECKS}
+        self.not_clicked = 0                # controls not found again on the page opened anew for their click
+        self.not_sent = 0                   # forms not found again on the page opened anew to be sent
         self.scripts = 0
         self.visitor_judged = 0
         self.keyboard_end = "unknown"
@@ -947,6 +997,43 @@ class _Walk:
         except Exception:  # noqa: BLE001 - a tab that is gone already
             pass
 
+    def fresh(self) -> _Tab:
+        """A tab in a browser context made for it alone, for one step of the walk (a page, a click, a form, the
+        visitor), thrown away after it (`drop`): so each step is a first visit, and nothing an earlier step left in
+        the browser is there (cookies, storage, the session's storage, databases, caches, the window's name). Until
+        2026-11-22 every step of a run was made in one tab, and what a click had kept in the browser changed the pages
+        of every step after it (the browser benchmark's first run: a task list that keeps its tasks in the browser,
+        whose next click then landed on another button)."""
+        from . import _cdp
+        try:
+            context = self.b.call("Target.createBrowserContext", {})["browserContextId"]
+        except _cdp.CallError as e:
+            raise _cdp.BrowserError("browser-failed", f"no browser context for a step ({e.message[:100]})") from e
+        try:
+            tab = self.open_tab(context)
+        except _cdp.CallError as e:
+            self._dispose(context)
+            raise _cdp.BrowserError("browser-failed", f"no tab for a step ({e.message[:100]})") from e
+        tab.context = context
+        return tab
+
+    def drop(self, tab: _Tab) -> None:
+        """Throw the tab of one step away with its browser context, and everything the site kept in it."""
+        with self.lock:
+            self.tabs.pop(tab.session, None)
+            for child in [s for s, t in self.children.items() if t is tab]:
+                self.children.pop(child, None)
+        if tab.context:
+            self._dispose(tab.context)
+        else:
+            self.close_tab(tab)
+
+    def _dispose(self, context: str) -> None:
+        try:
+            self.b.call("Target.disposeBrowserContext", {"browserContextId": context})
+        except Exception:  # noqa: BLE001 - a browser that ended: the walk sees it at its next step
+            pass
+
     def eval(self, tab: _Tab, expression: str, by_value: bool = True):
         if tab.world is None:
             return None
@@ -1014,37 +1101,43 @@ class _Walk:
         return False
 
     # ------------------------------------------------------------------------------------------- one page
-    def page(self, tab: _Tab, path: str) -> None:
-        got = self.load(tab, path)
-        self.pages.append({"path": path, "status": got["status"], "seconds": got["seconds"]})
-        status = got["status"]
-        self.looked["opens"] += 1
-        if status is None:
-            self.saw["opens"].append({"code": "no-answer", "page": path,
-                                      "what": f"no answer came within {self.page_seconds:g} seconds"})
-            return
-        if status >= 500:
-            self.saw["opens"].append({"code": "server-error", "page": path, "status": status,
-                                      "what": f"the site answered {status}"})
-            return
-        if status == 404:
-            self.saw["opens"].append({"code": "not-found", "page": path, "status": 404,
-                                      "what": "the site answered \"not found\" for a page it says it has"})
-            return
-        if not 200 <= status < 300:
-            return                      # a sign-in asked for (401, 403) or a move to another page: not broken
-        measured = self.eval(tab, MEASURE) or {}
-        self.scripts += int(measured.get("scripts") or 0)
-        if measured and not measured.get("seen"):
-            self.saw["opens"].append({"code": "empty", "page": path, "status": status,
-                                      "what": "the page shows nothing that can be seen"})
-        elif measured.get("seen") and len(self.shots) < pictures.MOST_PICTURES:
-            self.picture(tab, path)
-        controls = self.eval(tab, CONTROLS) or []
-        forms = self.eval(tab, FORMS) or []
-        self.keyboard(tab, path)
-        self.leads(tab, path, controls)
-        self.forms(tab, path, forms)
+    def page(self, path: str) -> None:
+        """One page: opened, looked at and walked with the keyboard in a tab of its own; then each of its links and
+        buttons clicked and each of its forms sent, each on the page opened anew in a tab of its own (`fresh`)."""
+        tab = self.fresh()
+        try:
+            got = self.load(tab, path)
+            self.pages.append({"path": path, "status": got["status"], "seconds": got["seconds"]})
+            status = got["status"]
+            self.looked["opens"] += 1
+            if status is None:
+                self.saw["opens"].append({"code": "no-answer", "page": path,
+                                          "what": f"no answer came within {self.page_seconds:g} seconds"})
+                return
+            if status >= 500:
+                self.saw["opens"].append({"code": "server-error", "page": path, "status": status,
+                                          "what": f"the site answered {status}"})
+                return
+            if status == 404:
+                self.saw["opens"].append({"code": "not-found", "page": path, "status": 404,
+                                          "what": "the site answered \"not found\" for a page it says it has"})
+                return
+            if not 200 <= status < 300:
+                return                  # a sign-in asked for (401, 403) or a move to another page: not broken
+            measured = self.eval(tab, MEASURE) or {}
+            self.scripts += int(measured.get("scripts") or 0)
+            if measured and not measured.get("seen"):
+                self.saw["opens"].append({"code": "empty", "page": path, "status": status,
+                                          "what": "the page shows nothing that can be seen"})
+            elif measured.get("seen") and len(self.shots) < pictures.MOST_PICTURES:
+                self.picture(tab, path)
+            controls = self.eval(tab, CONTROLS) or []
+            forms = self.eval(tab, FORMS) or []
+            self.keyboard(tab, path)
+        finally:
+            self.drop(tab)
+        self.leads(path, controls)
+        self.forms(path, forms)
 
     def picture(self, tab: _Tab, path: str) -> None:
         """A picture of the page as it settled, taken by the browser itself (`Page.captureScreenshot`), kept for the
@@ -1062,8 +1155,8 @@ class _Walk:
             self.shots.append((path, data))
 
     # ------------------------------------------------------------------------------------------- leads
-    def leads(self, tab: _Tab, path: str, controls: list) -> None:
-        clicks = 0
+    def leads(self, path: str, controls: list) -> None:
+        clicks = missed = 0
         for c in controls:
             if not isinstance(c, dict) or not c.get("shown"):
                 continue
@@ -1079,7 +1172,7 @@ class _Walk:
                         continue        # a link to this same page, which opens it again
                     if clicks < MOST_CLICKS:
                         clicks += 1
-                        self.click(tab, path, c, link=True)
+                        missed += not self.click(path, c, link=True)
                     continue
                 if not self._ours(url):
                     continue            # another computer: not followed, not counted
@@ -1093,7 +1186,12 @@ class _Walk:
             self.looked["leads"] += 1
             if clicks < MOST_CLICKS:
                 clicks += 1
-                self.click(tab, path, c, link=False)
+                missed += not self.click(path, c, link=False)
+        if missed:
+            self.looked["leads"] -= missed          # what was not clicked was not looked at
+            self.not_clicked += missed
+            self.log(f"browse: {missed} control(s) of {path[:200]} not found again on the page opened anew, "
+                     "so not clicked")
 
     def _effect(self, tab: _Tab, before: dict, phase: tuple) -> dict:
         with self.lock:
@@ -1123,13 +1221,23 @@ class _Walk:
                 args.update(button="left", clickCount=1)
             self.b.call("Input.dispatchMouseEvent", args, tab.session, timeout=self.page_seconds + 10)
 
-    def click(self, tab: _Tab, path: str, c: dict, link: bool) -> None:
+    def click(self, path: str, c: dict, link: bool) -> bool:
+        """Click the control `c` on the page opened anew in a tab of its own and say what the click did. False when
+        the control was not found again there (`POINT`): then nothing is clicked and nothing is said of it."""
+        tab = self.fresh()
+        try:
+            return self._click(tab, path, c, link)
+        finally:
+            self.drop(tab)
+
+    def _click(self, tab: _Tab, path: str, c: dict, link: bool) -> bool:
         got = self.load(tab, path, "reload")
         if got["status"] is None or not 200 <= got["status"] < 300:
-            return
-        point = self.eval(tab, f"({POINT})({int(c['i'])})")
+            return True
+        want = {"tag": c.get("tag"), "text": c.get("text"), "href": c.get("href")}
+        point = self.eval(tab, f"({POINT})({int(c['i'])}, {json.dumps(want)})")
         if not isinstance(point, dict) or point.get("tag") != c.get("tag"):
-            return
+            return False
         before = self._before(tab)
         with self.lock:
             self.k += 1
@@ -1138,7 +1246,7 @@ class _Walk:
         try:
             self._press(tab, float(point["x"]), float(point["y"]))
         except Exception:  # noqa: BLE001 - the page went away under the click
-            return
+            return True
         time.sleep(0.15)
         self.settle(tab, time.monotonic() + CLICK_SECONDS)
         effect = self._effect(tab, before, phase)
@@ -1155,64 +1263,85 @@ class _Walk:
             else:
                 self.saw["leads"].append({"code": "dead-button", **what,
                                           "what": "a button that does nothing when it is clicked"})
+        return True
 
     # ------------------------------------------------------------------------------------------- forms
-    def forms(self, tab: _Tab, path: str, forms: list) -> None:
+    def forms(self, path: str, forms: list) -> None:
+        """Send each form of the page that is sent to the site, once, on the page opened anew in a tab of its own."""
+        missed = 0
         for f in forms:
             if not isinstance(f, dict):
                 continue
             if not self._ours(str(f.get("action") or "")):
                 continue                # sent to another computer: not sent
             self.looked["forms"] += 1
-            got = self.load(tab, path, "reload")
-            if got["status"] is None or not 200 <= got["status"] < 300:
-                continue
+            missed += not self.send(path, f)
+        if missed:
+            self.looked["forms"] -= missed          # what was not sent was not looked at
+            self.not_sent += missed
+            self.log(f"browse: {missed} form(s) of {path[:200]} not found again on the page opened anew, so not sent")
+
+    def send(self, path: str, f: dict) -> bool:
+        """Send the form `f` on the page opened anew in a tab of its own and say what came of it. False when the form
+        was not found again there (`FILL`): then nothing is sent and nothing is said of it."""
+        tab = self.fresh()
+        try:
+            return self._form(tab, path, f)
+        finally:
+            self.drop(tab)
+
+    def _form(self, tab: _Tab, path: str, f: dict) -> bool:
+        got = self.load(tab, path, "reload")
+        if got["status"] is None or not 200 <= got["status"] < 300:
+            return True
+        with self.lock:
+            self.k += 1
+            phase = ("form", path, self.k)
+            tab.phase = phase           # what filling the form sets off is the form's too
+        want = {"action": f.get("action"), "method": f.get("method"), "names": f.get("names")}
+        filled = self.eval(tab, f"({FILL})({int(f['i'])}, {json.dumps(want)})")
+        if not isinstance(filled, dict) or not isinstance(filled.get("at"), int):
+            return False
+        try:
+            if filled.get("submitter"):
+                self._press(tab, float(filled["x"]), float(filled["y"]))
+            else:
+                self.eval(tab, f"document.forms[{int(filled['at'])}].requestSubmit()")
+        except Exception:  # noqa: BLE001 - the page went away while the form was sent
+            pass
+        # the page the form was sent to: asked for within CLICK_SECONDS, then answered within a page's time
+        sent_page = None
+        deadline = time.monotonic() + CLICK_SECONDS
+        while True:
             with self.lock:
-                self.k += 1
-                phase = ("form", path, self.k)
-                tab.phase = phase
-            filled = self.eval(tab, f"({FILL})({int(f['i'])})")
-            if not isinstance(filled, dict):
-                continue
-            try:
-                if filled.get("submitter"):
-                    self._press(tab, float(filled["x"]), float(filled["y"]))
-                else:
-                    self.eval(tab, f"document.forms[{int(f['i'])}].requestSubmit()")
-            except Exception:  # noqa: BLE001 - the page went away while the form was sent
-                pass
-            # the page the form was sent to: asked for within CLICK_SECONDS, then answered within a page's time
-            sent_page = None
-            deadline = time.monotonic() + CLICK_SECONDS
-            while True:
-                with self.lock:
-                    docs = [a for a in self.answers if a["phase"] == phase and a["kind"] == "Document"]
-                    asked = any(q == (phase, "Document") for q in self.asked)
-                now = time.monotonic()
-                if docs or (now >= deadline and not asked) or now >= deadline + self.page_seconds + 1:
-                    sent_page = docs[0] if docs else None
-                    break
-                time.sleep(0.05)
-            self.settle(tab, time.monotonic() + CLICK_SECONDS)
-            with self.lock:
-                raised = [e for e in self.errors if e["phase"] == phase and e["how"] == "raised"]
-                fetched = [a for a in self.answers if a["phase"] == phase and a["kind"] in ("XHR", "Fetch")]
-            what = {"page": path, "form": f"form {int(f['i']) + 1}" + (f" ({f.get('id')})" if f.get("id") else "")}
-            statuses = ([sent_page["status"]] if sent_page and sent_page.get("status") is not None else []) + \
-                [a["status"] for a in fetched if a.get("status") is not None]
-            to = (sent_page or {}).get("path") or urllib.parse.urlsplit(str(f.get("action") or "")).path
-            if any(s >= 500 for s in statuses):
-                self.saw["forms"].append({"code": "form-error", **what, "address": to[:200],
-                                          "status": next(s for s in statuses if s >= 500),
-                                          "what": "the site answered the form with a server error"})
-            elif any(s in (404, 405) for s in statuses):
-                self.saw["forms"].append({"code": "form-nowhere", **what, "address": to[:200],
-                                          "status": next(s for s in statuses if s in (404, 405)),
-                                          "what": "the form is sent to an address the site does not have"})
-            elif raised:
-                self.saw["forms"].append({"code": "form-raises", **what,
-                                          "what": "sending the form raised an error in the site's script: "
-                                                  + raised[0]["text"][:120]})
+                docs = [a for a in self.answers if a["phase"] == phase and a["kind"] == "Document"]
+                asked = any(q == (phase, "Document") for q in self.asked)
+            now = time.monotonic()
+            if docs or (now >= deadline and not asked) or now >= deadline + self.page_seconds + 1:
+                sent_page = docs[0] if docs else None
+                break
+            time.sleep(0.05)
+        self.settle(tab, time.monotonic() + CLICK_SECONDS)
+        with self.lock:
+            raised = [e for e in self.errors if e["phase"] == phase and e["how"] == "raised"]
+            fetched = [a for a in self.answers if a["phase"] == phase and a["kind"] in ("XHR", "Fetch")]
+        what = {"page": path, "form": f"form {int(f['i']) + 1}" + (f" ({f.get('id')})" if f.get("id") else "")}
+        statuses = ([sent_page["status"]] if sent_page and sent_page.get("status") is not None else []) + \
+            [a["status"] for a in fetched if a.get("status") is not None]
+        to = (sent_page or {}).get("path") or urllib.parse.urlsplit(str(f.get("action") or "")).path
+        if any(s >= 500 for s in statuses):
+            self.saw["forms"].append({"code": "form-error", **what, "address": to[:200],
+                                      "status": next(s for s in statuses if s >= 500),
+                                      "what": "the site answered the form with a server error"})
+        elif any(s in (404, 405) for s in statuses):
+            self.saw["forms"].append({"code": "form-nowhere", **what, "address": to[:200],
+                                      "status": next(s for s in statuses if s in (404, 405)),
+                                      "what": "the form is sent to an address the site does not have"})
+        elif raised:
+            self.saw["forms"].append({"code": "form-raises", **what,
+                                      "what": "sending the form raised an error in the site's script: "
+                                              + raised[0]["text"][:120]})
+        return True
 
     # ------------------------------------------------------------------------------------------- keyboard
     def keyboard(self, tab: _Tab, path: str) -> None:
@@ -1334,10 +1463,10 @@ class _Walk:
                 return True
         return False
 
-    def probe_keyboard(self, context: str | None) -> str:
+    def probe_keyboard(self) -> str:
         """What this browser does when Tab is pressed on the last control of a page (`KEYBOARD_ENDS`), on a page of
         Lantern's own with two buttons and no script; "unknown" when it could not be told."""
-        tab = self.open_tab(context)
+        tab = self.fresh()
         try:
             with self.lock:
                 self.k += 1
@@ -1360,7 +1489,7 @@ class _Walk:
         except Exception:  # noqa: BLE001 - the browser did not let the page be opened or the keys be pressed
             return "unknown"
         finally:
-            self.close_tab(tab)
+            self.drop(tab)
         if seen[:2] != ["a", "b"]:
             return "unknown"
         return {"": "leaves", "a": "wraps", "b": "stays"}.get(seen[2], "unknown")
@@ -1458,11 +1587,7 @@ class _Walk:
     # ------------------------------------------------------------------------------------------- visitor
     def visitor(self) -> None:
         for path in self.site.logins:
-            try:
-                context = self.b.call("Target.createBrowserContext", {})["browserContextId"]
-            except Exception:  # noqa: BLE001
-                return
-            tab = self.open_tab(context)
+            tab = self.fresh()
             try:
                 got = self.load(tab, path, "visitor")
                 status = got["status"]
@@ -1478,22 +1603,13 @@ class _Walk:
                     self.saw["visitor"].append({"code": "let-in", "page": path, "status": status,
                                                 "what": "a visitor who is not signed in was let in"})
             finally:
-                self.close_tab(tab)
-                try:
-                    self.b.call("Target.disposeBrowserContext", {"browserContextId": context})
-                except Exception:  # noqa: BLE001
-                    pass
+                self.drop(tab)
 
     # ------------------------------------------------------------------------------------------- the walk
     def walk(self) -> None:
-        context = self.b.call("Target.createBrowserContext", {})["browserContextId"]
-        self.keyboard_end = self.probe_keyboard(context)
-        tab = self.open_tab(context)
-        try:
-            for path in self.site.pages:
-                self.page(tab, path)
-        finally:
-            self.close_tab(tab)
+        self.keyboard_end = self.probe_keyboard()
+        for path in self.site.pages:
+            self.page(path)
         if self.site.how == "app":
             self.visitor()
 
@@ -1537,11 +1653,19 @@ class _Walk:
         else:
             put("script", "held")
         self.saw["leads"] = _unique(self.saw["leads"])
-        put("leads", "held" if self.looked["leads"] else "nothing-to-check",
-            None if self.looked["leads"] else "the pages have no link or button")
+        if self.looked["leads"]:
+            put("leads", "held", not_clicked(self.not_clicked) if self.not_clicked else None)
+        elif self.not_clicked:
+            put("leads", "inconclusive", not_clicked(self.not_clicked))     # it clicked nothing it was to click
+        else:
+            put("leads", "nothing-to-check", "the pages have no link or button")
         self.saw["forms"] = _unique(self.saw["forms"])
-        put("forms", "held" if self.looked["forms"] else "nothing-to-check",
-            None if self.looked["forms"] else "the pages have no form sent to the site")
+        if self.looked["forms"]:
+            put("forms", "held", not_sent(self.not_sent) if self.not_sent else None)
+        elif self.not_sent:
+            put("forms", "inconclusive", not_sent(self.not_sent))          # it sent none of what it was to send
+        else:
+            put("forms", "nothing-to-check", "the pages have no form sent to the site")
         if self.site.how != "app" or not self.site.logins:
             put("visitor", "nothing-to-check", "no page asks for a sign-in")
         else:

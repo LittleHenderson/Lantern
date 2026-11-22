@@ -53,6 +53,17 @@ at for the headers, and whether a link to an address that a route of the code an
 "no route of the code"). The first is a reading listed below. So the held-back part is a weaker test than sites
 written by somebody else would be, and its results say so.
 
+**The checks were changed after that (a dated note, 2026-11-22).** "The checks have not been changed since" was true
+when it was written. Later the same day the open part's first trial (its three safe sites only, 3:04 PM PST, before
+any planted version or look-alike was opened) found a fault of the checks: the task list keeps its tasks in the
+browser, and its working "Done" button was reported as a button that does nothing (`dead-button` on `/index.html`),
+because every step of a run was made in one tab and a click went to the control at the same place on the page opened
+anew, whatever it was. It was fixed in the checks, test first (`docs/browser.md`, "Each step is a first visit", and
+three look-alikes in `tests/browse_sites.py`), and with it the same fault in how a form is found again, which was seen
+by reading the code (three more look-alikes); no definition of either part was changed for it. The held-back part has
+still not been opened in a browser; the fix was made by the author of its sites, who knows them, which is one more
+reason its results are a weaker test.
+
 ## What each version is
 
 A family is one site, written safe, in `<part>/sites/<family>/`: every file a `.tmpl` and dot-files as `dot.<name>`

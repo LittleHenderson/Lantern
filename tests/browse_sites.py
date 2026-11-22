@@ -328,6 +328,7 @@ class Lookalike:
     edits: tuple                # as `Planted.edits`
     gives: tuple = ()           # (check, outcome, codes) where it differs from the safe site; every other check as SAFE
     asks: str = ""              # for `outside`: the address the page asks another computer for
+    says: tuple = ()            # (check, words) the check's reason must hold; a held check not named here gives none
 
 
 MAP = """<!doctype html>
@@ -342,6 +343,167 @@ MAP = """<!doctype html>
 </body>
 </html>
 """
+
+JOIN = ('<p><button type="button" id="join">Join the newsletter</button></p>\n'
+        '<p id="join-text" hidden>Thank you: the newsletter comes on Fridays.</p>')
+JOIN_JS = """"use strict";
+// The newsletter: once this browser has joined, the button has nothing more to do
+function joined() {
+  return localStorage.getItem("joined") === "1" || sessionStorage.getItem("joined") === "1"
+    || document.cookie.split("; ").indexOf("joined=1") >= 0 || window.name === "joined";
+}
+document.getElementById("join").addEventListener("click", function () {
+  if (joined()) { return; }
+  localStorage.setItem("joined", "1");
+  sessionStorage.setItem("joined", "1");
+  document.cookie = "joined=1; path=/; SameSite=Lax";
+  window.name = "joined";
+  document.getElementById("join-text").hidden = false;
+});
+"""
+
+ACCOUNT = '    return page("Your account", "<p>Signed in as " + html.escape(user) + ".</p>")\n'
+ORDERS_APP = '''
+
+ORDERS = {1: "Two rye loaves", 2: "A seed cake"}
+COLLECTED: set[int] = set()
+ORDERS_JS = """'use strict';
+document.getElementById("orders").addEventListener("click", function (event) {
+  var button = event.target.closest("button[data-order]");
+  if (!button) { return; }
+  fetch("/orders/" + button.dataset.order + "/collected", { method: "POST" }).then(function () {
+    button.closest("li").remove();
+  });
+});
+"""
+
+
+@app.get("/orders")
+def orders():
+    rows = "".join("<li>" + html.escape(name) + ' <button type="button" data-order="' + str(number) + '">Collected</button>'
+                   "</li>" for number, name in ORDERS.items() if number not in COLLECTED)
+    return page("Orders", '<ul id="orders">' + rows + '</ul><form method="post" action="/orders"><p><label for="order">'
+                'A new order</label> <input id="order" name="order" required></p><p><button type="submit">Add</button>'
+                '</p></form><script src="/static/orders.js"></script>')
+
+
+@app.post("/orders")
+async def add_order(request: Request):
+    sent = await fields(request)
+    ORDERS[max(ORDERS) + 1] = sent.get("order", "")
+    return orders()
+
+
+@app.post("/orders/{number}/collected")
+def collected(number: int):
+    COLLECTED.add(number)
+    return {"collected": number}
+
+
+@app.get("/static/{name}")
+def static(name: str):
+    if name != "orders.js":
+        raise HTTPException(status_code=404)
+    return Response(ORDERS_JS, media_type="text/javascript")
+'''
+
+VISITS_APP = '''
+
+VISITS = [0]
+VISITS_JS = """'use strict';
+document.getElementById("seen").addEventListener("click", function () {
+  document.getElementById("seen-text").hidden = false;
+});
+"""
+
+
+@app.get("/visits")
+def visits():
+    VISITS[0] += 1
+    times = "1 time" if VISITS[0] == 1 else str(VISITS[0]) + " times"
+    return page("Visits", '<p><button type="button" id="seen">Seen ' + times + '</button></p>'
+                '<p id="seen-text" hidden>Thank you for coming back.</p><script src="/static/visits.js"></script>')
+
+
+@app.get("/static/{name}")
+def static(name: str):
+    if name != "visits.js":
+        raise HTTPException(status_code=404)
+    return Response(VISITS_JS, media_type="text/javascript")
+'''
+
+NOTES_APP = '''
+
+NOTE_VISITS = [0]
+
+
+@app.get("/notes")
+def notes():
+    NOTE_VISITS[0] += 1
+    return page("Notes", '<form method="post" action="/notes?visit=' + str(NOTE_VISITS[0]) + '"><p><label for="note">'
+                'A note</label> <input id="note" name="note"></p><p><button type="submit">Keep it</button></p></form>')
+
+
+@app.post("/notes")
+async def keep_note(request: Request):
+    await fields(request)
+    return page("Notes", "<p>Kept.</p>")
+'''
+
+FORM_ORDERS_APP = '''
+
+ORDERS = {1: "Two rye loaves", 2: "A seed cake"}
+COLLECTED: set[int] = set()
+
+
+@app.get("/orders")
+def orders():
+    rows = "".join("<li>" + html.escape(name) + ' <form method="post" action="/orders/collected">'
+                   '<input type="hidden" name="order" value="' + str(number) + '"><button type="submit">Collected'
+                   "</button></form></li>" for number, name in ORDERS.items() if number not in COLLECTED)
+    return page("Orders", "<ul>" + rows + '</ul><form method="post" action="/orders"><p><label for="order">'
+                'A new order</label> <input id="order" name="order" required></p><p><button type="submit">Add</button>'
+                "</p></form>")
+
+
+@app.post("/orders/collected")
+async def collected(request: Request):
+    sent = await fields(request)
+    number = int(sent.get("order", "0"))
+    if number not in ORDERS or number in COLLECTED:
+        raise HTTPException(status_code=404)
+    COLLECTED.add(number)
+    return orders()
+
+
+@app.post("/orders")
+async def add_order(request: Request):
+    sent = await fields(request)
+    ORDERS[max(ORDERS) + 1] = sent.get("order", "")
+    return orders()
+'''
+
+TOKEN_APP = '''
+
+TOKENS: set[str] = set()
+
+
+@app.get("/feedback")
+def feedback_form():
+    token = secrets.token_urlsafe(8)
+    TOKENS.add(token)
+    return page("Feedback", '<form method="post" action="/feedback"><input type="hidden" name="token" value="' + token
+                + '"><p><label for="said">What you think</label> <input id="said" name="said"></p><p><button '
+                'type="submit">Send</button></p></form>')
+
+
+@app.post("/feedback")
+async def feedback(request: Request):
+    sent = await fields(request)
+    if sent.get("token") not in TOKENS:
+        raise HTTPException(status_code=400, detail="Open the form again")
+    return page("Feedback", "<p>Thank you.</p>")
+'''
 
 LOOKALIKES: dict[str, Lookalike] = {
     # Tab moves on inside each of these while the page's own place for the keyboard stays the same: no trap
@@ -401,6 +563,45 @@ LOOKALIKES: dict[str, Lookalike] = {
               '    cover.className = "gone";\n'
               '  }, 50);\n'
               '});'))),
+    # a button on two pages that does what it says once and keeps in the browser that it was done (in its storage,
+    # its session's storage, a cookie and the window's name): each page and each click is a first visit, so the
+    # button works on both pages (2026-11-22, the browser benchmark's first run: until then a click and the page
+    # after it started from what the steps before them had left in the browser)
+    "kept-in-browser": Lookalike("pages", "a newsletter button on two pages that has nothing more to do once used", (
+        ("index.html", '<ul id="results"></ul>', '<ul id="results"></ul>\n' + JOIN),
+        ("index.html", '<script src="app.js"></script>', '<script src="app.js"></script>\n<script src="join.js"></script>'),
+        ("about.html", '<p><a href="index.html">Back to the shop</a></p>',
+         '<p><a href="index.html">Back to the shop</a></p>\n' + JOIN),
+        ("about.html", "</main>\n</body>", '</main>\n<script src="join.js"></script>\n</body>'),
+        ("join.js", None, JOIN_JS))),
+    # two orders that a click marks collected on the app's server, beside a form whose field must be filled: the
+    # click after the first finds its own button again, which now stands where the form's button stood (what a site
+    # keeps on its own server is not emptied between the steps)
+    "kept-on-server": Lookalike("app", "two orders that a click marks collected on the app's server", (
+        ("app.py", "from fastapi.responses import HTMLResponse\n", "from fastapi.responses import HTMLResponse, Response\n"),
+        ("app.py", ACCOUNT, ACCOUNT + ORDERS_APP)),
+        gives=(("script", "held", ()),)),
+    # a button whose words change each time its page is opened (the count of visits, kept on the app's server): on
+    # the page opened anew for the click no control has the words first seen, so Lantern cannot tell which control it
+    # was, clicks none, and the check's reason says how many were not clicked (2026-11-22)
+    "words-change": Lookalike("app", "a button whose words count the visits to its page", (
+        ("app.py", "from fastapi.responses import HTMLResponse\n", "from fastapi.responses import HTMLResponse, Response\n"),
+        ("app.py", ACCOUNT, ACCOUNT + VISITS_APP)),
+        gives=(("script", "held", ()),), says=(("leads", "1 control not clicked"),)),
+    # the same for a form: a form whose address carries the count of visits to its page is not found again on the
+    # page opened anew, so it is not sent, and the forms check's reason says so (2026-11-22)
+    "form-address-changes": Lookalike("app", "a form whose address counts the visits to its page", (
+        ("app.py", ACCOUNT, ACCOUNT + NOTES_APP),), says=(("forms", "1 form not sent"),)),
+    # two orders, each with a form of its own that marks it collected on the app's server, sent to one address with
+    # the order's number in a hidden field, beside a form for a new order: each form is found again by its address,
+    # its method and the names of its fields, wherever what the server keeps has moved it (2026-11-22: until then the
+    # form at the same place among the page's forms was sent, whatever it was)
+    "forms-kept-on-server": Lookalike("app", "two orders, each with its own form that marks it collected on the server", (
+        ("app.py", ACCOUNT, ACCOUNT + FORM_ORDERS_APP),)),
+    # a form with a hidden token the app makes anew at each visit, as most sites do against forged requests: it is the
+    # same form at every visit, so it is found again and sent (2026-11-22)
+    "form-token": Lookalike("app", "a form with a hidden token the app makes anew at each visit", (
+        ("app.py", ACCOUNT, ACCOUNT + TOKEN_APP),)),
 }
 
 

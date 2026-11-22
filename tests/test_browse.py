@@ -93,6 +93,60 @@ def test_every_lookalike_is_the_safe_site_but_for_its_own_pieces_and_says_what_i
         assert outcome in browse.OUTCOMES and outcome != SAFE[look.site][check], (check, outcome)
         assert set(codes) <= set(browse.BY_ID[check].codes) and (outcome == "broken") == bool(codes), (check, codes)
     assert (gives.get("outside", ("",))[0] == "broken") == bool(look.asks), name
+    says = dict(look.says)
+    assert len(says) == len(look.says) and set(says) <= set(browse.BY_ID) and all(says.values()), look.says
+
+
+def test_a_control_or_form_not_found_again_is_left_and_said_and_a_check_that_did_nothing_is_not_held(tmp_path):
+    """A click is for the control first seen on the page: on the page opened anew it is found again by its kind, its
+    words and, for a link, its address; a form by its address, its method and its fields (2026-11-22). Where none
+    there has them, or more than one has, nothing is clicked or sent: the log names the page, the check's reason says
+    how many were left, and a check that did none of what it was to do (and had no link to look at) is not held."""
+    lines: list[str] = []
+    walk = browse._Walk(None, browse.Site("pages", tmp_path, ["/"]), None, 1.0, "http://localhost:1", lines.append)
+    try:
+        def leads() -> dict:
+            walk.saw = {c.id: [] for c in browse.CHECKS}
+            return next(c for c in walk.judge() if c["id"] == "leads")
+
+        button = {"i": 0, "link": False, "shown": True, "tag": "button", "text": "Seen 1 time", "href": None}
+        walk.click = lambda path, c, link: False         # not found again on the page opened anew
+        walk.leads("/", [button])
+        assert (walk.looked["leads"], walk.not_clicked) == (0, 1)
+        assert any("/" in line and "not found again" in line for line in lines), lines
+        assert (leads()["outcome"], leads()["why"]) == ("inconclusive", browse.not_clicked(1))
+        walk.click = lambda path, c, link: True          # found again and clicked
+        walk.leads("/", [button, dict(button, i=1, text="Seen 2 times")])
+        assert (walk.looked["leads"], walk.not_clicked) == (2, 1)
+        assert (leads()["outcome"], leads()["why"]) == ("held", browse.not_clicked(1))
+        walk.click = lambda path, c, link: False
+        walk.leads("/", [button, button])
+        assert (walk.looked["leads"], walk.not_clicked) == (2, 3)
+        assert leads()["why"] == browse.not_clicked(3) and browse.not_clicked(3).startswith("3 controls not clicked")
+        assert browse.not_clicked(1).startswith("1 control not clicked")
+        walk.looked["leads"], walk.not_clicked = 0, 0
+        assert (leads()["outcome"], leads()["why"]) == ("nothing-to-check", "the pages have no link or button")
+
+        # a form the same way: found again by its address, its method and its fields, else not sent
+        def forms() -> dict:
+            walk.saw = {c.id: [] for c in browse.CHECKS}
+            return next(c for c in walk.judge() if c["id"] == "forms")
+
+        form = {"i": 0, "action": "http://localhost:1/notes?visit=1", "method": "post", "shown": True}
+        walk.send = lambda path, f: False
+        walk.forms("/", [form])
+        assert (walk.looked["forms"], walk.not_sent) == (0, 1)
+        assert any("/" in line and "form" in line and "not found again" in line for line in lines), lines
+        assert (forms()["outcome"], forms()["why"]) == ("inconclusive", browse.not_sent(1))
+        walk.send = lambda path, f: True
+        walk.forms("/", [form, dict(form, i=1)])
+        assert (walk.looked["forms"], walk.not_sent) == (2, 1)
+        assert (forms()["outcome"], forms()["why"]) == ("held", browse.not_sent(1))
+        assert browse.not_sent(1).startswith("1 form not sent") and browse.not_sent(2).startswith("2 forms not sent")
+        walk.looked["forms"], walk.not_sent = 0, 0
+        assert (forms()["outcome"], forms()["why"]) == ("nothing-to-check", "the pages have no form sent to the site")
+    finally:
+        walk.pool.shutdown(wait=False)
 
 
 def test_every_code_is_planted_and_every_site_says_each_check():
@@ -630,8 +684,13 @@ def test_each_lookalike_gives_what_it_should(tmp_path, name, the_browser):
     want = dict(SAFE[look.site], **{check: outcome for check, outcome, _ in look.gives})
     assert _outcomes(record) == want, _told(record, want)
     codes = {check: list(codes) for check, _, codes in look.gives}
+    says = dict(look.says)
     for c in record["checks"]:
         assert c["codes"] == codes.get(c["id"], []), _told(record, want)
+        if c["id"] in says:
+            assert says[c["id"]] in (c["why"] or ""), _told(record, want)
+        elif c["outcome"] == "held":
+            assert c["why"] is None, _told(record, want)
         if c["outcome"] == "inconclusive":
             assert c["saw"] and all(s.get("undecided") is True for s in c["saw"]) and c["why"], _told(record, want)
         else:

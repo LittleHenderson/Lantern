@@ -9,6 +9,20 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Browser checks: each step is a first visit (a firm pass or fail, stage 5, step 5). The browser benchmark's first
+  trial found a working button of its task list reported as a button that does nothing: every step of a run but the
+  visitor's was made in one tab, so what a click had kept in the browser changed the pages of the steps after it, and
+  a click went to the control, and a form to the form, at the same place on the page opened anew, whatever it was. Now
+  the first load of a page, each click and each form is made in a browser context of its own, thrown away after it; a
+  click finds the control first seen again by its kind, its words and, for a link, its address, and a form is found
+  again by its address, its method and the names of its fields (not by what they hold: a token made anew at each
+  visit). Where Lantern cannot tell which it is, it clicks or sends none, and the check's reason says how many (a
+  `leads` check that clicked nothing and had no link to look at, or a `forms` check that sent nothing, is
+  `inconclusive`, not `held`). What an app keeps on its own server is not emptied between steps. Fixed after failing
+  tests: six look-alikes in `tests/browse_sites.py`: a button on two pages that keeps in the browser that it was used,
+  two orders a click marks collected on the app's server, a button whose words count the visits to its page, and a
+  form whose address does (each of these four failed on the checks as they were); two orders each with a form of its
+  own, and a form with a hidden token made anew at each visit (which guard the new way of finding a form again).
 - The starter files' "Write file" button on the report's Advanced readiness page stands beside its fold, no longer
   inside the fold's title (since 0.9.0): a screen reader reads a fold's title as one button, so the button inside it
   could be neither named nor pressed on its own. The browser job's accessibility checker found it the first time it
