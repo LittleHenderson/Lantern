@@ -7,9 +7,9 @@ computer and none of this applies.
 ## What the service is
 
 Lantern reads a repository you point it at, or files you upload, and writes a report about its structure and its
-security problems. It is a reading tool: it does not install, build or run your code, and it does not change your
-repository. It is offered as a free preview for testers, with no promise that it stays up, stays free or stays the
-same.
+security problems. It is a reading tool: it does not install, build or run your code unless you ask it to run your
+tests (below), and it never changes your repository. It is offered as a free preview for testers, with no promise
+that it stays up, stays free or stays the same.
 
 ## What you may use it for
 
@@ -41,6 +41,17 @@ same.
 * We store your account id from GitHub or Google and its public name, never your email or password, and the counts
   needed for the limits.
 
+## Your tests, when you ask
+
+Only if you tick **Also run my tests** and agree on screen to where they run, Lantern runs your project's tests. A
+copy of your code, and the libraries your tests need (fetched from the public package stores, pypi.org and
+registry.npmjs.org), go to a test machine made for that one check, at the company that hosts Lantern. The tests run
+there as an ordinary user, in a network of their own with no other computer on it, within the minutes and memory you
+choose. Lantern takes back only their result and their output, which go into your report, and removes the machine
+when the tests end; nothing of the machine is kept. If these words change, you are asked again before your next check
+with tests, and you can take your yes back in Settings. A test machine is for checking your code: using it to attack
+the machine, the service or anyone else, or as free computing for anything else, is not allowed.
+
 ## Explanations from a model
 
 Only if you ask ("Explain in plain words", "Ask Lantern"), and only after you agree on screen, parts of your code are
@@ -60,4 +71,4 @@ result. It is a preview run by one person.
 These terms can change; the date at the bottom moves when they do, and a change that reduces what you get is announced
 in the release notes first. Questions: open an issue on the repository.
 
-_Last changed: 2026-11-05._
+_Last changed: 2026-11-21._

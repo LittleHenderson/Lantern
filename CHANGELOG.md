@@ -9,6 +9,15 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The terms of use say what happens when a person asks a check to run their tests (`docs/terms.md`, "Your tests,
+  when you ask"; the owner's words of 2026-11-21): only after the tick and the person's yes on screen, a copy of the
+  code and the libraries the tests need (from pypi.org and registry.npmjs.org) go to a test machine made for that one
+  check, at the company that hosts Lantern; the tests run there as an ordinary user, in a network of their own, within
+  the minutes and memory the person chose; only their result and their output come back, and the machine is removed
+  when they end. Words that change are asked again before the next check with tests, and the yes can be taken back in
+  Settings. "What the service is" now says that the service runs a project's code only when the person asks it to
+  run their tests. The date of the terms is 2026-11-21, and the website's help answer that sums the terms up names the
+  tests too (`cloud/lantern_cloud/site/index.html`).
 - Lantern's own tests keep every thread they start on Python 3.11 (`tools/netguard/lantern_netguard.py`,
   `_one_flag`). Python 3.11 guards the switching on of a trace or a profile function with one flag for the whole
   program, held while the audit hooks hear of it, and the tests' network guard is such a hook: a thread whose
