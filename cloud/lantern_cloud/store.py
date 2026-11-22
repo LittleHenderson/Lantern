@@ -21,7 +21,9 @@ create table if not exists users (
   account text primary key,          -- github:<id>, google:<sub>, token:<hash prefix> (from the gateway)
   label text, created text, last_seen text,
   ai_consent text,                   -- when the person agreed to send code to the model (null: not yet)
-  views integer);                    -- counted up when the links to results made for this account are ended
+  views integer,                     -- counted up when the links to results made for this account are ended
+  tests_consent text);               -- the fingerprint of the words about test machines the person agreed to
+                                     -- (lantern.runner.ask; null: not yet), so changed words are asked again
 create table if not exists runs (
   id text primary key,               -- random, unguessable
   account text not null,
@@ -34,7 +36,10 @@ create table if not exists runs (
   share_slug text unique,            -- null until the person clicks Share (off by default)
   explain_status text,               -- null | queued | running | done | error (plain-words explanations)
   explain_error text, explain_summary text,    -- summary: JSON {functions, validated, failed, stopped}
-  workspace text);                   -- null: the owner's alone; else every member of that workspace can read it
+  workspace text,                    -- null: the owner's alone; else every member of that workspace can read it
+  tests text,                        -- null: no tests asked; else JSON {command, cwd, minutes, memory}, which a test
+                                     -- machine made for the check runs (worker.tests_asked)
+  steps text);                       -- JSON [{key, at}]: each step of the run with the time it began
 create index if not exists runs_by_account on runs (account, created);
 create table if not exists daily (
   day text, account text, runs integer default 0, primary key (day, account));
@@ -71,7 +76,8 @@ ACTIVE = ("queued", "running")
 FINISHED = ("done", "error", "blocked")
 RUN_FIELDS = ("id", "account", "link", "host", "privacy", "status", "stage", "error", "created", "started", "finished",
               "commit_sha", "summary", "log_tail", "share_slug", "explain_status", "explain_error", "explain_summary",
-              "workspace")
+              "workspace", "tests", "steps")
+JSON_FIELDS = ("summary", "explain_summary", "tests", "steps")    # kept as JSON text, handed out as tables
 
 
 class LimitReached(Exception):
@@ -102,13 +108,16 @@ class Store:
         self.db.execute("pragma journal_mode=wal")
         self.db.executescript(SCHEMA)
         cols = {r[1] for r in self.db.execute("pragma table_info(runs)")}
-        for col in ("log_tail", "explain_status", "explain_error", "explain_summary", "workspace"):   # an earlier database
+        for col in ("log_tail", "explain_status", "explain_error", "explain_summary", "workspace", "tests",
+                    "steps"):   # an earlier database
             if col not in cols:
                 self.db.execute(f"alter table runs add column {col} text")
         if "ai_consent" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
             self.db.execute("alter table users add column ai_consent text")
         if "views" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
             self.db.execute("alter table users add column views integer")
+        if "tests_consent" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
+            self.db.execute("alter table users add column tests_consent text")
         if "lanes" not in {r[1] for r in self.db.execute("pragma table_info(members)")}:
             self.db.execute("alter table members add column lanes text")
         self.db.commit()
@@ -153,6 +162,16 @@ class Store:
             self.db.execute("update users set ai_consent = ? where account = ?", (now() if on else None, account))
             self.db.commit()
 
+    def tests_consent(self, account: str) -> str | None:
+        """The fingerprint of the words about test machines this account agreed to (`lantern.runner.ask`), or None."""
+        row = self._one("select tests_consent from users where account = ?", (account,))
+        return row[0] if row else None
+
+    def set_tests_consent(self, account: str, digest: str | None) -> None:
+        with self.lock:
+            self.db.execute("update users set tests_consent = ? where account = ?", (digest, account))
+            self.db.commit()
+
     def runs_today(self, account: str, day: str | None = None) -> int:
         row = self._one("select runs from daily where day = ? and account = ?", (day or today(), account))
         return row[0] if row else 0
@@ -191,8 +210,9 @@ class Store:
 
     # ---- runs ----
     def create_run(self, account: str, link: str, host: str, privacy: str, *, per_day: int, global_per_day: int,
-                   per_user_active: int) -> str:
-        """Check the limits and create a queued run in one step (so two quick requests cannot both slip under)."""
+                   per_user_active: int, tests: dict | None = None) -> str:
+        """Check the limits and create a queued run in one step (so two quick requests cannot both slip under).
+        `tests`: what the check asks of its tests (`worker.tests_asked`), or None."""
         day = today()
         with self.lock:
             q = self.db.execute
@@ -206,8 +226,9 @@ class Store:
             if act >= per_user_active:
                 raise LimitReached("You already have a run going. Wait for it to finish, then start the next one.")
             rid = secrets.token_urlsafe(12)
-            q("insert into runs (id, account, link, host, privacy, status, stage, created) "
-              "values (?, ?, ?, ?, ?, 'queued', 'waiting for a free worker', ?)", (rid, account, link[:500], host, privacy, now()))
+            q("insert into runs (id, account, link, host, privacy, status, stage, created, tests) "
+              "values (?, ?, ?, ?, ?, 'queued', 'waiting for a free worker', ?, ?)",
+              (rid, account, link[:500], host, privacy, now(), None if tests is None else json.dumps(tests)))
             q("insert into daily (day, account, runs) values (?, ?, 1) "
               "on conflict(day, account) do update set runs = runs + 1", (day, account))
             q("insert into global_daily (day, runs) values (?, 1) "
@@ -219,8 +240,8 @@ class Store:
         bad = set(fields) - set(RUN_FIELDS[4:])
         if bad:
             raise ValueError(f"not a run field: {bad}")
-        for k in ("summary", "explain_summary"):
-            if isinstance(fields.get(k), dict):
+        for k in JSON_FIELDS:
+            if isinstance(fields.get(k), (dict, list)):
                 fields[k] = json.dumps(fields[k])
         with self.lock:
             self.db.execute(f"update runs set {', '.join(k + ' = ?' for k in fields)} where id = ?",   # nosec B608 - names checked above
@@ -375,7 +396,7 @@ class Store:
     @staticmethod
     def _run_dict(row) -> dict:
         d = dict(zip(RUN_FIELDS, row))
-        for k in ("summary", "explain_summary"):
+        for k in JSON_FIELDS:
             try:
                 d[k] = json.loads(d[k]) if d[k] else None
             except ValueError:

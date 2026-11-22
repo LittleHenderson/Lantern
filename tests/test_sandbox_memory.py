@@ -160,6 +160,44 @@ def test_the_same_tests_under_their_limit_pass(tmp_path):
     assert not any("more memory than" in x for x in lines), lines
 
 
+# A test that passes, then one that uses more and more memory and says nothing: pytest writes the first one's dot
+# and leaves the line open until the run ends.
+AFTER_A_PASS = '''
+import os, time
+
+def test_passes_first():
+    assert True
+
+def test_then_SECOND():
+    held = []
+    for _ in range(TIMES):                      # 16 MB at a time, every page of it written
+        held.append(bytearray(os.urandom(1 << 20) * 16))
+        time.sleep(0.05)
+    time.sleep(HOLD)
+    assert FAILS
+'''
+
+
+@watched
+def test_a_stop_for_memory_after_a_test_that_passed_is_read_as_one(tmp_path):
+    """Found 2026-11-21 (a firm pass or fail, stage 3, step 5): pytest writes a dot for each test that passed and ends
+    that line only when the run ends, so the launcher's line, written when it stops the run, is the end of a line of
+    dots. Read only from a line's start, a run stopped for its memory after one test had passed read as tests that
+    failed (`sandbox._limit_said`). The twin: the same dot before a test that fails is a failed run."""
+    repo = _tiny(tmp_path / "over", AFTER_A_PASS.replace("SECOND", "uses_more_and_more").replace("TIMES", "40")
+                 .replace("HOLD", "20").replace("FAILS", "True"))                          # 640 MB
+    lines = []
+    r = sandbox.run(repo, PYTEST, log=lines.append, backend="subprocess", memory=256)
+    assert r["over_memory"] is True and r["returncode"] is None, (r["returncode"], r["output_tail"][-2000:])
+    assert any(line.startswith(".") and _jail.LIMIT_MARK in line for line in r["output_tail"].splitlines()), \
+        r["output_tail"][-2000:]          # where pytest left it: after the dot of the test that passed
+    assert any("more memory than their limit (256 MB)" in x for x in lines), lines[-8:]
+    twin = _tiny(tmp_path / "fails", AFTER_A_PASS.replace("SECOND", "fails").replace("TIMES", "1")
+                 .replace("HOLD", "0").replace("FAILS", "False"))
+    r = sandbox.run(twin, PYTEST, log=QUIET, backend="subprocess", memory=256)
+    assert r["returncode"] == 1 and r["over_memory"] is False, r["output_tail"][-2000:]
+
+
 SEVERAL = '''
 import subprocess, sys, time
 

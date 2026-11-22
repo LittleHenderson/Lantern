@@ -3,6 +3,8 @@ about, and nothing else. Every place here is on this computer; a name that is no
 written into a request, never looked up."""
 from __future__ import annotations
 
+import contextlib
+import os
 import socket
 import threading
 
@@ -236,3 +238,55 @@ def test_closing_the_doorkeeper_ends_its_listener(store):
     d.close()
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", port), timeout=2).close()
+
+
+# Descriptors held: past the 1,024 that `select()` takes (FD_SETSIZE). A test program holds that many in CI: on
+# 2026-11-21 GitHub's Python 3.13 job failed 187 tests where every connection of the doorkeeper was numbered past it.
+MANY = 1100
+
+
+@contextlib.contextmanager
+def _holding(many: int = MANY):
+    """This program holds files open until one is numbered `many` or more, so that every socket made meanwhile is
+    numbered past them; its own limit is raised for the while where it is lower. Everything is given back after."""
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    room = many + 256
+    if soft != resource.RLIM_INFINITY and soft < room:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (room if hard == resource.RLIM_INFINITY else min(room, hard), hard))
+    held: list[int] = []
+    try:
+        while not held or held[-1] < many:
+            held.append(os.open(os.devnull, os.O_RDONLY))
+        yield held
+    finally:
+        for fd in held:
+            os.close(fd)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+
+@pytest.mark.parametrize("how", ["plain", "tunnel"])
+def test_the_doorkeeper_hands_on_while_this_program_holds_many_files(store, how):
+    """A program that runs the doorkeeper may hold over a thousand files and connections, and every connection made
+    then is numbered past what `select()` takes. Its twins, with few held: the first test above and
+    `test_a_tunnel_to_a_store_carries_both_ways`."""
+    if os.name != "posix":
+        pytest.skip("a descriptor's number is POSIX's: Windows hands a socket out as a handle, which select() takes")
+    echo = _Echo() if how == "tunnel" else None
+    place = echo.port if echo else store.port
+    d = _stores.Door(_stores.listen(0), [["127.0.0.1", place]]).start()
+    try:
+        with _holding() as held:
+            assert held[-1] >= MANY
+            port = d.listener.getsockname()[1]
+            if how == "plain":
+                got = _ask(port, f"GET http://127.0.0.1:{place}/simple/thing/ HTTP/1.1\r\n\r\n".encode())
+                assert got[:12] in (b"HTTP/1.0 200", b"HTTP/1.1 200"), got[:200]
+                assert got.endswith(b"<html>the index of thing</html>")
+            else:
+                got = _ask(port, f"CONNECT 127.0.0.1:{place} HTTP/1.1\r\n\r\n".encode(), b"hello")
+                assert got.startswith(b"HTTP/1.1 200 ") and got.endswith(b"HELLO"), got
+    finally:
+        d.close()
+        if echo is not None:
+            echo.close()

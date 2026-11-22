@@ -80,6 +80,42 @@ class Settings:
     github_app_id: str = field(default_factory=lambda: os.environ.get("LANTERN_GITHUB_APP_ID", ""))
     github_app_key: str = field(default_factory=lambda: os.environ.get("LANTERN_GITHUB_APP_KEY", "").replace("\\n", "\n"))
     github_app_slug: str = field(default_factory=lambda: os.environ.get("LANTERN_GITHUB_APP_SLUG", ""))
+    # The test machines (a firm pass or fail, stage 3): each check's tests on a machine of their own at the hosting
+    # company (`machines.py`). Off until the key and the image are both set. The key is the organization key of the
+    # separate organization the test machines live in, and is never shown (`repr=False`); the image is named by its
+    # fingerprint; the tag is this website's own word in the apps' names, which its sweep goes by ("live", or
+    # "practice" for the practice copy); the outbound rule is `<tcp|udp>:<port>`.
+    test_machines_key: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_TEST_MACHINES_KEY", ""),
+                                   repr=False)
+    test_machines_org: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_TEST_MACHINES_ORG", "lantern-runs"))
+    test_machines_image: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_TEST_MACHINES_IMAGE", ""))
+    test_machines_region: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_TEST_MACHINES_REGION", "sjc"))
+    test_machines_at_once: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_TEST_MACHINES_AT_ONCE", 2))
+    test_machines_tag: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_TEST_MACHINES_TAG", "live"))
+    test_machines_api: str = field(default_factory=lambda: os.environ.get(
+        "LANTERN_CLOUD_TEST_MACHINES_API", "https://api.machines.dev"))
+    test_machines_egress: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_TEST_MACHINES_EGRESS", "tcp:0"))
+    test_machines_memory_mb: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_TEST_MACHINES_MEMORY_MB", 8192))
+    test_machines_archive_mb: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_TEST_MACHINES_ARCHIVE_MB", 2048))
+
+    def test_machines(self):
+        """(the test machines, "") when they are switched on; (None, why) when a setting is not right, in words that
+        never hold the key; (None, "") when they were not asked for: neither the key nor the image is set."""
+        if not self.test_machines_key and not self.test_machines_image:
+            return None, ""
+        if not self.test_machines_key:
+            return None, "the hosting company's key for the test machines is not set"
+        if not self.test_machines_image:
+            return None, "the test machines' image is not set"
+        from . import machines
+        try:
+            hosting = machines.Hosting(self.test_machines_key, org=self.test_machines_org, api=self.test_machines_api)
+            return machines.Machines(hosting, self.test_machines_image, tag=self.test_machines_tag,
+                                     at_once=self.test_machines_at_once, region=self.test_machines_region,
+                                     egress=self.test_machines_egress, most_memory=self.test_machines_memory_mb,
+                                     archive_mb=self.test_machines_archive_mb), ""
+        except ValueError as e:
+            return None, str(e)
 
     def github_app(self):
         """The GitHub App client, or None when it is not configured."""

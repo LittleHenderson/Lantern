@@ -52,6 +52,13 @@
 .privacy .choice{margin:0;background:var(--surface);box-shadow:var(--shadow-1)}
 .privacy .choice:has(input:checked){background:color-mix(in srgb, var(--accent-soft) 60%, var(--surface))}
 .agree{max-width:720px;margin:4px auto 0}
+/* A check's tests on a test machine (a firm pass or fail, stage 3, step 6): each step's time, the card's tests line,
+   the Advanced test settings. */
+.running-steps .st .sttime{margin-left:auto;padding-left:12px;font:12px var(--mono);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.app .testsline{display:flex;gap:8px;align-items:flex-start;margin:-4px 0 10px;font:13.5px/1.5 var(--font);color:var(--ink-2)}
+.app .testsline .ic{width:15px;height:15px;flex:none;margin-top:3px}.app .testsline .why{margin:2px 0 0}
+.tsets{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}.tsets label{display:flex;flex-direction:column;gap:4px;font:12.5px var(--font);color:var(--muted)}.tsets input[type=text]{font:13px var(--mono)}
+@media (max-width:760px){.tsets{grid-template-columns:1fr}}
 .acct{display:flex;align-items:center;gap:6px}
 .acct .who{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 10px 0 4px;border-radius:99px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 13px var(--font);cursor:pointer}
 .acct .who:hover{border-color:var(--line-2);box-shadow:var(--shadow-1)}
@@ -184,7 +191,8 @@ const api = async (path, opts = {}) => {
   if (!r.ok) { const e = new Error((d.error && d.error.message) || 'Lantern did not answer. Try again in a moment.'); e.status = r.status; e.type = d.error && d.error.type; throw e; }
   return d;
 };
-const S = {view: 'home', addMsg: null, starting: null, me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: savedPrivacy(), agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: []};
+const S = {view: 'home', addMsg: null, starting: null, me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: savedPrivacy(), agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: [],
+           wantTests: false, tests: null, testSet: {command: '', cwd: '', minutes: '', memory: ''}};
 // What a new check keeps, chosen in Settings and kept in this browser (snippets still need the tick on each check).
 function savedPrivacy() { try { return localStorage.getItem('lantern.privacy') === 'full' ? 'full' : 'structure'; } catch (e) { return 'structure'; } }
 const SAMPLE = 'lantern:sample/';   // a run's link for one of Lantern's built-in sample apps
@@ -198,7 +206,14 @@ const PLAIN_STEPS = {clone: ['Make a private copy', 'Into a sealed box. Nothing 
                      unpack: ['Open what you uploaded', 'Into a sealed box. Nothing in it is run or installed.'],
                      audit: ['Check the parts your app borrows', 'Outside code your app uses, against known security problems.'],
                      analyze: ['Map your app and look for problems', 'Every page and path a visitor can reach.'],
-                     save: ['Save your results', 'The copy is deleted; only the results stay.']};
+                     save: ['Save your results', 'The copy is deleted; only the results stay.'],
+                     libraries: ['Get what your tests need', 'The libraries your project names, ready-built, packed with a copy of your app.'],
+                     tests: ['Run your tests', 'On a test machine made for this check, removed when they end.']};
+// The two steps of a check that runs its tests (stage 3, step 6), between the dependency check and the map. The first
+// step of such a check says where its tests run instead of "Nothing in it is run or installed".
+const TEST_STEPS = [['libraries', 'Fetch the libraries the tests need', 'Ready-built, packed with a copy of the code for the test machine.'],
+                    ['tests', 'Run the tests on a test machine', 'A machine made for this check alone, removed when the tests end.']];
+const TESTS_SEALED = 'Into a sealed box. Nothing in it is run here: your tests run on a test machine of their own.';
 // A small Why? button (directive: user first): the detail behind a line opens in place, on demand.
 const why = (inner, label = 'Why?') => inner ? `<details class="why"><summary>${esc(label)}</summary><div class="whybody">${inner}</div></details>` : '';
 const GH = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
@@ -358,7 +373,7 @@ async function startSignIn(provider, el) {
 }
 async function afterSignIn() {
   await loadMe(); await Promise.all([loadRuns(), loadTeams()]); render();
-  if (S.pending) { const p = S.pending; S.pending = null; startRun(p.link, p.privacy, p.agreed); }
+  if (S.pending) { const p = S.pending; S.pending = null; startRun(p.link, p.privacy, p.agreed, p.tests); }
 }
 async function accountSheet() {
   const me = S.me, name = String(me.label || '').split(':').pop(), via = {github: 'GitHub', google: 'Google', token: 'a Lantern token'}[me.account] || me.account;
@@ -490,24 +505,83 @@ function deleteMeSheet() {
   };
 }
 
+// ---- a check's tests, on a test machine made for that check (a firm pass or fail, stage 3, step 6)
+// Offered only where the server says its test machines are on (S.me.tests.on). The words a person agrees to are the
+// server's (/v1/tests: the test machine's program's own), printed as they come; the page writes no sentence of its own
+// about what that machine can reach. A check with tests starts only after the person's yes to those very words, and
+// the server checks that too (412 until then, and again whenever the words change).
+const testsOn = () => !!(S.me && S.me.tests && S.me.tests.on === true);
+// What a check asks of its tests: true (Lantern finds the command in the project, with the usual limits), or in
+// Advanced the test settings the person filled in; the server says what it does not take.
+function testsAsk() {
+  if (!S.wantTests || !testsOn()) return null;
+  if (simple()) return true;
+  const t = S.testSet || {}, out = {}, v = k => String(t[k] || '').trim();
+  if (v('command')) { out.command = v('command'); if (v('cwd')) out.cwd = v('cwd'); }
+  for (const k of ['minutes', 'memory']) if (v(k)) out[k] = /^\d{1,7}$/.test(v(k)) ? +v(k) : v(k);
+  return Object.keys(out).length ? out : true;
+}
+// The one line a check gets for its tests (Simple and Advanced): ticked only after the person's yes.
+const testsTick = () => testsOn() ? `<div class="agree"><label class="check"><input type="checkbox" id="wanttests" ${S.wantTests ? 'checked' : ''}><span>Also run my tests, on a test machine made for this check</span></label></div>` : '';
+// Advanced only: the command, its folder and the limits, behind a small button; empty fields mean Lantern's choice.
+function testSettings() {
+  if (!testsOn() || !S.wantTests) return '';
+  const t = S.testSet, L = S.tests || {}, m = (L.minutes || {}).default, g = (L.memory || {}).default;
+  const f = (id, label, ph, v) => `<label>${esc(label)}<input type="text" id="${id}" value="${esc(v || '')}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false"></label>`;
+  return `<div class="agree">${why(`<div class="tsets">${f('tcmd', 'Test command', 'Found in your project', t.command)}${f('tcwd', 'Folder it starts in', 'Found with the command', t.cwd)}${f('tmin', 'Minutes', m ? String(m) : 'Lantern’s choice', t.minutes)}${f('tmem', 'Memory (MB)', g ? String(g) : 'Lantern’s choice', t.memory)}</div>`, 'Test settings')}</div>`;
+}
+async function loadTests() {
+  try { S.tests = await api('/v1/tests'); } catch (e) { S.tests = null; upMsg('err', esc(e.message)); }
+  return S.tests;
+}
+async function testsFirst(then) {
+  const t = await loadTests();
+  if (!t) return;
+  if (S.me && S.me.tests) { S.me.tests.on = t.on === true; S.me.tests.agreed = t.agreed === true; }
+  if (t.on !== true) { S.wantTests = false; render(); return upMsg('warn', esc(t.why_off || 'This website runs no tests right now.')); }
+  if (t.agreed === true) return then();
+  testsSheet(t, then);
+}
+function testsSheet(t, then) {
+  const m = (t.minutes || {}).default, g = (t.memory || {}).default;
+  const el = sheet(`<div class="sh"><h2>Before Lantern runs your tests</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>${esc(t.ask)}</p><p>${esc(t.libraries)}</p>
+    ${m && g ? `<p class="muted small">Your tests get ${esc(m)} minutes and ${esc(Number(g).toLocaleString('en-US'))} MB of memory${simple() ? '' : ', unless you set others under Test settings'}. You agree once; Lantern asks again if these words change.</p>` : ''}
+    <div id="tamsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Not now</button><button class="btn primary" id="tagree">I agree</button></div>`);
+  el.querySelector('#tagree').onclick = async () => {
+    try {
+      const r = await api('/v1/tests/consent', {method: 'POST', body: {agree: true, digest: t.digest}});
+      S.tests = {...t, ...r}; if (S.me && S.me.tests) S.me.tests.agreed = r.agreed === true; closeSheet(); then();
+    } catch (e) {
+      if (e.status === 409) { closeSheet(); return testsFirst(then); }   // the words changed: show the new ones
+      el.querySelector('#tamsg').innerHTML = note('err', esc(e.message));
+    }
+  };
+}
+
 // ---- starting a run
-async function startRun(link, privacy, agreed) {
+async function startRun(link, privacy, agreed, tests) {
   // While the start request is out, the button that started it spins (kept in S: the page redraws while runs go).
   const busy = on => { S.starting = on ? link : null; document.querySelectorAll(link.startsWith(SAMPLE) ? `[data-sample="${CSS.escape(link.slice(SAMPLE.length))}"]` : '#add').forEach(b => { b.classList.toggle('busy', on); b.disabled = on; }); };
   if (S.me) { busy(true); upMsg('info', 'Starting your check…'); }
-  try { return await startRun2(link, privacy, agreed); } finally { busy(false); }
+  try { return await startRun2(link, privacy, agreed, tests); } finally { busy(false); }
 }
 const startingAttr = on => on ? ' busy" disabled data-busy="1' : '';   // closes class="…", adds disabled; only fixed text
-async function startRun2(link, privacy, agreed) {
-  if (!S.me) { S.pending = {link, privacy, agreed}; return signInSheet('Sign in, and Lantern checks this link straight after.'); }
+async function startRun2(link, privacy, agreed, tests) {
+  if (!S.me) { S.pending = {link, privacy, agreed, tests}; return signInSheet('Sign in, and Lantern checks this link straight after.'); }
+  const again = () => startRun(link, privacy, agreed, tests);
+  if (tests && !(S.me.tests && S.me.tests.agreed)) { upMsg('', ''); return testsFirst(again); }
   try {
     const what = link.startsWith(SAMPLE) ? {sample: link.slice(SAMPLE.length)} : {link};
-    const r = await api('/v1/repos', {method: 'POST', body: {...what, privacy, stored_snippets_ok: privacy === 'full' && agreed === true}});
+    const r = await api('/v1/repos', {method: 'POST', body: {...what, privacy, stored_snippets_ok: privacy === 'full' && agreed === true, ...(tests ? {tests} : {})}});
     S.link = ''; S.addMsg = null; S.run = r; S.runs = [r, ...(S.runs || []).filter(x => x.id !== r.id)];
     S.add = null; location.hash = '#/run/' + encodeURIComponent(r.id);
   } catch (e) {
-    if (e.status === 401) { S.me = null; S.pending = {link, privacy, agreed}; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, and Lantern checks this link straight after.'); }
-    upMsg(e.status === 429 ? 'warn' : 'err', esc(e.message));
+    if (e.status === 401) { S.me = null; S.pending = {link, privacy, agreed, tests}; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, and Lantern checks this link straight after.'); }
+    if (e.status === 412 && tests) { upMsg('', ''); if (S.me.tests) S.me.tests.agreed = false; return testsFirst(again); }
+    if (e.status === 409 && tests && S.me.tests) { S.me.tests.on = false; S.wantTests = false; render(); }
+    upMsg(e.status === 429 || e.status === 409 ? 'warn' : 'err', esc(e.message));
   }
 }
 // ---- upload from this computer: a folder (zipped here, in the browser) or a .zip, sent to /v1/uploads
@@ -519,7 +593,7 @@ function upMsg(kind, html) { S.addMsg = html ? {kind, html} : null; const e = do
 const addMsgHtml = () => S.addMsg ? note(S.addMsg.kind, S.addMsg.html) : '';
 function uploadSheet(dir, zip) {
   const el = sheet(`<div class="sh"><h2>Upload from this computer</h2><button class="x" data-close aria-label="Close">×</button></div>
-    <p>Choose your app's folder, or a .zip of it. Lantern checks it in the same sealed box as a link: nothing is run or installed, and the upload is deleted when the check ends.</p>
+    <p>Choose your app's folder, or a .zip of it. Lantern checks it in the same sealed box as a link: nothing is run or installed${S.wantTests && testsOn() ? ' in it (your tests run on a test machine made for this check)' : ''}, and the upload is deleted when the check ends.</p>
     <div class="signbtns"><button class="btn" id="updir">${icon('folder')}<span>Choose a folder</span></button><button class="btn" id="upzip">${icon('up')}<span>Choose a .zip file</span></button></div>
     <p class="foot">Up to ${esc(capMB())} MB. Folders such as node_modules, .git, build output and virtual environments are left out. You can also drop a folder or a .zip on the link box.</p>`);
   el.querySelector('#updir').onclick = () => { closeSheet(); dir.click(); };
@@ -571,12 +645,20 @@ function uploadZip(f) {
 async function sendUpload(blob, name) {
   if (!S.me) return signInSheet('Sign in first, then upload your app again.');
   if (S.privacy === 'full' && !S.agreed) return upMsg('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.');
+  const tests = testsAsk(), again = () => sendUpload(blob, name);
+  if (tests && !(S.me.tests && S.me.tests.agreed)) { upMsg('', ''); return testsFirst(again); }
   upMsg('info', 'Uploading…');
   const q = new URLSearchParams({name: String(name).slice(0, 80), privacy: S.privacy, snippets_ok: S.privacy === 'full' && S.agreed ? '1' : '0'});
+  if (tests) q.set('tests', JSON.stringify(tests));    // read by the server before the upload itself
   try {
     const res = await fetch('/v1/uploads?' + q, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/zip', 'X-Lantern-Site': '1'}, body: blob});
     const d = await res.json().catch(() => ({}));
-    if (!res.ok) { if (res.status === 401) { S.me = null; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, then upload your app again.'); } return upMsg(res.status === 429 || res.status === 413 ? 'warn' : 'err', esc((d.error && d.error.message) || 'The upload did not go through. Try again.')); }
+    if (!res.ok) {
+      if (res.status === 401) { S.me = null; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, then upload your app again.'); }
+      if (res.status === 412 && tests) { upMsg('', ''); if (S.me.tests) S.me.tests.agreed = false; return testsFirst(again); }
+      if (res.status === 409 && tests && S.me.tests) { S.me.tests.on = false; S.wantTests = false; render(); }
+      return upMsg(res.status === 429 || res.status === 413 || res.status === 409 ? 'warn' : 'err', esc((d.error && d.error.message) || 'The upload did not go through. Try again.'));
+    }
     upMsg('', ''); S.run = d; S.runs = [d, ...(S.runs || []).filter(x => x.id !== d.id)];
     S.add = null; location.hash = '#/run/' + encodeURIComponent(d.id);
   } catch (e) { upMsg('err', 'The upload did not go through. Check your connection and try again.'); }
@@ -589,6 +671,7 @@ function addBox() {
       <label class="choice"><input type="radio" name="priv" value="structure" ${full ? '' : 'checked'}><span><b>Map and findings only <span class="tag priv">Private</span></b>No code is kept. The report names files and lines.</span></label>
       <label class="choice"><input type="radio" name="priv" value="full" ${full ? 'checked' : ''}><span><b>Include code snippets</b>The report shows the lines it talks about. Those short snippets are kept with your results.</span></label></div>
     ${full ? `<div class="agree"><label class="check"><input type="checkbox" id="agreed" ${S.agreed ? 'checked' : ''}><span>I agree that short snippets of this repository's code are stored on Lantern's server with my results, until I delete them.</span></label></div>` : ''}
+    ${testsTick()}${testSettings()}
     <div id="adderr" style="max-width:720px;margin:0 auto">${addMsgHtml()}</div>
     ${ghRow()}`;
 }
@@ -635,7 +718,7 @@ function repoControls(el) {
     const name = b.dataset.repo; if (!REPO_NAME.test(name)) return;
     if (S.privacy === 'full' && !S.agreed) { upMsg('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.'); return; }
     b.classList.add('busy'); b.disabled = true;
-    startRun('https://github.com/' + name, S.privacy, S.agreed).finally(() => { b.classList.remove('busy'); b.disabled = false; });
+    startRun('https://github.com/' + name, S.privacy, S.agreed, testsAsk()).finally(() => { b.classList.remove('busy'); b.disabled = false; });
   });
   const f = el.querySelector('#repofresh'); if (f) f.onclick = () => { S.repos = undefined; loadRepos(true); };
   const q = el.querySelector('#reposearch');
@@ -664,8 +747,18 @@ function addControls(el) {
       if (!link) { input.focus(); return; }
       if (!/^https:\/\//i.test(link) && !/^git@/.test(link)) { upMsg('warn', 'Paste the https link of a public repository, such as https://github.com/owner/name.'); return; }
       if (S.privacy === 'full' && !S.agreed) { upMsg('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.'); return; }
-      upMsg('', ''); startRun(link, S.privacy, S.agreed);
+      upMsg('', ''); startRun(link, S.privacy, S.agreed, testsAsk());
     };
+  }
+  // The tests' tick shows as ticked only after the person's yes to the server's words (testsFirst).
+  const wt = el.querySelector('#wanttests');
+  if (wt) wt.onchange = () => {
+    if (!wt.checked) { S.wantTests = false; render(); return; }
+    wt.checked = false;
+    testsFirst(() => { S.wantTests = true; render(); });
+  };
+  for (const [id, k] of [['tcmd', 'command'], ['tcwd', 'cwd'], ['tmin', 'minutes'], ['tmem', 'memory']]) {
+    const f = el.querySelector('#' + id); if (f) f.oninput = () => { S.testSet[k] = f.value; };
   }
   const up = el.querySelector('#upload');
   if (up) {
@@ -689,21 +782,36 @@ function addControls(el) {
   });
   el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { S.tab = b.dataset.tab || 'findings'; location.hash = '#/run/' + encodeURIComponent(b.dataset.open); });
   el.querySelectorAll('[data-again]').forEach(b => b.onclick = () => {
-    // Again, with the same privacy the person chose (and agreed to) for this repository last time.
+    // Again, with the same privacy the person chose (and agreed to) for this repository last time, and the same tests
+    // where it asked for them and this website still runs them (the server checks both again).
     const r = (S.runs || []).find(x => x.id === b.dataset.again) || (S.run && S.run.id === b.dataset.again ? S.run : null); if (!r) return;
-    if (String(r.link).startsWith(UPLOAD)) { S.privacy = r.privacy; S.agreed = r.privacy === 'full'; location.hash = '#/'; setTimeout(() => { const u = document.getElementById('upload'); if (u) u.click(); }, 50); return; }   // the code was deleted: pick it again
-    startRun(r.link, r.privacy, r.privacy === 'full');
+    const tests = r.tests && typeof r.tests === 'object' && testsOn() ? r.tests : null;
+    if (String(r.link).startsWith(UPLOAD)) { S.privacy = r.privacy; S.agreed = r.privacy === 'full'; S.wantTests = !!tests && !!(S.me.tests && S.me.tests.agreed); location.hash = '#/'; setTimeout(() => { const u = document.getElementById('upload'); if (u) u.click(); }, 50); return; }   // the code was deleted: pick it again
+    startRun(r.link, r.privacy, r.privacy === 'full', tests);
   });
   el.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { const r = (S.runs || []).find(x => x.id === b.dataset.del) || (S.run && S.run.id === b.dataset.del ? S.run : null); if (r) deleteSheet(r); });
   el.querySelectorAll('[data-signin]').forEach(b => b.onclick = e => { e.preventDefault(); signInSheet(); });
 }
 
 // ---- home
+// The card's line about a check's tests (the worker's `tests_line`): one of four states, each with its word and icon,
+// the reason and what to do behind Why?. Only these four states are ever shown.
+const TESTS_SAID = {'passed': ['check', 'Your tests <b>passed</b> on a test machine made for this check.'],
+                    'failed': ['warn', 'Your tests <b class="bad">failed</b> on a test machine made for this check.'],
+                    'not run': ['info', 'Your tests were <b>not run</b>.'],
+                    'no result': ['warn', 'Your tests <b>gave no result</b>.']};
+const testsState = sum => { const t = sum && sum.tests; return t && typeof t === 'object' && Object.prototype.hasOwnProperty.call(TESTS_SAID, t.state) ? t : null; };
+function testsSaid(sum) {
+  const t = testsState(sum); if (!t) return '';
+  const [ic, words] = TESTS_SAID[t.state];
+  const more = [t.why, t.fix].filter(x => typeof x === 'string' && x).map(x => `<p style="margin:0 0 6px">${esc(x)}</p>`).join('');
+  return `<div class="testsline">${icon(ic)}<div>${words}${why(more)}</div></div>`;
+}
 function runCard(r) {
   const sum = r.summary || {}, run = ACTIVE.includes(r.status), name = repoName(r.link);
   return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(name)}${r.shared ? ' <span class="tag shared">Shared</span>' : ''}</div><div class="path">${esc(r.host)} · ${esc(PRIV[r.privacy] || r.privacy)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</div></div>${ring(r.status === 'done' ? sum.score : null, sum.grade)}</div>
     ${run ? `<div class="checking"><i></i>${r.status === 'queued' ? 'Waiting for a free worker…' : 'Checking… about a minute'}<span style="flex:1"></span>${since(r.started || r.created, 'running')}</div><div class="indeterminate"></div><p class="lastline">${esc(lastLine(r))}</p>`
-      : r.status === 'done' ? `<p class="sentence">${sentence(sum)}</p>${sum.lanes ? `<p class="wherecap">Where in your app</p>${whereStrip(sum)}` : ''}`
+      : r.status === 'done' ? `<p class="sentence">${sentence(sum)}</p>${testsSaid(sum)}${sum.lanes ? `<p class="wherecap">Where in your app</p>${whereStrip(sum)}` : ''}`
       : note(r.status === 'blocked' ? 'warn' : 'err', esc(r.error || 'This check stopped before it finished.'))}
     <div class="actions">${r.status === 'done' ? `<button class="btn primary" data-open="${esc(r.id)}" data-tab="findings">Show me what to fix</button>` : run ? `<button class="btn" data-open="${esc(r.id)}">Watch it run</button>` : ''}
       ${run ? '' : `<button class="btn ${r.status === 'done' ? '' : 'primary'}" data-again="${esc(r.id)}">${r.status === 'done' ? 'Re-check' : 'Try again'}</button>`}
@@ -712,7 +820,7 @@ function runCard(r) {
 // Simple home (directive: user first). First-time builders may never have used GitHub or heard the word repository:
 // one button, "Show us your project", then one plain question per screen (S.add: where, github, computer, unsure).
 // Advanced keeps the full add box on its own page.
-const PRIVLINE = `${icon('lock')}Lantern copies your app into a sealed box, reads it without installing or running anything, and deletes the copy when the check ends. Only the results are kept, private to your account, until you delete them.`;
+const privLine = () => `${icon('lock')}Lantern copies your app into a sealed box, reads it without installing or running anything, and deletes the copy when the check ends. Only the results are kept, private to your account, until you delete them.${testsOn() ? ' Your tests run only when you tick the box for them, on a test machine made for that check alone, which is removed when they end.' : ''}`;
 function renderHome(el) {
   if (S.me && !simple()) return renderHomePro(el);
   if (S.openUpload) S.add = 'computer';
@@ -722,7 +830,7 @@ function renderHome(el) {
     <p class="lede">Lantern reads your code the way a senior engineer would, then shows you step by step how to get it ready to ship.</p>
     <div class="go"><button class="btn primary big" id="showus">Show us your project</button></div>
     <p class="alt"><button class="linkbtn" id="trysample">No project yet? Try a sample app</button></p>
-    ${why(`<p class="privline" style="margin:0">${PRIVLINE}</p>`, 'Is my code safe?')}
+    ${why(`<p class="privline" style="margin:0">${privLine()}</p>`, 'Is my code safe?')}
     ${S.me === undefined ? '<div class="empty">Loading…</div>'
       : runs.length ? `<div class="apps-head"><h2>Your runs</h2><span>${done} checked${going ? `, ${going} checking now` : ''}</span></div><div class="apps">${runs.map(runCard).join('')}</div>` : ''}
   </main>`;
@@ -734,6 +842,7 @@ function renderHome(el) {
 function keepBox() {
   const full = S.privacy === 'full';
   return `<p class="privline" style="margin-top:14px">${icon('lock')}${full ? 'Lantern keeps the map, the findings and short snippets of the lines it talks about.' : 'Private: Lantern keeps the map and the findings, never your code.'}</p>
+    ${testsTick()}
     ${why(`<div class="privacy" role="radiogroup" aria-label="What Lantern keeps" style="margin:0">
       <label class="choice"><input type="radio" name="priv" value="structure" ${full ? '' : 'checked'}><span><b>Map and findings only <span class="tag priv">Private</span></b>No code is kept. The report names files and lines.</span></label>
       <label class="choice"><input type="radio" name="priv" value="full" ${full ? 'checked' : ''}><span><b>Include code snippets</b>The report shows the lines it talks about. Those short snippets are kept with your results.</span></label></div>
@@ -762,7 +871,7 @@ function renderAdd(el) {
         <li><b>You saved it on GitHub.</b> Choose <button class="linkbtn" data-to="github">It’s on GitHub</button> and paste its link.</li></ol>
       ${samplesBlock() ? `<p class="lede" style="margin-top:22px">No project yet? Check a sample app to see what Lantern shows you.</p>${samplesBlock()}` : ''}`,
   };
-  el.innerHTML = `<main class="simplehome onb">${(screens[S.add] || screens.where)()}<p class="privline" style="margin-top:22px">${icon('lock')}Your code is read in a sealed box and never run.</p></main>`;
+  el.innerHTML = `<main class="simplehome onb">${(screens[S.add] || screens.where)()}<p class="privline" style="margin-top:22px">${icon('lock')}${S.wantTests && testsOn() ? 'Your code is read in a sealed box; your tests run on a test machine made for this check.' : 'Your code is read in a sealed box and never run.'}</p></main>`;
   el.querySelectorAll('[data-back]').forEach(b => b.onclick = () => { S.add = b.dataset.back || null; S.addMsg = null; render(); });
   el.querySelectorAll('[data-to]').forEach(b => b.onclick = () => { S.add = b.dataset.to; S.addMsg = null; render(); });
   if (S.add === 'github') repoControls(el);
@@ -786,7 +895,7 @@ function renderHomePro(el) {
   const num = (v, bad) => v == null ? '<span class="num dash">–</span>' : `<span class="num ${bad && v ? 'bad' : ''}">${esc(v)}</span>`;
   const rows = runs.map(r => {
     const s = r.summary || {}, c = r.status === 'done' ? s.counts || {} : null, t = tone(s.grade), run = ACTIVE.includes(r.status);
-    return `<div class="r"><div><div class="n">${esc(repoName(r.link))}${r.privacy === 'full' ? '<span class="tag">SNIPPETS</span>' : ''}${r.shared ? '<span class="tag">SHARED</span>' : ''}${r.workspace ? `<span class="tag">TEAM</span>` : ''}</div><div class="p" title="${esc(r.link)}">${esc(r.link)}</div></div>
+    return `<div class="r"><div><div class="n">${esc(repoName(r.link))}${r.privacy === 'full' ? '<span class="tag">SNIPPETS</span>' : ''}${r.shared ? '<span class="tag">SHARED</span>' : ''}${r.workspace ? `<span class="tag">TEAM</span>` : ''}${r.status === 'done' && testsState(s) ? `<span class="tag">TESTS ${esc(testsState(s).state.toUpperCase())}</span>` : ''}</div><div class="p" title="${esc(r.link)}">${esc(r.link)}</div></div>
       <span class="p" style="font:12px var(--font);color:var(--ink-2)">${esc(r.host)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</span>
       ${r.status === 'done' && s.score != null ? `<div class="rd"${releaseWord(s.release) ? ` title="Release decision: ${releaseWord(s.release)}"` : ''}><span style="font-weight:600;color:var(--ink);width:24px">${esc(s.score)}</span><div class="bar"><i class="bar-${t}" style="width:${Math.max(2, Math.min(100, +s.score || 0))}%"></i></div><span class="g tone-${t}">${esc(s.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'checking' : esc(r.status)}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.low : null)}
@@ -852,8 +961,25 @@ async function renderRun(el, id) {
   if (r.status === 'done') return renderReport(el, r);
   renderProgress(el, r);
 }
+// "1:05" between two ISO times (a step's time once it ended).
+function between(a, b) { const s = Math.floor((Date.parse(b) - Date.parse(a)) / 1000); return s >= 0 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : ''; }
+// Each step's time, from the run's own record of when each began (`steps`): an ended step, until the next one began
+// (or the check ended); the step going now, counting on screen. Only times of the record's shape are read.
+function stepTimes(r) {
+  const rows = (Array.isArray(r.steps) ? r.steps : []).filter(x => x && typeof x.key === 'string' && typeof x.at === 'string' && isFinite(Date.parse(x.at)));
+  const out = new Map(), run = ACTIVE.includes(r.status);
+  rows.forEach((x, i) => {
+    if (out.has(x.key)) return;
+    const end = i + 1 < rows.length ? rows[i + 1].at : !run && typeof r.finished === 'string' ? r.finished : '';
+    out.set(x.key, end ? `<span class="sttime">${esc(between(x.at, end))}</span>` : run ? `<span class="sttime" data-since="${esc(x.at)}" data-label="">${esc(elapsed(x.at))}</span>` : '');
+  });
+  return out;
+}
 function renderProgress(el, r) {
-  const ST = String(r.link || '').startsWith(UPLOAD) ? [['unpack', 'Unpack your upload', 'Into a sealed box. Nothing in it is run or installed.'], ...STEPS.slice(1)] : STEPS;
+  const ST0 = String(r.link || '').startsWith(UPLOAD) ? [['unpack', 'Unpack your upload', 'Into a sealed box. Nothing in it is run or installed.'], ...STEPS.slice(1)] : STEPS;
+  // A check that runs its tests has their two steps, and its first step says where they run.
+  const ST = r.tests ? [[ST0[0][0], ST0[0][1], TESTS_SEALED], ST0[1], ...TEST_STEPS, ...ST0.slice(2)] : ST0;
+  const times = stepTimes(r);
   const run = ACTIVE.includes(r.status), at = ST.findIndex(s => s[0] === r.step);
   const plain = simple();
   // The bar moves with the run's real steps: each finished step fills its share, the one going fills half of it.
@@ -861,9 +987,9 @@ function renderProgress(el, r) {
   const nowWords = at >= 0 ? (plain && PLAIN_STEPS[ST[at][0]] ? PLAIN_STEPS[ST[at][0]][0] : ST[at][1]) : 'Waiting for a free worker';
   const bar = run && plain ? `<div class="runbar" role="progressbar" aria-label="How far the check is" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-valuetext="${esc(nowWords)}"><i style="width:${pct}%"></i></div><p class="runbar-now">Step ${at < 0 ? 0 : at + 1} of ${ST.length}: ${esc(nowWords)}</p>` : run ? '<div class="indeterminate"></div>' : '';
   const steps = ST.map(([k, t0, d0], i) => {
-    const [t, d] = plain && PLAIN_STEPS[k] ? PLAIN_STEPS[k] : [t0, d0];
+    const [t, d1] = plain && PLAIN_STEPS[k] ? PLAIN_STEPS[k] : [t0, d0], d = r.tests && i === 0 ? TESTS_SEALED : d1;
     const cls = !run ? (r.status === 'done' || i < at ? 'done' : '') : i < at ? 'done' : i === at ? 'now' : '';
-    return `<div class="st ${cls}"><span class="dot">${cls === 'done' ? icon('check') : ''}</span><div><b>${esc(t)}</b>${esc(d)}</div></div>`;
+    return `<div class="st ${cls}"><span class="dot">${cls === 'done' ? icon('check') : ''}</span><div><b>${esc(t)}</b>${esc(d)}</div>${times.get(k) || ''}</div>`;
   }).join('');
   dock(false); el.innerHTML = `${subBar(r, false)}<main class="progress"><div class="card">
     <div class="head"><div style="flex:1;min-width:0"><span class="eyebrow">${run ? (r.status === 'queued' ? 'Waiting for a free worker' : 'Checking now') : r.status === 'blocked' ? 'Stopped by a safety rule' : 'This check stopped'}${run ? ' ' + since(r.started || r.created, '· running for') : ''}</span>
@@ -1221,18 +1347,18 @@ function termLink(a) {
 }
 
 const FAQ = [
-  ['Privacy', 'What happens to my code?', 'Lantern copies the repository, or the files you upload, into a sealed box on its server, reads it without installing or running anything, and deletes the copy when the check ends. What stays is the result: the map, the findings and the grade. With <b>Map and findings only</b> no code is kept at all; with <b>Include code snippets</b> the short lines the report talks about are kept too.'],
+  ['Privacy', 'What happens to my code?', 'Lantern copies the repository, or the files you upload, into a sealed box on its server, reads it without installing or running anything, and deletes the copy when the check ends. The one exception is your tests, and only when you tick <b>Also run my tests</b> on a check: then a copy of your code and the libraries it names go to a test machine made for that check alone, which runs the tests and is removed when they end. What stays is the result: the map, the findings and the grade. With <b>Map and findings only</b> no code is kept at all; with <b>Include code snippets</b> the short lines the report talks about are kept too.'],
   ['Privacy', 'Who can see my results?', 'Only you, while you are signed in. Each report opens through a link that works for an hour and only for your account. Nothing is shared unless you click <b>Share</b> on a run; that makes a link anyone holding it can open, and <b>Stop sharing</b> turns it off again.'],
-  ['Privacy', 'What exactly is stored, and for how long?', 'Your account id from GitHub or Google and its public name (never your email), when you agreed to send code to a model (if you did), and for each check: the link, the privacy choice, the status, the times, the commit and the counts, plus the result files (the map, the findings, the grade, the evidence page; short code lines only if you chose <b>Include code snippets</b>). Results stay until you delete them. The sign-in token lives on your computer or in a browser cookie; the gateway keeps only a fingerprint of it and a count of requests per day, each deleted 90 days after its last use. Logs of a check show stages and errors, never file contents, and are kept with the run. There is no advertising, no tracking script, and nothing is sold or shared.'],
+  ['Privacy', 'What exactly is stored, and for how long?', 'Your account id from GitHub or Google and its public name (never your email), when you agreed to send code to a model (if you did), a fingerprint of the words about test machines you agreed to (if you did), and for each check: the link, the privacy choice, what it asked of your tests (if anything), the status, the times of each step, the commit and the counts, plus the result files (the map, the findings, the grade, the evidence page; short code lines only if you chose <b>Include code snippets</b>). Results stay until you delete them. The sign-in token lives on your computer or in a browser cookie; the gateway keeps only a fingerprint of it and a count of requests per day, each deleted 90 days after its last use. Logs of a check show stages and errors, never file contents, and are kept with the run. There is no advertising, no tracking script, and nothing is sold or shared.'],
   ['Privacy', 'What are the limits, and when do they reset?', 'Each account can run __RUNS_PER_DAY__ checks a day, one at a time, and everyone together __ALL_RUNS_PER_DAY__ a day; explanations through the free allowance have their own daily and lifetime limits. Every limit resets at midnight UTC, and the message you see says how long that is from now (for example “in 5 h 20 min”). The number of checks left today is under your name, top right.'],
   ['Privacy', 'How do I delete my results?', 'The bin icon on a run deletes that run, its report and its share link. To delete everything, open <b>Settings</b> (or press your name, top right), then <b>Delete my account</b>. Your GitHub or Google account is not touched.'],
   ['Using it', 'Which links work?', 'The https link of a public repository on GitHub, GitLab, Bitbucket, Codeberg and other public code hosts, like <code>https://github.com/owner/name</code>. A link to a branch (<code>/tree/branch</code>) checks that branch.'],
   ['Using it', 'How long does a check take, and how many can I run?', 'Usually about a minute, up to a few minutes for a very large app. Each account can run __RUNS_PER_DAY__ checks a day and one at a time; the number left today is under your name, top right.'],
-  ['Using it', 'Does Lantern run my app or my tests?', 'No. In the cloud Lantern only reads the code. To watch your tests run, use the Lantern app on your own computer: <code>pip install lantern</code> then <code>lantern serve</code>.'],
-  ['Results', 'What do the grade and the colours mean?', 'The grade (A to F) and the readiness number come from ten checks a senior engineer would make before launch. Red means a serious problem, orange and yellow smaller ones, green means it passed. Every colour sits next to a word, so you never have to guess. Beside them stands the release decision: <b>Blocked</b> (something that must hold does not, such as an open critical or high finding), <b>Incomplete</b> (nothing found blocks a release, but part of the proof is missing) or <b>Passed</b>. Here in the cloud Lantern never runs your tests, so a check made here reads Incomplete at best; the Lantern app on your own computer can run them.'],
+  ['Using it', 'Does Lantern run my app or my tests?', 'Your app, no. Your tests, only when you tick <b>Also run my tests</b> on a check, which this website offers when its test machines are switched on. Before your first such check Lantern shows where they run and what that machine can reach, and starts only after you agree; it asks again if those words change. Your tests then run on a test machine made for that check alone, which is removed when they end, and the result card says whether they passed, failed or were not run, and why. Without the tick Lantern only reads the code. The Lantern app on your own computer can run them too: <code>pip install lantern</code> then <code>lantern serve</code>.'],
+  ['Results', 'What do the grade and the colours mean?', 'The grade (A to F) and the readiness number come from ten checks a senior engineer would make before launch. Red means a serious problem, orange and yellow smaller ones, green means it passed. Every colour sits next to a word, so you never have to guess. Beside them stands the release decision: <b>Blocked</b> (something that must hold does not, such as an open critical or high finding), <b>Incomplete</b> (nothing found blocks a release, but part of the proof is missing) or <b>Passed</b>. A check whose tests were not run reads Incomplete at best: tick <b>Also run my tests</b> where this website offers it, or run them in the Lantern app on your own computer.'],
   ['Results', 'What does “Explain in plain words” do with my code?', 'It asks a language model to describe what each function on your app’s main paths does, in everyday words, with every phrase tied to a real line or name in your code (a phrase that is not is thrown away). For that, Lantern copies the repository again for a moment, sends the code of up to 40 functions to the model through your free allowance, and deletes the copy. It asks you first, says exactly where the code goes, and you can turn it off in Settings. Ask Lantern sends your question and the check’s results, not your code. A screenshot you add is read by Lantern for its text and never kept; only that text goes with your question.'],
   ['Using it', 'Does it read phone apps?', 'Yes. Android (Java or Kotlin), iPhone (Swift), Flutter, React Native and .NET MAUI apps get an <b>On the phone</b> card with the screens, the links other apps can open, and every permission with a plain-words meaning and whether the code uses it, plus phone-specific checks (a link that reaches a database query, a secret in plain storage, cleartext traffic). An app with a server side gets both in one map.'],
-  ['Terms', 'What are the terms of use?', 'One page in plain words: <a href="https://github.com/LittleHenderson/Lantern/blob/main/docs/terms.md" target="_blank" rel="noopener">docs/terms.md</a>. In short: check code you own or may read, do not multiply accounts, your code copy is deleted when the check ends, your results stay until you delete them, nothing goes to a model unless you ask and agree, and the service is a preview with no warranty. The Lantern software itself is MIT-licensed.'],
+  ['Terms', 'What are the terms of use?', 'One page in plain words: <a href="https://github.com/LittleHenderson/Lantern/blob/main/docs/terms.md" target="_blank" rel="noopener">docs/terms.md</a>. In short: check code you own or may read, do not multiply accounts, your code copy is deleted when the check ends, your tests run only when you tick <b>Also run my tests</b> and agree, on a test machine made for that check alone, your results stay until you delete them, nothing goes to a model unless you ask and agree, and the service is a preview with no warranty. The Lantern software itself is MIT-licensed.'],
   ['Results', 'Can I trust what it says?', 'Every finding comes from a deterministic check, with the file, the line, and how a visitor reaches it. Lantern shows how sure it is about each connection, and never lets an AI create or dismiss a finding.'],
 ];
 function renderHelp(el) {
@@ -1418,6 +1544,9 @@ function renderSettings(el) {
       <label class="choice ${priv === 'full' ? 'on' : ''}"><input type="radio" name="defpriv" value="full" ${priv === 'full' ? 'checked' : ''}><span><b>With code snippets</b>The short lines the report talks about are kept too, so you can read them in the report. You still tick a box to agree on each check.</span></label>
       <div id="privmsg" class="hint"></div></div>
     <div class="card group"><h2>Plain-words explanations</h2><div id="aiset">${me ? '<div class="hint">Looking…</div>' : '<div class="hint">Sign in to use Explain in plain words and Ask Lantern.</div>'}</div></div>
+    ${testsOn() ? `<div class="card group"><h2>Your tests</h2><div class="alsorow"><div><b>${me.tests.agreed ? 'You agreed' : 'Not agreed yet'}</b><div class="hint">${me.tests.agreed
+      ? 'A check on which you tick “Also run my tests” runs them on a test machine made for that check alone. Taking it back means the next such check asks you first again.'
+      : 'Ticking “Also run my tests” on a check shows where they run and what that machine can reach, first.'}</div></div>${me.tests.agreed ? '<button class="btn" id="testsoff">Take it back</button>' : ''}</div><div id="testsmsg"></div></div>` : ''}
     <div class="card group"><h2>Account</h2>${me
       ? `<div class="alsorow"><div><b>${esc(name)}</b><div class="hint">Signed in with ${esc(via)}. ${esc(me.runs_today)} of today's ${esc(me.limits.runs_per_day)} checks used; the count starts again at midnight UTC.</div></div><div class="row"><button class="btn quiet" id="setsignoutall">Sign out everywhere</button><button class="btn" id="setsignout">Sign out</button></div></div>
         <div class="alsorow"><div><b>Delete my account</b><div class="hint">Deletes every run, report and share link Lantern keeps for you. Your GitHub or Google account is not touched.</div></div><button class="btn danger" id="setdelme">${icon('trash')}Delete</button></div>`
@@ -1441,6 +1570,11 @@ function renderSettings(el) {
   el.querySelector('#setsignout').onclick = signOut;
   el.querySelector('#setsignoutall').onclick = signOutAllSheet;
   el.querySelector('#setdelme').onclick = deleteMeSheet;
+  const toff = el.querySelector('#testsoff');
+  if (toff) toff.onclick = async () => {
+    try { await api('/v1/tests/consent', {method: 'POST', body: {agree: false}}); S.me.tests.agreed = false; S.wantTests = false; render(); }
+    catch (e) { el.querySelector('#testsmsg').innerHTML = note('err', esc(e.message)); }
+  };
   aiState(true).then(st => {
     const box = el.querySelector('#aiset'); if (!box || S.view !== 'settings') return;
     if (!st) { box.innerHTML = note('warn', 'Lantern could not reach the free allowance just now. Try again in a minute.'); return; }

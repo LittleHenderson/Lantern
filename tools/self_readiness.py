@@ -104,14 +104,40 @@ def _switcher_first(stage: list[str]) -> bool:
             and len(words) > at + 3)
 
 
+RUNNER = "lantern.runner"
+RUNNER_IMAGE = "cloud/runner/Dockerfile"
+
+
+def _runner_first(stage: list[str]) -> bool:
+    """The image's first program is Lantern's test-machine program (lantern/runner.py), which runs a project's tests
+    with Lantern's sandbox as an ordinary user and only answers the website: no ENTRYPOINT, and a command in the form
+    that starts no shell, which is Python with nothing but options before `-m lantern.runner serve`."""
+    if _last(stage, "ENTRYPOINT") is not None:
+        return False
+    cmd = _last(stage, "CMD")
+    if cmd is None or not cmd.startswith("["):
+        return False
+    try:
+        words = json.loads(cmd)
+    except ValueError:
+        return False
+    if not (isinstance(words, list) and len(words) > 3 and all(isinstance(w, str) for w in words)):
+        return False
+    if not re.fullmatch(r"(?:/usr(?:/local)?/bin/)?python3?(?:\.\d+)?", words[0]) or "-m" not in words:
+        return False
+    at = words.index("-m")
+    return all(w in PYTHON_FLAGS for w in words[1:at]) and words[at + 1:at + 3] == [RUNNER, "serve"]
+
+
 def _steps_apart(root: Path) -> str | None:
     """None while the repository shows why the website's image may start as root: root is its switcher's alone (the
     image's first program, cloud/lantern_cloud/switcher.py), which starts the service as an ordinary user it names
     (`LANTERN_CLOUD_SERVICE_USER`, not root and not nobody) with its own places on one disk (`LANTERN_CLOUD_DATA`)
     and each check's steps as a user of that check's own, which only root can switch to; the image requires each
     check's steps to run apart (`LANTERN_CLOUD_STEPS_APART=required`, cloud/lantern_cloud/apart.py); and every other
-    image of the project names a user that is not root, so the check's failure can only be about this image.
-    Otherwise what no longer holds."""
+    image of the project names a user that is not root, but the test machine's (cloud/runner/Dockerfile), whose
+    first program is the runner, which runs a project's tests as an ordinary user and nothing else as root, so the
+    check's failure can only be about these two images. Otherwise what no longer holds."""
     from lantern.readiness import Repo
     site = root / "cloud" / "Dockerfile"
     if not site.is_file():
@@ -130,7 +156,13 @@ def _steps_apart(root: Path) -> str | None:
         return "the image cloud/Dockerfile builds names no folder of the service's own (LANTERN_CLOUD_DATA)"
     for f in Repo(root).project_files:          # the files the readiness checks read (the tests' own are not)
         if f.rsplit("/", 1)[-1].lower() == "dockerfile" and f != "cloud/Dockerfile":
-            if not _not_root(_stage((root / f).read_text(encoding="utf-8", errors="replace"))):
+            other = _stage((root / f).read_text(encoding="utf-8", errors="replace"))
+            if f == RUNNER_IMAGE and not _not_root(other):
+                if not _runner_first(other):
+                    return (f"the image {f} builds starts as root and does not start the runner first "
+                            f'(CMD ["python", "-I", "-m", "{RUNNER}", "serve", ...], no ENTRYPOINT)')
+                continue
+            if not _not_root(other):
                 return f"{f} names no user other than root"
     return None
 

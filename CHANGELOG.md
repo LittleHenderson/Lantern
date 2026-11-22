@@ -9,6 +9,120 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The terms of use say what happens when a person asks a check to run their tests (`docs/terms.md`, "Your tests,
+  when you ask"; the owner's words of 2026-11-21): only after the tick and the person's yes on screen, a copy of the
+  code and the libraries the tests need (from pypi.org and registry.npmjs.org) go to a test machine made for that one
+  check, at the company that hosts Lantern; the tests run there as an ordinary user, in a network of their own, within
+  the minutes and memory the person chose; only their result and their output come back, and the machine is removed
+  when they end. Words that change are asked again before the next check with tests, and the yes can be taken back in
+  Settings. "What the service is" now says that the service runs a project's code only when the person asks it to
+  run their tests. The date of the terms is 2026-11-21, and the website's help answer that sums the terms up names the
+  tests too (`cloud/lantern_cloud/site/index.html`).
+- Lantern's own tests keep every thread they start on Python 3.11 (`tools/netguard/lantern_netguard.py`,
+  `_one_flag`). Python 3.11 guards the switching on of a trace or a profile function with one flag for the whole
+  program, held while the audit hooks hear of it, and the tests' network guard is such a hook: a thread whose
+  switch came while another thread's was inside it was refused, and a thread refused at its start never runs.
+  Coverage switches a function on at the start of every thread, so in CI's Python 3.11 job a test waited for its
+  website's thread with no end: 701 tests passed and 37 were skipped, then nothing until the runner's deadline of
+  100 minutes ended the run. On 3.11 the guard now asks again while that refusal is what came back, 2 seconds at
+  most; 3.12 has no such flag. Tests: `tests/test_netguard.py` (each of the two switches at a thread's start, and
+  one on a thread's own first line, in that moment held on purpose: the thread runs under the guard; the twins
+  without the guard lose the thread on 3.11 alone). The sandbox's guard in a project's own tests is the same kind
+  of hook and is not changed yet (`CLAUDE.md`, Known gaps).
+- The doorkeeper that is a test run's one way to its library store (`lantern/_stores.py`, `Door._pipe`) and the relay
+  of the guard's proxy for Lantern's own tests (`tools/netguard/lantern_netguard.py`, `_relay`) watch their
+  connections with the system's own selector (`selectors.DefaultSelector`), no longer with `select()`, which takes no
+  connection numbered 1,024 or more. In a program that held that many files and connections at once every connection
+  through them failed: on GitHub's Python 3.13 machine 187 of 7,240 tests, and 186 when it ran again, each a test that
+  goes through one of the two, after the tests before them had left over a thousand files open (each website a test
+  makes keeps its database files open while the web library keeps its handlers). The website's step starter waits the
+  same way and is left as it is: it is a program of its own, holding a few files for each step under way. Tests:
+  `tests/test_stores.py` (a plain request and a tunnel through a doorkeeper while the test program holds 1,100 files)
+  and `tests/test_netguard.py` (a program under the guard that holds 1,100 files reaches this computer through its
+  proxy); the 3 failed on the code before, beside twins that hold few.
+- A person can have a website check run their tests, once they have agreed to where the tests run (a firm pass or
+  fail, stage 3, step 6). The words come from the server and are the test machine's program's own (`GET /v1/tests`,
+  `runner.ask()`: where the tests run and what that machine keeps them from, where their libraries are fetched from,
+  and one fingerprint of both); each part of them rests on a wall the program puts up (`runner.walls()`), and the
+  program starts no test where one of those walls does not stand. The person's yes is kept for their account with
+  that fingerprint (`POST /v1/tests/consent`; "Take it back" in Settings), so words that change are asked again. A
+  check asks for its tests by link (`POST /v1/repos`, `tests`) or by upload (`POST /v1/uploads?tests=`, read before a
+  byte of the body): `true` for the tick box, or the command, its folder, the minutes and the memory, in the shape the
+  test machine takes; it is refused while the test machines are off (409), until the yes (412) and in another shape
+  (400). Where a check names no command, the packing step finds the one the project holds (`runner prepare --find`);
+  where the project has no tests, or none Lantern starts on a test machine, no machine is made and the result card says
+  why (with no tests: which to write first). Every step of a check is kept with the time it began (`steps`), and the
+  result card has a line for the tests: passed, failed, not run or no result, with why and what to do
+  (`summary.tests`, `worker.tests_line`). On the page: one tick line in Simple, shown only where the test machines are
+  on; the sheet with the server's words and no words of the page's own; the minutes and the memory in Advanced; each
+  step with its time; the card's tests line; answers on the help page. A store address the website names for libraries
+  is shown by its host alone, and one with any user part in it, an empty one too, is refused. Tests:
+  `tests/test_cloud_test_ask.py` (59), 24 more in `tests/test_cloud_test_runs.py` and 9 more in
+  `tests/test_runner_prepare.py`: on the code before, 87 of these 92 failed, and the 5 that passed check the walls of
+  the test machine's program that the words rest on.
+- A website check's tests run on a test machine made for that check, and nowhere else (a firm pass or fail, stage 3,
+  step 5; how a person asks for them is the entry above). A check that asks for
+  its tests (the command, the folder, the minutes and the memory, checked by the test machine's own rules when the run
+  starts) has them packed by a step of the check's own user: the libraries they need are fetched ready-built for the
+  machine's Python 3.12 on Linux (none is built from its source for it), from the stores the website names, and
+  packed with the project, leaving out packages the project brought (`python -m lantern.runner prepare`). The website
+  reads what that step wrote without following any link, copies the archive into a folder only the service may open,
+  hands it to a test machine made for the check and removes its copy. The machine's result goes to the analysis in a
+  file the website makes fresh (`LANTERN_TESTS_FROM`); in a website check the analysis runs no test itself and reads
+  that result by its shape (`runner.handed`): only a result about this check's command and folder, of tests that ran
+  to their end, counts. The report, the release decision, the readiness check and the Evidence Report say where the
+  tests ran, or why they did not run there (the machines are off, the libraries could not be had for the machine, the
+  archive is larger than a machine is handed, the server is short of space). The machine's minutes are not the
+  check's own. New: `lantern analyze --test-cwd DIR`, the folder the tests start in, by the same rule as the
+  website's packing (a folder of the project's own, reached through no link). Fixed on the way, found by the
+  website's first run of the packing step: the test machine's program read every setting written after the folders
+  (`pack P OUT --minutes 3 -- COMMAND`) as part of the test command; it now reads the command after the first `--`.
+  And a test folder called `-x` or `--` reaches the steps as a folder, not as a setting. Tests:
+  `tests/test_cloud_test_runs.py` (25, the whole run with a stand-in machine; each failed on the code before),
+  `tests/test_runner_prepare.py` (45: the packing, the reading of a result, the folder rule, the command line), one
+  more in `tests/test_runner.py` (the packing and the reading with the machine's real program).
+- One test machine of its own for each website check, made and removed by the website (a firm pass or fail, stage 3,
+  step 5; `cloud/lantern_cloud/machines.py`; used by a check whose tests were asked for, above). For each check the website makes, in a separate
+  organization at the hosting company, an app of the check's own on a private network of its own, an outbound rule
+  made before the machine, one shared address, and one machine of the runner image named by its fingerprint, given
+  the fingerprint of a key made for that check and nothing else; it hands the check's archive over, follows the log,
+  stops the tests past their minutes, takes the result by the shape the machine's program writes, ends the program,
+  and removes the machine and the app whatever happened before. At most two machines at once, first come first
+  served; the hosting company is asked no faster than it allows, and a "too many requests" is waited out. What a
+  check could not remove, and anything of the website's own tag older than any check can be, is removed by a sweep
+  at the website's start and every five minutes, which touches no other app. The key goes to the machine API alone
+  and is named in no error, log line or setting shown. The health page says one word about it (`test_machines`) and
+  the uptime check fails on `misset`, `behind` and `failed`; the owner's statistics have the counts. Off until its
+  key and image are set (`LANTERN_CLOUD_TEST_MACHINES_*`, `docs/deploy.md`). Tests: `tests/test_cloud_machines.py`
+  (67, the hosting company stood in for, and once the machine program's own door on this computer).
+- A limit on the programs a website check's tests run at once (a firm pass or fail, stage 3, step 5): on the test
+  machine the tests are held to 4,096 programs at once, each thread counted (`runner.PROCESSES`,
+  `sandbox.run(processes=)`). The sandbox's supervisor counts them as it counts their memory and stops a run over the
+  limit with everything it started and a sentence of its own, and the kernel refuses that user a new program at twice
+  the limit, so tests that start programs without end get no further between two looks. Tests stopped there did not
+  finish: the release decision says Incomplete, never a failure and never a pass, and "Tests pass" is skipped with its
+  points kept in the sum. The limit is asked for only where the tests run as a user nothing else runs as (the kernel
+  counts a user's programs on the whole computer), and a sandbox asked for it that keeps its own user starts nothing.
+  The test machine now asks five walls before it runs anything. Fixed on the way, found by the image's new case: where
+  the tests' output had a line open when the sandbox stopped them (pytest's dots after a test that passed, `unittest
+  -v` while a test runs), a run stopped at its memory limit read as tests that failed, on a person's own computer too;
+  the sandbox's line is now read wherever it stands in a line. Tests: `tests/test_sandbox_processes.py` (25; the 6
+  that hold a user of the tests' own run in CI's second pass as root), one more in `tests/test_sandbox_memory.py`
+  (pytest's dot; it fails on the reading from before), and a case in `tools/runner_image.py` that starts programs
+  without end. The image's CI job has the time its steps' own limits need (`tests/test_time_limits.py`).
+- The test machine's program and image (a firm pass or fail, stage 3, step 4): `lantern/runner.py` is what will run
+  a website check's tests on a machine made for that one check. It opens one door that answers only to the key made
+  for the check (the machine is given its fingerprint alone; anything else is told "not allowed"), takes the project
+  and the libraries the website fetched for it as one archive, unpacks it with the website's own rules
+  (`lantern/archive.py` now keeps a file's run bit and the links npm makes in `.bin` folders, and no other link), runs
+  the tests with Lantern's sandbox as an ordinary user, in a network of their own, on exactly the libraries handed in
+  (`sandbox.run(given=)`, `libraries.given`), says how it is going, keeps the result for the website, and ends by
+  itself when nobody comes. Where one of the four walls the design counts on does not stand on the machine (the
+  tests' own network, a doorman for every connection, the memory watch, an ordinary user for the tests), no test runs
+  and the result says which. The image (`cloud/runner/Dockerfile`) holds Python 3.12 and Node 22 from the pinned images
+  the sandbox names, and Lantern; no pip. The website hands it checks since step 5 (above). Tests: `tests/test_runner.py` (31; the 6
+  that start the program as its machine does run in CI's second pass as root), `tools/runner_image.py` (8 cases
+  against the built image, each on a machine of its own, in CI's new `runner-image` job).
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
   inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
   the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own

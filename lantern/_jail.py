@@ -6,7 +6,7 @@ run the command, and leave nothing it started behind.
 POLICY_JSON: {"writable": [dirs], "nobody": bool, "user": uid, "python": bool, "net": bool, "own_net": bool,
               "net_told": bool, "must": bool, "parent": pid, "cpu": seconds, "memory": bytes, "readable": [paths],
               "runs": path, "read": {"closed": [dirs], "open": [paths], "list": [dirs]}, "shm": bytes,
-              "sockets": bool}
+              "sockets": bool, "processes": count}
 * resource limits: processor time for each process (600 s, or `cpu`: the run's time limit on every processor it
   may use, so a test at work on several at once meets the clock first; until 2026-11-13 it was 600 s whatever
   the limit and however many processors), files up to 512 MB, no core dumps;
@@ -28,6 +28,18 @@ POLICY_JSON: {"writable": [dirs], "nobody": bool, "user": uid, "python": bool, "
   `memory` at all (the cloud service's steps, which read a project) a Python process keeps the 2 GB it always
   had. It is a watch and no wall: between two looks a program can take more, and what stops it then is the
   computer's own memory;
+* `processes` (Linux, 2026-11-21, the test machine's tests: `lantern.runner`): the programs the command and what it
+  started may run at once, each thread counted as one, the way the kernel counts a user's programs. The supervisor
+  looks at it from outside with the memory (`_programs`: every process beneath it, each with its threads, the
+  doorman left out); over the limit it prints `LANTERN-SANDBOX-LIMIT: processes <programs> <the limit>`, ends
+  everything and ends itself with `OVER_PROCESSES`. Below that look the kernel refuses a new program of the
+  command's user at `PROCESSES_WALL` times the limit (`RLIMIT_NPROC`), so that a flood of programs (each waits, and
+  more keep coming) gets no further between two looks, and a run that goes over the limit for a moment is stopped
+  by the look and its words, not by a refused program whose error would read as a failed test. The kernel counts a
+  user's programs on the whole computer, and does not hold root at all: the limit is the run's own only where the
+  command runs as a user nothing else runs as, so a launcher asked for it whose command keeps the launcher's user
+  starts nothing (the word `processes`), whatever `must` says. The runner's tests run as `nobody` on a machine that
+  holds that one check;
 * `own_net` (Linux, 2026-11-13): a network of the command's own, made before anything else is taken away: a new
   network namespace, which holds this computer's own address (`lo`, switched on) and nothing else. The command
   can listen there and call what it started; no other computer can be reached from it, and neither can what the
@@ -152,6 +164,9 @@ import time
 
 UNAVAILABLE = 119          # the launcher's own result when it did not start the command
 OVER_MEMORY = 118          # ... and when it stopped the command because of the memory in use
+OVER_PROCESSES = 117       # ... and when it stopped the command because of the programs it ran at once
+PROCESSES_WALL = 2         # the kernel refuses a new program of the command's user at this many times the limit
+PROCESSES_MOST = 1 << 20   # the most programs a limit may name
 LIMIT_MARK = "LANTERN-SANDBOX-LIMIT:"
 # Processor time for each process of a run: at least, and at most (the longest time limit on 4,096 processors). A
 # run is given its time limit on every processor it may use, so that a test working on several at once is stopped
@@ -188,6 +203,8 @@ REASONS = {
                    "for them and keeps the socket files of your other programs out of their reach",
     "closed": "what the tests are made of (Lantern's recorder, the program that runs them or its libraries) lies "
               "where the rules that close your own folders to the tests leave it unreadable",
+    "processes": "the limit on the tests' programs could not be set, because they would not run as a user of their "
+                 "own (the limit counts every program of the user they run as)",
     # Windows (lantern.wincontainer): the word its launcher prints, with Windows' own error number
     "container": "Windows could not put the tests inside the wall of its own made for this run (a container of "
                  "their own), which is what keeps every program they start from the network and from your own files",
@@ -568,6 +585,9 @@ def _restrict(policy: dict, hand=None) -> dict:
     cpu = policy.get("cpu")       # never under the 600 seconds a run always had; more when its time limit is longer
     cpu = cpu if type(cpu) is int and CPU_SECONDS < cpu <= CPU_MOST else CPU_SECONDS
     limits = [("CPU", cpu), ("FSIZE", 512 << 20), ("CORE", 0)]
+    most = _processes(policy)
+    if most:            # the kernel's wall above the supervisor's look (`_supervise`), for the user the command becomes
+        limits.append(("NPROC", PROCESSES_WALL * most))
     memory = _memory(policy)
     if memory and not _watches():           # no supervisor to count memory in use: the address space, as before
         limits.append(("AS", memory))
@@ -594,6 +614,9 @@ def _restrict(policy: dict, hand=None) -> dict:
         shm_number = _own_memory(shm)
         kept = shm_number == 0
     want = _user(policy)
+    if most and want is None:
+        _say("sandbox: the tests were to be held to a number of programs, and they would not run as a user of their own")
+        _refuse("processes")
     if want is not None:
         try:
             _become(want)
@@ -699,6 +722,12 @@ def _memory(policy: dict) -> int:
     """The bytes of memory the policy gives the command and what it starts, or 0 when it names no such limit."""
     n = policy.get("memory")
     return n if type(n) is int and n > 0 else 0
+
+
+def _processes(policy: dict) -> int:
+    """The programs the policy lets the command run at once (`processes`), or 0 when it names no such limit."""
+    n = policy.get("processes")
+    return n if type(n) is int and 0 < n <= PROCESSES_MOST else 0
 
 
 def _watches() -> bool:
@@ -1587,6 +1616,38 @@ def _in_use(me: int, limit: int, apart: int | None = None) -> int:
     return quick if quick <= limit else sum(_share(pid) for pid in pids)
 
 
+def _programs(me: int, apart: int | None = None) -> int:
+    """The programs beneath `me` as the kernel counts them for a user's limit: each thread one, a program that ended
+    and waits to be collected one. `apart`: one process that is not counted (the run's doorman, which is Lantern's
+    and not the tests'); what it started is. Read in one pass over /proc; the program's own name, which it chooses,
+    is passed over (the fields are read after the last ")")."""
+    rows: dict[int, tuple[int, int]] = {}
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return 0
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "rb") as f:
+                text = f.read()
+            fields = text[text.rindex(b")") + 2:].split()
+            rows[int(name)] = (int(fields[1]), max(1, int(fields[17])))
+        except (OSError, ValueError, IndexError):
+            continue
+    kids: dict[int, list[int]] = {}
+    for pid, (parent, _threads) in rows.items():
+        kids.setdefault(parent, []).append(pid)
+    total, todo = 0, [me]
+    while todo:
+        for k in kids.get(todo.pop(), []):
+            if k != apart:
+                total += rows[k][1]
+            todo.append(k)
+    return total
+
+
 def _beneath(me: int, table: dict | None = None) -> list[int]:
     """Every process whose chain of parents leads to `me` (`table`: what `_all` returned, to read it once)."""
     kids: dict[int, list[int]] = {}
@@ -1801,6 +1862,7 @@ def _supervise(policy: dict, cmd: list[str]) -> None:
         finally:
             mine.close()
     status, memory, over, look = None, _memory(policy), 0, 0.0
+    most, many = _processes(policy), 0
     # With `sockets` and `must` the command runs only beneath a doorman, and the doorman is this process's child.
     apart = child if policy.get("sockets") and policy.get("must") else None
     while True:
@@ -1813,23 +1875,34 @@ def _supervise(policy: dict, cmd: list[str]) -> None:
             break
         if got == 0:                                     # nothing has ended: wait for news (the second is a net)
             wait = 1.0
-            if memory:
+            if memory or most:
                 now = time.monotonic()
-                if now >= look:                          # how much memory everything beneath this process has in use
-                    used = _in_use(me, memory, apart)
-                    if used > memory:
-                        over = used
-                        break
+                if now >= look:      # how much memory everything beneath this process has in use, and how many programs
+                    near = False
+                    if most:
+                        count = _programs(me, apart)
+                        if count > most:
+                            many = count
+                            break
+                        near = count >= most // 2
+                    if memory:
+                        used = _in_use(me, memory, apart)
+                        if used > memory:
+                            over = used
+                            break
+                        near = near or used >= memory // 2
                     took = time.monotonic() - now
-                    # looked at more often near the limit, and never so often that the looking is the work: a
+                    # looked at more often near a limit, and never so often that the looking is the work: a
                     # look costs a read of /proc for every process of this computer
-                    look = now + took + (max(0.5, 20 * took) if used < memory // 2 else max(0.1, 10 * took))
+                    look = now + took + (max(0.1, 10 * took) if near else max(0.5, 20 * took))
                 wait = min(1.0, max(0.01, look - time.monotonic()))
             news = signal.sigtimedwait(watched, wait)
             if news is not None and news.si_signo != signal.SIGCHLD:
                 break                                    # asked to stop, or the starting program ended
     if over:
         _say(f"{LIMIT_MARK} memory {over} {memory}")
+    if many:
+        _say(f"{LIMIT_MARK} processes {many} {most}")
     left = _end_all(me)
     if left:
         _say(f"sandbox: {left} process(es) the command started could not be ended")
@@ -1837,6 +1910,8 @@ def _supervise(policy: dict, cmd: list[str]) -> None:
     sys.stderr.flush()
     if over:                                             # stopped for the memory in use: neither a pass nor a failure
         os._exit(OVER_MEMORY)
+    if many:                                             # ... or for the programs it ran at once
+        os._exit(OVER_PROCESSES)
     if status is None:                                   # asked to stop
         os._exit(128 + int(signal.SIGTERM))
     if os.WIFSIGNALED(status):                           # end the way the command did, so the caller reads the same

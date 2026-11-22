@@ -50,7 +50,8 @@ OPEN = ("· This check's user could read what is Lantern's own ({}), so the chec
 UNANSWERED = ("· The step that makes sure this check is kept apart from the others did not finish, so the check was "
               "stopped before anything of it was copied")
 WORDS = ("apart", "unchecked", "shared", "open")    # the health page's `steps`
-MADE_FOR_A_STEP = ("home", "out", "src", "upload.zip")   # what the service makes in a check's temp folder for a step
+MADE_FOR_A_STEP = ("home", "out", "src", "upload.zip", "tests")   # what the service makes in a check's temp folder
+                                                                # for a step (`tests`: the test machine's result)
 
 
 def as_root() -> bool:

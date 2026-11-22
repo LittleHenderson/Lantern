@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import stat
 import sys
@@ -41,7 +42,7 @@ from pathlib import Path
 
 import httpx
 
-from lantern import _jail, gitfacts, learn, programs, remote, removal, sandbox
+from lantern import _jail, gitfacts, learn, libraries, programs, remote, removal, runner, sandbox
 
 from . import apart, switcher
 from .cleanup import Cleanup
@@ -58,6 +59,8 @@ EXPLAIN_MAX = 40       # functions explained per click (entry points and three l
 STAGES = {"clone": "Copying the repository (nothing is run or installed)",
           "unpack": "Unpacking your upload (nothing is run or installed)",
           "audit": "Checking dependency versions against public advisories",
+          "libraries": "Fetching the libraries your tests need, for a test machine made for this check",
+          "tests": "Running your tests on a test machine made for this check",
           "analyze": "Mapping the code and running the checks",
           "save": "Saving your results"}
 # What a person is told when a step left something other than a plain file where a result belongs (a link, a
@@ -77,6 +80,23 @@ UPLOAD_EXPLAIN = ("An uploaded app is deleted when its check ends, so Lantern ca
                   "Explanations work for apps checked from a link, or in the Lantern app on your computer.")
 
 
+# The tests a check asks for (`runs.tests`) run on a test machine made for that check and removed after it (a firm pass
+# or fail, stage 3, step 5; `machines.py`). The website runs no test of a project itself. What the analysis is told
+# where they did not run there (`lantern.runner.not_run`), as sentences of their own.
+PREPARE_SECONDS = 900       # the packing step: the libraries fetched for the machine, and the project packed with them
+SPARE = 64 << 20            # bytes left free on the website's disk beside the machine's copy of the archive
+MACHINES_OFF = "The website's test machines are off, so no test of a project can run here."
+PREPARE_SLOW = (f"Fetching the libraries the tests need for the test machine took longer than {PREPARE_SECONDS // 60} "
+                "minutes, so the tests were not run.")
+PREPARE_FAILED = "The website could not pack the project for its test machine, so the tests were not run."
+TOO_LARGE = ("The project packed with its libraries has more than {mb:,} MB, the most a test machine is handed, so the "
+             "tests were not run.")
+NO_ROOM = "Lantern's server is short of space for the test machine's archive right now, so the tests were not run."
+MACHINE_FAILED = "Something went wrong on Lantern's side while the test machine ran the tests, so they were not run."
+TESTS_ODD = "What this check asked of its tests is not of the shape the website takes, so nothing of it was run."
+TESTS_KEYS = frozenset(("command", "cwd", "minutes", "memory"))
+
+
 STEP_NOT_STARTED = ("Lantern's server could not start the next step of this check, so it stopped it. Please try "
                     "again in a minute.")
 
@@ -94,6 +114,49 @@ class ShutDown(RunFailed):
 
     def __init__(self):
         super().__init__(SHUT_DOWN)
+
+
+def tests_asked(r: dict) -> dict | None:
+    """What a check asked of its tests (`runs.tests`: the command, the folder below the project's top it starts in,
+    its minutes and its memory), in the shape the test machine takes (`lantern.runner.settings`); None where the
+    check asked for none. A command and a folder that are both None: Lantern finds them in the project (the
+    website's tick box; `runner.prepare(find=True)`). `RunFailed` with the reason for a record of another shape:
+    nothing of that check runs."""
+    asked = r.get("tests")
+    if asked is None:
+        return None
+    if not isinstance(asked, dict) or set(asked) != TESTS_KEYS:
+        raise RunFailed(TESTS_ODD)
+    probe = dict(asked)
+    if asked["command"] is None and asked["cwd"] is None:
+        probe.update(command=["python", "-m", "pytest"], cwd="")    # only the limits are the check's own to take
+    try:
+        language = runner._machine_language(probe["command"])
+    except ValueError:
+        language = "python"                         # `settings` says what is wrong with the command
+    try:
+        runner.settings(json.dumps({"version": 1, **probe, "libraries": {"state": "none", "language": language}})
+                        .encode("utf-8"))
+    except runner.Refused as e:
+        raise RunFailed(str(e)) from None
+    return {k: asked[k] for k in sorted(TESTS_KEYS)}
+
+
+def finds(asked: dict | None) -> bool:
+    """The check names no test command: Lantern finds it in the project."""
+    return asked is not None and asked["command"] is None
+
+
+def tests_words(asked: dict | None) -> list[str]:
+    """What the analysis is told of the tests a check asked for: the command, its folder and its limits, for the
+    run's record. It runs none of them: in a check of the website the analysis reads the test machine's result
+    (`LANTERN_TESTS_FROM`, `lantern.pipeline`)."""
+    if asked is None:
+        return []
+    # The folder joined to its setting's name: a folder of the project may be called `-x` or `--`, which written as
+    # a word of its own would be read as a setting, or as the start of the command.
+    return ["--trace", "--sandbox", f"--test-cwd={asked['cwd']}", "--test-minutes", str(asked["minutes"]),
+            "--test-memory", str(asked["memory"]), "--", *asked["command"]]
 
 
 def clone_repo(link: str, dest: Path, log, token: str | None = None) -> Path:
@@ -240,8 +303,9 @@ class Worker:
                                    "Try again in a minute, or upload your app's folder instead.") from None
         return get
 
-    def __init__(self, settings: Settings, store: Store, cleanup: Cleanup | None = None):
+    def __init__(self, settings: Settings, store: Store, cleanup: Cleanup | None = None, machines=None):
         self.s, self.store, self.logs = settings, store, Logs()
+        self.machines = machines    # the test machines (`machines.Machines`), or None: off
         self.results = Path(settings.results_dir)
         self.work = Path(settings.work_dir)
         self.work.mkdir(parents=True, exist_ok=True)
@@ -317,14 +381,18 @@ class Worker:
                 line = line.replace(p + os.sep, "").replace(p, "")
             self.logs.add(rid, line)
 
+        steps: list[dict] = []          # every step with the time it began, for the website's progress
+
         def stage(key: str) -> None:
-            self.store.update_run(rid, stage=STAGES[key])
+            steps.append({"key": key, "at": _now()})
+            self.store.update_run(rid, stage=STAGES[key], steps=steps)
             log("· " + STAGES[key])
 
         start = time.monotonic()
         status, error, summary, commit = "error", None, None, None
         try:    # from the claim to the record at the end, everything is in here: a run that began is recorded as ended
             r = self.store.run(rid)
+            asked = tests_asked(r)          # before anything of the check is copied
             root = self.cleanup.fresh("run-")
             scrub += [str(root), os.path.realpath(root)]
             tmp = root / "tmp"
@@ -355,14 +423,21 @@ class Worker:
                 if not audits.is_file():
                     log("the dependency audit did not finish; the report will say so")
                     audits = None
+            handed, used = None, None
+            if asked is not None:
+                handed, took, used = self._tests(rid, root, repo, asked, log, stage)
+                start += took       # the tests have limits of their own; the check's own minutes are for its own steps
             stage("analyze")
             out = tmp / "out"
             out.mkdir()
             # With the audit file in hand the analysis is "online" as far as the report and `lantern verify` are
             # concerned (dependencies were checked); it still has no network, and reads the audits from the file.
-            cmd = self.analyze_cmd(repo, out, r["privacy"], offline=audits is None)
+            # `used`: the command the machine was handed (the one the packing step found, where the check named
+            # none); None where there was none to hand, and the analysis then reads only why from the file.
+            cmd = self.analyze_cmd(repo, out, r["privacy"], offline=audits is None) + tests_words(used)
             rc, output, timed_out = self._jailed(rid, root, cmd, cwd=tmp, net=False, log=log,
-                                                 timeout=self._left(start), audits=audits)
+                                                 timeout=self._left(start), audits=audits,
+                                                 extra={"LANTERN_TESTS_FROM": str(handed)} if handed else None)
             blocked = sandbox.blocked_reasons(output)
             if timed_out:
                 raise RunFailed(f"The analysis took longer than {self.s.job_timeout // 60} minutes and was stopped. "
@@ -427,6 +502,94 @@ class Worker:
 
     def upload_path(self, rid: str) -> Path:
         return self.uploads / f"{rid}.zip"
+
+    # ------------------------------------------------------------------ the check's tests, on a test machine
+    def _tests(self, rid: str, root: Path, repo: Path, asked: dict, log, stage) -> tuple[Path, float, dict | None]:
+        """The tests a check asked for, on a test machine made for that check and removed after it (a firm pass or
+        fail, stage 3, step 5). Returns the file of the machine's result for the analysis, or of why the tests did
+        not run there (`_hand`), the seconds this took, and the settings the machine was handed (`_on_a_machine`)."""
+        began = time.monotonic()
+        used: dict = {} if finds(asked) else dict(asked)
+        try:
+            result = self._on_a_machine(rid, root, repo, asked, log, stage, used)
+            if self.stopping.is_set():
+                raise ShutDown()
+            return _hand(root, result), time.monotonic() - began, used or None
+        except NotPlain:
+            raise RunFailed(NOT_PLAIN) from None
+
+    def _on_a_machine(self, rid: str, root: Path, repo: Path, asked: dict, log, stage, used: dict) -> dict:
+        """The libraries the project names fetched for the test machine and the project packed with them, by a step
+        of the check's own user with the network (`lantern.runner prepare`, as the audits get it); the archive read
+        from that step's folder held open, never through a link, into a folder of the service's own; handed to a
+        test machine (`machines.Machines.run`) and removed. The machine's result, or why the tests were not run.
+        Where the check names no command (`finds`), the packing step finds it, and `used` gets the settings the
+        machine was handed, which the analysis is told of; it stays empty where none was found."""
+        if self.machines is None:
+            log("tests   " + MACHINES_OFF)
+            return runner.not_run(MACHINES_OFF)
+        stage("libraries")
+        tmp = root / "tmp"
+        pack = tmp / "pack"
+        cmd = programs.python("lantern.runner", "prepare", str(repo), str(pack), "--minutes", str(asked["minutes"]),
+                              "--memory", str(asked["memory"]),
+                              *(["--find"] if finds(asked) else [f"--cwd={asked['cwd']}", "--", *asked["command"]]))
+        # The stores the libraries come from are the website's own setting (`lantern.libraries.VARIABLES`), else the
+        # official ones; never the project's.
+        stores = {v: os.environ[v] for v in libraries.VARIABLES.values() if os.environ.get(v)}
+        _rc, _output, timed_out = self._jailed(rid, root, cmd, cwd=tmp, net=True, log=log, timeout=PREPARE_SECONDS,
+                                               extra=stores)
+        if timed_out:
+            return runner.not_run(PREPARE_SLOW, "libraries")
+        fd = _folder(pack)
+        if fd is None:
+            return runner.not_run(PREPARE_FAILED)
+        mine = root / "machine"
+        try:
+            raw = _read_one(fd, runner.PREPARED, runner.MOST_PREPARED)
+            try:
+                said = runner.prepared(raw) if raw is not None else None
+            except runner.Refused:
+                said = None
+            if said is None:
+                return runner.not_run(PREPARE_FAILED)
+            if said["state"] == "not_run":
+                return said                  # the packing step's own words: what the project names, and why
+            # What the step packed is what was asked; where the check named no command, the step's own find
+            # stands for the command and its folder, and the limits are still the check's.
+            if any(said[k] != asked[k] for k in (("minutes", "memory") if finds(asked) else TESTS_KEYS)):
+                return runner.not_run(PREPARE_FAILED)
+            used.update({k: said[k] for k in TESTS_KEYS})
+            most = self.machines.archive_mb << 20
+            try:
+                size = os.stat(runner.ARCHIVE, dir_fd=fd, follow_symlinks=False).st_size
+            except FileNotFoundError:
+                return runner.not_run(PREPARE_FAILED)
+            if size > most:
+                return runner.not_run(TOO_LARGE.format(mb=self.machines.archive_mb))
+            if shutil.disk_usage(root).free < size + SPARE:
+                return runner.not_run(NO_ROOM)
+            os.mkdir(mine, 0o700)            # the service's own: no step's user is handed it
+            try:
+                if not _take_one(fd, runner.ARCHIVE, mine / runner.ARCHIVE, most=most):
+                    return runner.not_run(PREPARE_FAILED)
+            except TooLarge:
+                return runner.not_run(TOO_LARGE.format(mb=self.machines.archive_mb))
+            with contextlib.suppress(OSError):
+                os.unlink(runner.ARCHIVE, dir_fd=fd)     # the step's copy: the disk holds one while the machine runs
+        finally:
+            os.close(fd)
+        try:
+            stage("tests")
+            try:
+                return self.machines.run(mine / runner.ARCHIVE, asked["minutes"], asked["memory"], log=log,
+                                         cancel=self.stopping)
+            except Exception as e:  # noqa: BLE001 - the check goes on without its tests, and says why
+                _log.warning("a test machine's run ended with an error of Lantern's own (%s)", type(e).__name__)
+                return runner.not_run(MACHINE_FAILED)
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(mine / runner.ARCHIVE)
 
     def _unpack(self, rid: str, root: Path, log, start: float) -> Path:
         """An uploaded .zip: moved into the run's temp folder, then unpacked by `lantern.archive` inside the
@@ -739,6 +902,10 @@ class NotPlain(Exception):
     """Something a restricted step left where a result belongs is not a plain file of its own or a real folder."""
 
 
+class TooLarge(Exception):
+    """A file a restricted step wrote is larger than the service takes from it."""
+
+
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 MAX_CACHE_DEPTH = 8      # the explain cache is one folder of files; anything nested deeper is not Lantern's
 
@@ -776,26 +943,90 @@ def _there(out: Path, name: str) -> bool:
         os.close(fd)
 
 
-def _take_one(fd: int, name: str, dst: Path) -> bool:
-    """Copy the plain file `name` of the folder held open as `fd` to `dst`. False when there is no such file."""
+def _open_one(fd: int, name: str, most: int | None = None):
+    """The plain file `name` of the folder held open as `fd`, open to read; None when there is no such file.
+    `NotPlain` for anything but a plain file with one name, `TooLarge` for one of more than `most` bytes."""
     try:
         f = os.open(name, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | _NOFOLLOW, dir_fd=fd)
     except FileNotFoundError:
-        return False
+        return None
     except OSError as e:
         if e.errno in (errno.ELOOP, errno.EMLINK):
             raise NotPlain() from None
         raise
     try:
-        if not _own_file(os.fstat(f)):     # asked of what is open, not of its name (a folder or a pipe opens too)
+        st = os.fstat(f)
+        if not _own_file(st):     # asked of what is open, not of its name (a folder or a pipe opens too)
             raise NotPlain()
-        src = os.fdopen(f, "rb")
+        if most is not None and st.st_size > most:
+            raise TooLarge()
+        return os.fdopen(f, "rb")
     except BaseException:
         os.close(f)
         raise
+
+
+def _take_one(fd: int, name: str, dst: Path, most: int | None = None) -> bool:
+    """Copy the plain file `name` of the folder held open as `fd` to `dst`. False when there is no such file;
+    `TooLarge` when it has more than `most` bytes."""
+    src = _open_one(fd, name, most)
+    if src is None:
+        return False
     with src, open(dst, "wb") as to:
-        shutil.copyfileobj(src, to)
+        # One way to copy, with or without a limit: a file that grows after it was measured stops at the limit.
+        shutil.copyfileobj(src if most is None else _Counted(src, most), to)
     return True
+
+
+class _Counted:
+    """A file read through a count of its bytes: `TooLarge` once more than `most` came (`shutil.copyfileobj` asks
+    only for `read`)."""
+
+    def __init__(self, f, most: int):
+        self.f, self.most, self.got = f, most, 0
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self.f.read(size)
+        self.got += len(chunk)
+        if self.got > self.most:
+            raise TooLarge()
+        return chunk
+
+
+def _read_one(fd: int, name: str, most: int) -> bytes | None:
+    """The bytes of the plain file `name` of the folder held open as `fd`; None when there is none, or when it has
+    more than `most` bytes. `NotPlain` as for `_take_one`."""
+    try:
+        src = _open_one(fd, name, most)
+    except TooLarge:
+        return None
+    if src is None:
+        return None
+    with src:
+        raw = src.read(most + 1)
+    return raw if len(raw) <= most else None
+
+
+def _hand(root: Path, result: dict) -> Path:
+    """The test machine's result, or why the tests did not run there, written for the analysis into a folder the
+    service makes for it in the check's temp folder (`tests`, which the analysis's user is handed), in a file of a
+    new name. Something a step left at that place is never written through: `NotPlain`."""
+    folder = root / "tmp" / "tests"
+    try:
+        os.mkdir(folder, 0o700)
+    except FileExistsError:
+        raise NotPlain() from None
+    fd = _folder(folder)
+    if fd is None:
+        raise NotPlain()
+    name = secrets.token_hex(8) + ".json"
+    try:
+        f = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600, dir_fd=fd)
+    finally:
+        os.close(fd)
+    with os.fdopen(f, "w", encoding="utf-8") as to:
+        json.dump(result, to)
+    return folder / name
 
 
 def _take(out: Path, names, dest: Path, as_name: str = "{}") -> list[str]:
@@ -903,6 +1134,7 @@ def _summary(out: Path) -> dict:
         except (OSError, ValueError):
             return {}
     rd, sec, g = load("readiness.json"), load("security.json"), load("graph.json")
+    tests = tests_line(rd, load("run.json"))
     counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else {}
     meta = g.get("meta") if isinstance(g.get("meta"), dict) else {}
     def num(v):
@@ -920,7 +1152,36 @@ def _summary(out: Path) -> dict:
             "release": decision if isinstance(decision, str) and decision in ("Blocked", "Incomplete", "Passed") else None,
             "shape": shape[:80] if isinstance(shape, str) else None,
             "counts": {k: count(counts.get(k)) for k in ("critical", "high", "medium", "low")},
-            "files": num(meta.get("files")), **lane_summary(sec, meta)}
+            "files": num(meta.get("files")), **lane_summary(sec, meta), **({"tests": tests} if tests else {})}
+
+
+TESTS_SAID = ("passed", "failed", "not run", "no result")
+MOST_TESTS_WORDS = 600      # characters of each sentence of the card's tests line
+
+
+def tests_line(rd: dict, run: dict) -> dict | None:
+    """The result card's line about a check's tests (a firm pass or fail, stage 3, step 6): {state, why, fix}, the
+    state one of `TESTS_SAID` (passed, failed, not run, or no result: they ran and did not end by themselves, or
+    something they tried was refused), in the release decision's own words (its `tests` criterion) and, for tests
+    that were not run, the reason the run recorded (`trace.unavailable`: Lantern's sentence) unless the project has
+    no tests, where the decision's words say which tests to write. None where the check asked for no tests (its
+    run.json has no `trace`). Only values of the expected shape are kept: the files come from a stranger's check."""
+    tr = run.get("trace") if isinstance(run, dict) and isinstance(run.get("trace"), dict) else None
+    rel = rd.get("release") if isinstance(rd, dict) and isinstance(rd.get("release"), dict) else {}
+    crit = next((c for c in (rel.get("criteria") if isinstance(rel.get("criteria"), list) else [])
+                 if isinstance(c, dict) and c.get("id") == "tests"), None)
+    if tr is None or crit is None or crit.get("state") not in ("passed", "failed", "missing"):
+        return None
+
+    def words(v) -> str:
+        return " ".join(v.split())[:MOST_TESTS_WORDS] if isinstance(v, str) else ""
+    exist = any(isinstance(k, dict) and k.get("id") == "tests-exist" and k.get("status") == "pass"
+                for c in (rd.get("categories") if isinstance(rd.get("categories"), list) else [])
+                if isinstance(c, dict) for k in (c.get("checks") if isinstance(c.get("checks"), list) else []))
+    state = {"passed": "passed", "failed": "failed"}.get(crit["state"],
+                                                         "not run" if tr.get("ran") is False else "no result")
+    why = words(tr.get("unavailable")) if state == "not run" and exist else ""
+    return {"state": state, "why": why or words(crit.get("why")), "fix": "" if state == "passed" else words(crit.get("fix"))}
 
 
 LANE_KEYS = ("browser", "frontend", "server", "data")

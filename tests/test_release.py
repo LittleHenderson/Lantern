@@ -645,6 +645,14 @@ WEBSITE_IMAGE = ('FROM golang:1.26 AS tools\nRUN go install example.com/tool@v1\
                  '    PYTHONUNBUFFERED=1\n' + SWITCHER_CMD)
 GATEWAY_IMAGE = 'FROM python:3.12-slim\nRUN useradd app\nUSER app\nCMD ["uvicorn", "gateway.app:create_app"]\n'
 PLAIN_IMAGE = 'FROM python:3.12-slim\nCMD ["python", "-m", "http.server"]\n'
+RUNNER_CMD = 'CMD ["python", "-I", "-m", "lantern.runner", "serve", "--host", "0.0.0.0", "--port", "8080"]\n'
+RUNNER_IMAGE = ('FROM node:22-slim AS node\nFROM python:3.12-slim-bookworm\n'
+                'COPY lantern /usr/local/lib/python3.12/site-packages/lantern\n' + RUNNER_CMD)
+
+
+def _with_runner(text: str, where: str = "cloud/runner/Dockerfile") -> dict:
+    """The repository's images with the test machine's image (cloud/runner/Dockerfile) as `text`."""
+    return {"cloud/Dockerfile": WEBSITE_IMAGE, "gateway/Dockerfile": GATEWAY_IMAGE, where: text}
 
 
 def _website(cmd: str = SWITCHER_CMD, **env: str) -> dict:
@@ -695,11 +703,23 @@ ROOT_IMAGE = {
     "another image whose user is only in an earlier stage": ({"cloud/Dockerfile": WEBSITE_IMAGE,
         "gateway/Dockerfile": "FROM python:3.12-slim AS build\nUSER app\n" + PLAIN_IMAGE}, 1),
     "no website image at all": ({"gateway/Dockerfile": GATEWAY_IMAGE}, 1),
+    # the test machine's image starts as root for its runner alone, which runs a project's tests as an ordinary user
+    "the test machine's image, whose first program is the runner": (_with_runner(RUNNER_IMAGE), 0),
+    "the test machine's image with a user of its own": (_with_runner(RUNNER_IMAGE.replace("CMD", "USER app\nCMD")), 0),
+    "the test machine's image starting another program as root": (_with_runner(PLAIN_IMAGE), 1),
+    "the test machine's image starting the runner by a shell": (_with_runner(RUNNER_IMAGE.replace(
+        RUNNER_CMD, "CMD python -I -m lantern.runner serve\n")), 1),
+    "the test machine's image with an entry point before the runner": (_with_runner(RUNNER_IMAGE.replace(
+        "CMD", 'ENTRYPOINT ["/bin/sh", "-c"]\nCMD')), 1),
+    "the test machine's image starting the runner for another of its commands": (_with_runner(RUNNER_IMAGE.replace(
+        '"serve"', '"run"')), 1),
+    "the runner as root in an image that is not the test machine's": (_with_runner(RUNNER_IMAGE, "Dockerfile"), 1),
 }
 
 
 # Why each case where the switcher is not first, or the service's user or folder is not named, is refused
 NOT_FIRST, NO_USER, NO_FOLDER = "does not start its switcher first", "names no ordinary user", "names no folder"
+NOT_RUNNER = "does not start the runner first"
 ROOT_IMAGE_WHY = {
     "the service started directly, not by its switcher": NOT_FIRST, "the switcher only in a comment": NOT_FIRST,
     "the switcher started by a shell": NOT_FIRST, "the switcher behind an entry point": NOT_FIRST,
@@ -708,6 +728,11 @@ ROOT_IMAGE_WHY = {
     "the service's user is nobody": NO_USER, "no user named for the service": NO_USER,
     "no folder of the service's own": NO_FOLDER, "a folder of the service's own named by a relative path": NO_FOLDER,
     "the image no longer keeps each check's steps apart": "LANTERN_CLOUD_STEPS_APART=required",
+    "the test machine's image starting another program as root": NOT_RUNNER,
+    "the test machine's image starting the runner by a shell": NOT_RUNNER,
+    "the test machine's image with an entry point before the runner": NOT_RUNNER,
+    "the test machine's image starting the runner for another of its commands": NOT_RUNNER,
+    "the runner as root in an image that is not the test machine's": "Dockerfile names no user other than root",
 }
 
 
@@ -734,7 +759,9 @@ def test_the_website_image_may_start_as_root_only_while_it_keeps_each_checks_ste
     names). Lantern's readiness check of a container (`pkg-user`) fails for such an image, and the self-check fails
     on any failed check: this one may fail, said every time with its reason, and only while the repository still
     shows that reason (the image starts its switcher first, with an ordinary user and a folder of the service's own
-    named, requires the steps apart, and every other image of the project names a user that is not root)."""
+    named, requires the steps apart, and every other image of the project names a user that is not root, but the
+    test machine's, which may start as root only for its runner, which runs a project's tests as an ordinary
+    user)."""
     files, want = ROOT_IMAGE[case]
     code = _image_run(tmp_path, files, ROOT_FAILS)
     out = capsys.readouterr().out

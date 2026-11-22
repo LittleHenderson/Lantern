@@ -212,13 +212,18 @@ jobs:
           if [ -n "$was" ]; then sudo sysctl -w "$rule=$was"; fi
           [ "$status" -eq 0 ] || exit "$status"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/own-network.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
-      - name: The website's tests of each check under a user of its own and of its switcher, a second time as root (the pass above skips them)
+      - name: The website's tests of each check under a user of its own, of its switcher, of the test machine's program and of its limit on programs, a second time as root (the pass above skips them)
         timeout-minutes: 20
         # The cloud service runs each check's steps as a user of that check's own (cloud/lantern_cloud/apart.py,
         # 2026-11-18), which only root can do, so the tests of it need root and the pass above names them as skipped;
         # so do the tests of the switcher, the one part of the website's image that stays root, which starts the
-        # service as an ordinary user and each check's steps as the check's user (cloud/lantern_cloud/switcher.py).
-        # Here the file runs as root, and no test may be skipped. A check's user is none of this machine's users, and
+        # service as an ordinary user and each check's steps as the check's user (cloud/lantern_cloud/switcher.py),
+        # and the tests that start the test machine's program the way its machine starts it, as root, which runs a
+        # project's tests as an ordinary user (lantern/runner.py, a firm pass or fail, stage 3), and the tests of the
+        # limit on the programs those tests run at once, which holds only a user of the tests' own (tests/
+        # test_sandbox_processes.py, step 5), and the tests of the website's run of a check whose tests were asked
+        # for, whose packing step runs as the check's user there (tests/test_cloud_test_runs.py, step 5).
+        # Here the files run as root, and no test may be skipped. A check's user is none of this machine's users, and
         # the twins run Lantern's own analysis as that user, which reads Lantern's code from this checkout as it
         # reads it from the website's image: the folders above the checkout are opened for passing through (not for
         # listing) first. As above, the rule is written on the sudo line and then looked for in the run's own words.
@@ -229,7 +234,7 @@ jobs:
           d="$GITHUB_WORKSPACE"
           while [ "$d" != "/" ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
           sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" PYTHONDONTWRITEBYTECODE=1 \
-            python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py tests/test_cloud_switcher.py | tee "$RUNNER_TEMP/step-user.log"
+            python -m pytest -q -rs -p no:cacheprovider tests/test_cloud_step_user.py tests/test_cloud_switcher.py tests/test_runner.py tests/test_sandbox_processes.py tests/test_cloud_test_runs.py | tee "$RUNNER_TEMP/step-user.log"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/step-user.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
@@ -240,6 +245,38 @@ jobs:
         if: matrix.python == '3.13'
         timeout-minutes: 100
         run: bash tools/audit.sh
+
+  runner-image:
+    # The test machine's image (cloud/runner/Dockerfile, a firm pass or fail, stage 3) builds from the exact images the
+    # sandbox was checked with, and each case of tools/runner_image.py runs on a machine of its own, started as root
+    # the way the hosting company starts one: tests that pass as an ordinary user, tests that fail, tests that try to
+    # reach the door or read what the program holds (each passes only where it was refused) beside a server of their
+    # own, JavaScript tests run by npm, tests on a library handed in and the same tests without it, an archive that is
+    # no check, tests that start programs without end (stopped at the limit on programs, with nothing of them left),
+    # and pytest from a folder fetched ready-built the way the website fetches a project's libraries. Every machine
+    # refuses no key, a wrong key and another check's key, and stops with 0 when it is ended.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40              # the cases' own 20 and the steps without a limit of their own (tests/test_time_limits.py)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"       # the image's Python, for the folder of pytest below
+      - run: docker build -f cloud/runner/Dockerfile --build-arg "LANTERN_COMMIT=$GITHUB_SHA" -t lantern-runner .
+      - name: the image names the commit it was built from, and holds no pip
+        run: |
+          docker run --rm lantern-runner python -I -c "from lantern import _build; print(_build.COMMIT)" | tee commit.txt
+          test "$(cat commit.txt)" = "$GITHUB_SHA"
+          if docker run --rm lantern-runner python -I -c "import pip" 2>/dev/null; then echo "::error::pip is in the image"; exit 1; fi
+      - name: pytest for one case, fetched ready-built into a folder of its own, at the versions Lantern's own tests use
+        run: |
+          python -m pip install --quiet --disable-pip-version-check --no-compile --only-binary=:all: \
+            --target "$RUNNER_TEMP/pytest-libs" pytest==9.2.0 pluggy==1.7.0 iniconfig==2.3.1 packaging==26.3 pygments==2.21.0
+      - name: each case on a machine of its own
+        timeout-minutes: 20
+        run: python tools/runner_image.py lantern-runner --pytest "$RUNNER_TEMP/pytest-libs"
 
   lint:
     # Mistakes that are not bugs yet (undefined names, unused variables, likely-bug patterns), and every library

@@ -57,7 +57,7 @@ import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import _builder, _stores, depaudit, manifest, programs, results
+from . import _builder, _stores, manifest, programs, results
 
 FETCH_SECONDS = 600                     # the time a fetch gets
 DOOR_PORT = 8118                        # where the doorkeeper listens in a network of the fetch's own
@@ -128,7 +128,8 @@ class Store:
             except ValueError:
                 parts = host = port = None
             here = host in _stores.LOCAL
-            if not host or parts.username or parts.query or parts.fragment or parts.scheme not in ("https", "http") \
+            # a user part, even an empty name before a colon (`https://:x@host`), is refused: the host alone is shown
+            if not host or "@" in parts.netloc or parts.query or parts.fragment or parts.scheme not in ("https", "http") \
                     or (parts.scheme == "http" and not here) or not said.isprintable() or len(said) > 300:
                 raise Unavailable(f"the store named in {VARIABLES[language]} is not an address Lantern fetches from "
                                   "(https://…, or http:// on this computer), so no library was fetched")
@@ -167,6 +168,12 @@ class Plan:
         self.hashed = False                 # Python: the project writes fingerprints beside its requirements
         self.platforms: list[str] = []      # Python: the systems ready-built libraries must run on, when that is
                                             # not this one (the tests' container: `sandbox.image_platforms`)
+        # Python, where the tests run on another computer (the website's test machine: `runner.prepare`): the
+        # version of the Python there (`--python-version`), the words for it ("" is "this Python"), and why no
+        # library is built for it ("" leaves that to `cannot_build`)
+        self.python = ""
+        self.target = ""
+        self.no_build = ""
         # Python: the libraries the project names as optional (`[project.optional-dependencies]`, a group that is
         # not one for its tests): {"line", "text", "file", "name", "exact"}; `groups`: the names of those groups;
         # `optional_why`: why they are not asked for at all, when they are not
@@ -174,10 +181,32 @@ class Plan:
         self.groups: list[str] = []
         self.optional_why = ""
         self.record: dict = {"state": "none", "language": language}
+        # libraries another place fetched for this run before it began (`given`): the folder they are in, and the
+        # full path of the Python that fetched them (the first line of the programs they bring names it)
+        self.given: Path | None = None
+        self.fetched_with = ""
 
     @property
     def fetch(self) -> bool:
         return self.state == "fetch"
+
+
+def given(folder: Path | None, record: dict, language: str, fetched_with: str = "") -> Plan:
+    """A plan whose fetch was made before the run, somewhere else: the website fetches a project's libraries as a
+    step of the check's own and hands them to the test machine with the project, which fetches nothing
+    (`lantern.runner`). `folder` holds them as a fetch lays them out (Python: what `pip --target` wrote; JavaScript:
+    what npm put in `node_modules`), or is None when nothing was fetched; `record` is that fetch's record, kept as it
+    is (`sandbox.run` hands it back as the result's `libraries`); `fetched_with` the full path of the Python that
+    fetched them, which the first line of the programs they bring names. The caller has taken all three by shape.
+    `sandbox.run(given=...)` puts the folder where a fetch of the run's own puts its libraries, and the tests then run
+    on exactly those."""
+    found = Plan(language)
+    found.record = record
+    if folder is not None:
+        found.state = "fetch"
+        found.given = Path(folder)
+        found.fetched_with = fetched_with
+    return found
 
 
 # ---------------------------------------------------------------------------- what a Python project asks for
@@ -562,7 +591,7 @@ def _lock(repo: Path, found: Plan, reader: _Reader) -> None:
         return
 
 
-def _python(repo: Path, plan: Plan, words: list[str], offline: bool = False) -> _Reader:
+def _python(repo: Path, plan: Plan, words: list[str], offline: bool = False, bare: bool = False) -> _Reader:
     reader = _Reader(repo, plan, offline)
     _pyproject(reader)
     _pipfile(reader)
@@ -588,8 +617,8 @@ def _python(repo: Path, plan: Plan, words: list[str], offline: bool = False) -> 
             reader.add(o["line"], o["file"])
         plan.record["optional"] = _optional_record(plan, True)
         plan.optional = []
-    if not plan.asked:
-        return reader
+    if not plan.asked and not bare:
+        return reader           # on this computer the test runner installed beside Lantern is there
     head = Path(words[0]).name.lower()
     runner = "pytest" if head in ("pytest", "py.test") or words[1:3] == ["-m", "pytest"] else ""
     if runner and not any(_norm(re.split(r"[\[<>=!~; ]", a["text"], maxsplit=1)[0]) == runner for a in plan.asked):
@@ -876,27 +905,39 @@ def _elsewhere(lock: dict, store: Store) -> int:
 
 
 # ---------------------------------------------------------------------------- the plan
-def plan(repo: Path, language: str, words: list[str], cwd_rel: str = "", offline: bool | None = None) -> Plan:
+def plan(repo: Path, language: str, words: list[str], cwd_rel: str = "", offline: bool | None = None,
+         bare: bool = False) -> Plan:
     """What to do about a project's libraries before its tests run. Raises `sandbox.NoLibraries` (an `Unavailable`)
     when the tests must not be started: the project names another place to take libraries from, or the check is
-    offline and what the project names is not on this computer."""
+    offline and what the project names is not on this computer.
+
+    `bare`: the tests run where nothing is installed but the language itself (the website's test machine,
+    `runner.prepare`): a Python project that names no library still gets the test runner its command needs, and
+    packages a JavaScript project brought are never what its tests run on (with no lock file of npm's beside them,
+    the tests are not started)."""
     from .sandbox import NoLibraries as Unavailable
     found = Plan(language)
     reader = None
-    offline = depaudit.offline() if offline is None else offline
+    if offline is None:
+        from .depaudit import offline as _offline
+        offline = _offline()
     if language == "python":
-        reader = _python(repo, found, words, offline)
+        reader = _python(repo, found, words, offline, bare)
     elif language == "node":
         _node(repo, found, cwd_rel)
     else:
         return found                            # other languages: as before, on what the computer has
-    if not found.asked:
+    if not found.asked and not found.added:
         return found
     found.record.update(asked=found.asked, notes=found.notes)
     if language == "node":
         here = found.manifest.parent
         other = next((pm for name, pm in OTHER_JS_LOCKS.items() if os.path.lexists(here / name)), None)
         brought = (here / "node_modules").is_dir()
+        if bare and other and not found.lock:
+            raise Unavailable(f"the project names its packages in a {other} lock file, which Lantern does not fetch "
+                              "from yet (it reads npm's), and the test machine runs the tests only on packages "
+                              "fetched for them: name them in npm's lock file (package-lock.json)")
         if offline or (other and not found.lock):
             if not brought:
                 raise Unavailable(
@@ -1027,6 +1068,11 @@ def cannot_build(platforms=()) -> str:
     if not sys.platform.startswith("linux"):
         return "the kernel's rules a build is held by are Linux's"
     return ""
+
+
+def _no_build(found: Plan) -> str:
+    """Why no library is built from its source for the tests of this plan; "" where one may be (`cannot_build`)."""
+    return found.no_build or cannot_build(found.platforms)
 
 
 # ---------------------------------------------------------------------------- the fetch
@@ -1244,15 +1290,15 @@ def _not_built_for_here(output: str, found: Plan) -> tuple[str, str]:
         if "any" in systems or here in systems or not (systems or source):
             continue
         what = f"{_library_words(name)} {version}, the version the project's lock file fixes, has no ready-built package"
-        why = cannot_build(found.platforms)
-        unbuilt = f"Lantern does not build a library here: {why}" if why else "it was not built"
+        why = _no_build(found)
+        unbuilt = found.no_build or (f"Lantern does not build a library here: {why}" if why else "it was not built")
         if not systems:
             return (what + " (the lock file lists it as source only: it has to be built by running code it brings, "
                     f"and {unbuilt})"), ""
         others = sorted(systems)
         listed = ", ".join(others[:-1]) + (" and " if len(others) > 1 else "") + others[-1]
         mark = _MARKERS.get(others[0]) if len(others) == 1 else None
-        return (f"{what} for {here} (the lock file lists it ready-built for {listed} only"
+        return (f"{what} for {found.target or here} (the lock file lists it ready-built for {listed} only"
                 + (f", and as source, and {unbuilt}" if source else "") + ")",
                 f". Where the tests do not need it on {here}, the project can say which systems it is for where it "
                 "names it" + (f' (`{_library_words(name)}; sys_platform == "{mark}"`)' if mark else "")
@@ -1260,11 +1306,13 @@ def _not_built_for_here(output: str, found: Plan) -> tuple[str, str]:
     return "", ""
 
 
-def _pip_failure(output: str, store: Store, refused: int) -> str:
+def _pip_failure(output: str, store: Store, refused: int, target: str = "") -> str:
+    """Why pip did not get through, in Lantern's words. `target`: the Python the libraries are for, in words ("" is
+    the one that runs Lantern)."""
     missing = re.findall(r"No matching distribution found for ([^\s(<>=!~;\[]+)", output)
     if missing:
         return (f"{_library_words(missing[0])} was not found in the store ({store.host}) as a ready-built package "
-                "for this Python")
+                f"for {target or 'this Python'}")
     if "DO NOT MATCH THE HASHES" in output:
         return "a file the store handed out is not the one the project's fingerprint names"
     if "--require-hashes mode" in output or "Hashes are required" in output:
@@ -1753,7 +1801,7 @@ def _build_what_pip_left(job: _Fetch, repo: Path, output: str, built: dict):
                      "inside, or is not for this Python)")
         job.stop(_pip_failure(output, job.store, job.refused()) + f" ({words} was built from its source for this "
                  "run, and pip could still not take it beside the rest)")
-    if not wanted or cannot_build(found.platforms):
+    if not wanted or _no_build(found):
         return False
     made = 0
     for name, version, sure in wanted:
@@ -1809,6 +1857,8 @@ def _fetch_python(job: _Fetch, repo: Path, app: Path) -> Path:
             more += ["--find-links", str(job.dir / "built")]
         for system in found.platforms:
             more += ["--platform", system]
+        if found.python:                # the Python the tests run on is not this one (the website's test machine)
+            more += ["--python-version", found.python]
         # `--no-warn-conflicts`: pip otherwise compares what it fetched with the libraries installed in the Python
         # it runs in (those beside Lantern, which the tests never run on) and writes each one that wants another
         # version as an "ERROR" of the project's fetch.
@@ -1827,7 +1877,11 @@ def _fetch_python(job: _Fetch, repo: Path, app: Path) -> Path:
             return None
         if not again:
             why, then = _not_built_for_here(output, found)
-            job.stop(why or _pip_failure(output, store, job.refused()), then)
+            if not why:
+                why = _pip_failure(output, store, job.refused(), found.target)
+                if found.no_build and _to_build(output, found):
+                    why += f", and {found.no_build}"    # one that could have been built elsewhere is not, there
+            job.stop(why, then)
     rows = _reported(report)
     if rows is None:
         job.stop("pip did not say what it fetched")
@@ -1895,7 +1949,8 @@ def _fetch_node(job: _Fetch, repo: Path, app: Path, cwd_rel: str):
             raise sandbox.NoLibraries(f"the project's libraries could not be fetched: {found.lock.name} {ELSEWHERE} "
                                       f"({_elsewhere(lock, store)} of its packages), so the tests were not run on "
                                       "other libraries than the project's")
-        where, left = depaudit._npm_stage(found.lock, repo, stage)
+        from .depaudit import _npm_stage
+        where, left = _npm_stage(found.lock, repo, stage)
         if where is None:
             job.stop(_plain(left[0] if left else "npm's lock file cannot be used", 300))
         verb = "ci"
