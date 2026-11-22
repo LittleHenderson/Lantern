@@ -1,0 +1,28 @@
+"""Suggest a book the library should buy."""
+import html
+
+from fastapi import APIRouter, Form
+
+from . import data
+from .pages import layout
+
+router = APIRouter()
+
+FORM = ('<form method="post" action="/suggest">'
+        '<p><label for="title">Title</label> <input id="title" name="title" required></p>'
+        '<p><label for="author">Author</label> <input id="author" name="author"></p>'
+        '<p><label for="copies">How many copies</label> <input id="copies" name="copies" inputmode="numeric"></p>'
+        '<p><label for="why">Why this book</label> <textarea id="why" name="why"></textarea></p>'
+        '<p><button type="submit">Send the suggestion</button></p></form>')
+
+
+@router.get("/suggest")
+def suggest_form():
+    return layout("Suggest a book", FORM)
+
+
+@router.post("/suggest")
+def suggest(title: str = Form(...), author: str = Form(""), copies: str = Form("1"), why: str = Form("")):
+    count = int(copies) if copies.strip().isdigit() else 1
+    data.SUGGESTIONS.append({"title": title, "author": author, "copies": count, "why": why})
+    return layout("Thank you", f"<p>We will look at <em>{html.escape(title)}</em> at the next buying meeting.</p>")

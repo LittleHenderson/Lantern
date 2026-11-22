@@ -1,0 +1,11 @@
+// The sign-in page: a word about the card number when it does not look like one.
+(function () {
+  "use strict";
+  var card = document.getElementById("card");
+  var note = document.getElementById("card-note");
+  if (!card) return;
+  card.addEventListener("blur", function () {
+    var looksRight = /^[0-9]{8}$/.test(card.value.trim());
+    note.textContent = looksRight || !card.value ? "" : "Use the 8 digits on the front of your card.";
+  });
+})();

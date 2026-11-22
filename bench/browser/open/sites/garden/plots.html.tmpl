@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plots - Elm Street Community Garden</title>
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+<header>
+<nav aria-label="Main">
+<a href="index.html">Home</a>
+<a href="plots.html">Plots</a>
+<a href="events.html">Events</a>
+<a href="join.html">Join</a>
+</nav>
+</header>
+<main>
+<h1>Plots</h1>
+<p><label for="size">Plot size</label>
+<select id="size">
+<option value="all">All sizes</option>
+<option value="small">Small</option>
+<option value="large">Large</option>
+</select></p>
+<table id="plots">
+<thead><tr><th scope="col">Plot</th><th scope="col">Size</th><th scope="col">Free</th></tr></thead>
+<tbody>
+<tr data-size="small"><td>A1</td><td>Small</td><td>No</td></tr>
+<tr data-size="small"><td>A2</td><td>Small</td><td>Yes</td></tr>
+<tr data-size="large"><td>B1</td><td>Large</td><td>No</td></tr>
+<tr data-size="large"><td>B2</td><td>Large</td><td>Yes</td></tr>
+</tbody>
+</table>
+<p><a href="join.html">Ask for a plot</a></p>
+</main>
+<script src="js/main.js"></script>
+</body>
+</html>

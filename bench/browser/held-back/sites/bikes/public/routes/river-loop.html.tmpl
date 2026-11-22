@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The river loop - Ridgeline Bikes</title>
+<link rel="stylesheet" href="../css/site.css">
+</head>
+<body>
+<header class="top">
+<a class="brand" href="../index.html"><img src="../img/logo.svg" alt="Ridgeline Bikes, home" width="40" height="40"></a>
+<nav aria-label="Main">
+<a href="../index.html">Home</a>
+<a href="river-loop.html" aria-current="page">River loop</a>
+<a href="hill-climb.html">Hill climb</a>
+<a href="../prices.html">Prices</a>
+<a href="../book.html">Book a bike</a>
+</nav>
+</header>
+<main>
+<h1>The river loop</h1>
+<p>Twenty-two flat kilometres along the river and back over the old rail bridge. A good first ride.</p>
+<p><button type="button" class="zoom">Show the photo</button></p>
+<p><button type="button" class="climb" onclick="showClimb(this)" aria-expanded="false">Show the climb</button></p>
+<p class="climb-note" hidden>It climbs 40 metres in all, most of it on the ramp up to the bridge.</p>
+</main>
+<dialog id="photo">
+<p><img src="../img/river.svg" alt="The river path at dawn" width="480" height="300"></p>
+<p><button type="button" class="close-photo">Close</button></p>
+</dialog>
+<script src="../js/site.js"></script>
+</body>
+</html>

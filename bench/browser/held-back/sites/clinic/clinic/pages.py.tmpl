@@ -1,0 +1,111 @@
+"""The pages. Each is a shell that its own script fills in from the clinic's API."""
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
+
+from . import settings
+
+router = APIRouter()
+
+NAV = ('<header class="top"><a class="brand" href="/">Harbourside Clinic</a>'
+       '<nav aria-label="Main"><a href="/">Home</a> <a href="/book">Book</a> '
+       '<a href="/me">My appointments</a> <a href="/help">Help</a> <a href="/signin">Sign in</a></nav></header>')
+
+
+def page(title: str, body: str, script: str) -> str:
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<title>{title} - Harbourside Clinic</title>'
+            '<link rel="stylesheet" href="/static/site.css"></head>'
+            f'<body>{NAV}<main>{body}</main>'
+            f'<script src="/static/js/{script}.js"></script></body></html>')
+
+
+HOME = ('<div class="notice" id="notice"><p>Flu jabs are here: ask at the desk, no booking needed.</p>'
+        '<button type="button" class="close" id="close-notice" aria-label="Close the notice">'
+        '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">'
+        '<path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="2"/></svg></button></div>'
+        '<h1>Harbourside Clinic</h1>'
+        '<p>Doctors and nurses for the whole family, by the harbour.</p>'
+        '<h2>Opening hours</h2>'
+        '<table id="hours"><tr><td>Loading the opening hours…</td></tr></table>'
+        '<p>Phone: <span id="phone">555-0100</span></p>'
+        '<p><a href="#" id="directions">How to find us</a></p>'
+        '<p id="directions-text" hidden>Take the harbour bus to the last stop: we are the blue door beside the '
+        'pharmacy.</p>')
+
+BOOK = ('<h1>Book an appointment</h1>'
+        '<form id="book-form" action="/api/bookings" method="post">'
+        '<p><label for="name">Your name</label> <input id="name" name="name" autocomplete="name"></p>'
+        '<p><label for="email">E-mail address</label> <input id="email" name="email" type="email"></p>'
+        '<p><label for="slot">Time</label> <select id="slot" name="slot"></select></p>'
+        '<p id="reason-label">What is it about?</p>'
+        '<p><textarea id="reason" name="reason" rows="3" cols="40" aria-labelledby="reason-label"></textarea></p>'
+        '<p><button type="submit">Book</button></p>'
+        '</form>'
+        '<p id="confirmation" role="status"></p>'
+        '<p><button type="button" id="sooner">Look for a sooner time</button></p>'
+        '<p id="sooner-note" role="status"></p>'
+        '<p><button type="button" id="all-times">Show every free time</button></p>'
+        '<ul id="time-list" hidden></ul>')
+
+ME = ('<h1>My appointments</h1>'
+      '<ul id="appointments"><li>Loading your appointments…</li></ul>'
+      '<p id="me-note" hidden>Please <a href="/signin">sign in</a> to see your appointments.</p>')
+
+SIGNIN = ('<h1>Sign in</h1>'
+          '<form id="signin-form" action="/api/signin" method="post">'
+          '<p><label for="card">Health card number</label> '
+          '<input id="card" name="card" inputmode="numeric" autocomplete="username"></p>'
+          '<p id="card-note" class="note" role="status"></p>'
+          '<p><label for="pin">PIN</label> '
+          '<input id="pin" name="pin" type="password" autocomplete="current-password"></p>'
+          '<p><button type="submit">Sign in</button></p>'
+          '</form>')
+
+HELP = ('<h1>Help</h1>'
+        '<div class="topics">'
+        '<button type="button" class="topic chosen" data-panel="visits">Visits</button>'
+        '<button type="button" class="topic" data-panel="results">Test results</button>'
+        '<button type="button" class="topic" data-panel="prescriptions">Prescriptions</button>'
+        '</div>'
+        '<div class="panel" id="visits"><p>Come ten minutes early and bring your health card.</p></div>'
+        '<div class="panel" id="results" hidden><p>Results come by e-mail within five working days.</p></div>'
+        '<div class="panel" id="prescriptions" hidden><p>Ask for a repeat prescription at the desk or by phone.'
+        '</p></div>'
+        '<h2>Ask us a question</h2>'
+        '<form id="question-form" action="/api/question" method="post">'
+        '<p><label for="q-email">Your e-mail address</label> <input id="q-email" name="email" type="email"></p>'
+        '<p><label for="q-text">Your question</label><br>'
+        '<textarea id="q-text" name="question" rows="4" cols="40"></textarea></p>'
+        '<p><button type="submit">Send the question</button></p>'
+        '</form>'
+        '<p id="question-note" role="status"></p>')
+
+HELP_PAGES = {"en": page("Help", HELP, "help")}
+
+
+@router.get("/", response_class=HTMLResponse)
+def home():
+    return page("Welcome", HOME, "home")
+
+
+@router.get("/book", response_class=HTMLResponse)
+def book():
+    if not settings.BOOKING_OPEN:
+        raise HTTPException(status_code=404)
+    return page("Book an appointment", BOOK, "book")
+
+
+@router.get("/me", response_class=HTMLResponse)
+def me():
+    return page("My appointments", ME, "me")
+
+
+@router.get("/signin", response_class=HTMLResponse)
+def signin():
+    return page("Sign in", SIGNIN, "signin")
+
+
+@router.get("/help", response_class=HTMLResponse)
+def help_page():
+    return HELP_PAGES.get(settings.LANGUAGE, "")

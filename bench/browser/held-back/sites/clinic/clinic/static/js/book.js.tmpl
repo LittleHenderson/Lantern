@@ -1,0 +1,62 @@
+// The booking page: the free times from the API, the form sent as JSON, and two buttons.
+(function () {
+  "use strict";
+  var form = document.getElementById("book-form");
+  var select = document.getElementById("slot");
+  var list = document.getElementById("time-list");
+  var confirmation = document.getElementById("confirmation");
+
+  function addSlot(slot) {
+    if (!slot.id) {
+      console.error("book.js: a free time came without its id", slot.time);
+      return;
+    }
+    var option = document.createElement("option");
+    option.value = slot.id;
+    option.textContent = slot.time + ", " + slot.doctor;
+    select.appendChild(option);
+    var item = document.createElement("li");
+    item.textContent = option.textContent;
+    list.appendChild(item);
+  }
+
+  fetch("/api/slots").then(function (answer) {
+    if (!answer.ok) throw new Error("the free times answered " + answer.status);
+    return answer.json();
+  }).then(function (slots) {
+    slots.forEach(function (slot) { addSlot(slot); });
+  }).catch(function () {
+    confirmation.textContent = "The free times could not be loaded just now: please call us.";
+  });
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var body = {
+      name: form.elements.name.value,
+      email: form.elements.email.value,
+      slot: form.elements.slot.value,
+      reason: form.elements.reason.value
+    };
+    fetch(form.getAttribute("action"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (answer) {
+      confirmation.textContent = answer.ok
+        ? "Booked: the details are on their way to your e-mail address."
+        : "That did not go through: please look at the form again.";
+    });
+  });
+
+  document.getElementById("sooner").addEventListener("click", async function () {
+    var answer = await fetch("/api/slots");
+    var slots = answer.ok ? await answer.json() : [];
+    document.getElementById("sooner-note").textContent = slots.length
+      ? "The soonest free time is " + slots[0].time + "."
+      : "There is no sooner time today.";
+  });
+
+  document.getElementById("all-times").addEventListener("click", function () {
+    document.getElementById("time-list")?.toggleAttribute("hidden");
+  });
+})();

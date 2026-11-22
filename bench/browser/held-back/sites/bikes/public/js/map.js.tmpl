@@ -1,0 +1,25 @@
+// The trail map, drawn on the page's one canvas.
+(function () {
+  "use strict";
+  var canvas = document.getElementById("map");
+  var ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#dfe8d2";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  function trail(points, colour) {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 6;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    points.forEach(function (p, i) {
+      if (i) ctx.lineTo(p[0], p[1]);
+      else ctx.moveTo(p[0], p[1]);
+    });
+    ctx.stroke();
+  }
+  trail([[40, 360], [160, 300], [260, 330], [380, 250], [600, 280]], "#2b6f9e");
+  trail([[60, 80], [200, 140], [320, 90], [460, 160], [580, 60]], "#c0392b");
+  ctx.fillStyle = "#1f2a1f";
+  ctx.font = "18px Georgia, serif";
+  ctx.fillText("River loop", 420, 300);
+  ctx.fillText("Hill climb", 440, 120);
+})();

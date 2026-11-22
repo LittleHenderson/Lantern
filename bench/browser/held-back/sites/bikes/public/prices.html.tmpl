@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prices - Ridgeline Bikes</title>
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+<header class="top">
+<a class="brand" href="index.html"><img src="img/logo.svg" alt="Ridgeline Bikes, home" width="40" height="40"></a>
+<nav aria-label="Main">
+<a href="index.html">Home</a>
+<a href="routes/river-loop.html">River loop</a>
+<a href="routes/hill-climb.html">Hill climb</a>
+<a href="prices.html" aria-current="page">Prices</a>
+<a href="book.html">Book a bike</a>
+</nav>
+</header>
+<main>
+<h1>Prices</h1>
+<p>Every bike comes with a helmet, a lock and a pump.</p>
+<table id="prices">
+<thead><tr><th scope="col">Bike</th><th scope="col">An hour</th><th scope="col">A day</th></tr></thead>
+<tbody>
+<tr data-bike="road"><th scope="row">Road</th><td class="hour"></td><td class="day"></td></tr>
+<tr data-bike="gravel"><th scope="row">Gravel</th><td class="hour"></td><td class="day"></td></tr>
+<tr data-bike="electric"><th scope="row">Electric</th><td class="hour"></td><td class="day"></td></tr>
+</tbody>
+</table>
+<p><button type="button" class="vat" aria-pressed="false"><span class="label">Show the prices with tax</span></button></p>
+<section id="groups">
+<h2>Groups</h2>
+<p>Five bikes or more: one in five is free. Ask in the shop.</p>
+</section>
+</main>
+<script type="application/json" id="price-list">{"road": [12, 45], "gravel": [14, 52], "electric": [20, 75], "tax": 0.2}</script>
+<script src="js/site.js"></script>
+</body>
+</html>

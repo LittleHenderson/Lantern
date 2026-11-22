@@ -1,0 +1,27 @@
+// The help page: the topics, and the question form sent as JSON.
+(function () {
+  "use strict";
+  document.querySelectorAll(".topic").forEach(function (topic) {
+    topic.addEventListener("click", function () {
+      document.querySelectorAll(".panel").forEach(function (panel) {
+        panel.hidden = panel.id !== topic.dataset.panel;
+      });
+      document.querySelectorAll(".topic").forEach(function (other) {
+        other.classList.toggle("chosen", other === topic);
+      });
+    });
+  });
+  var form = document.getElementById("question-form");
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    fetch(form.getAttribute("action"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: form.elements.email.value, question: form.elements.question.value })
+    }).then(function (answer) {
+      document.getElementById("question-note").textContent = answer.ok
+        ? "Thank you: a nurse answers within two working days."
+        : "The question could not be sent: please call us.";
+    });
+  });
+})();
