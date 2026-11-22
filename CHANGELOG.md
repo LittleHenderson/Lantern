@@ -9,6 +9,11 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The starter files' "Write file" button on the report's Advanced readiness page stands beside its fold, no longer
+  inside the fold's title (since 0.9.0): a screen reader reads a fold's title as one button, so the button inside it
+  could be neither named nor pressed on its own. The browser job's accessibility checker found it the first time it
+  opened that page in the app with files to write; `tests/test_pages.py` now reads every fold's title in the files
+  of Lantern's own that write one.
 - What a browser saw, in the release decision and the report (a firm pass or fail, stage 5, step 3). The release
   decision has a sixth criterion, `browser`, required wherever `lantern browse` finds something to open (an app
   Lantern can start, or a folder of plain pages): a page that does not open, the page's own script failing, a form
