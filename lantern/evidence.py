@@ -490,9 +490,10 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         out.append("The release decision is about exactly the files, libraries, settings and tools it names, on the "
                    "computer it was made on. A change to any of them needs a new check, and a file in a folder "
                    "Lantern does not read (installed libraries, build output) is not part of it.")
+        said = {"behaviour": "What the app does when it runs. ", "browser": "What a browser shows of the project. "}
         for x in (rel.get("profile") or {}).get("not_required") or []:
-            if isinstance(x, dict) and x.get("id") == "behaviour" and isinstance(x.get("why"), str):
-                out.append("What the app does when it runs. " + x["why"][:400])
+            if isinstance(x, dict) and x.get("id") in said and isinstance(x.get("why"), str):
+                out.append(said[x["id"]] + x["why"][:400])
     if exp and exp.get("explanations"):
         out.append("Plain-language explanations were written by a model. Each phrase is checked to anchor to real "
                    "code, but the wording itself is not proof. The results digest does not cover explanations or "
@@ -672,7 +673,9 @@ def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None 
         sec = scan(g, offline) if do_scan else None
     gi = git_info(repo)
     record, unread = results.earlier(beside, "behaviour.json") if beside is not None else (None, None)
-    rd = assess(g, sec, run_meta, git=gi, behaviour=record, behaviour_unread=unread, out=beside)
+    seen, seen_unread = results.earlier(beside, "browser.json") if beside is not None else (None, None)
+    rd = assess(g, sec, run_meta, git=gi, behaviour=record, behaviour_unread=unread, out=beside, browser=seen,
+                browser_unread=seen_unread)
     new = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False), run_options(sec, run_meta))
     got = digest(new)
     differs = [k for k in new if old is not None and old.get(k) != new[k]] if old is not None else None

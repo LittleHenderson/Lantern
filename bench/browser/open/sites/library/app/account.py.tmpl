@@ -1,0 +1,63 @@
+"""Signing in with a library card, and the member's own page."""
+import hashlib
+import hmac
+import html
+import secrets
+
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import RedirectResponse
+
+from . import data
+from .pages import layout
+
+router = APIRouter()
+
+SIGN_IN_FORM = ('<form method="post" action="/login"><p><label for="card">Card number</label> '
+                '<input id="card" name="card" inputmode="numeric" autocomplete="username"></p>'
+                '<p><label for="pin">PIN</label> <input id="pin" name="pin" type="password" autocomplete="current-password"> '
+                '<button type="button" id="show-pin">Show PIN</button></p>'
+                '<p><button type="submit">Sign in</button></p></form>')
+
+
+def signed_in(request: Request) -> dict | None:
+    """The member this request comes from, or None."""
+    if data.DEBUG:
+        return data.DEMO_MEMBER
+    card = data.SESSIONS.get(request.cookies.get("sid", ""))
+    return data.MEMBERS.get(card) if card else None
+
+
+def pin_matches(member: dict, pin: str) -> bool:
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), b"riverside", 100_000).hex()
+    return bool(member["pin_digest"]) and hmac.compare_digest(digest, member["pin_digest"])
+
+
+@router.get("/login")
+def login_page():
+    return layout("Sign in", SIGN_IN_FORM)
+
+
+@router.post("/login")
+def login(request: Request, card: str = Form(""), pin: str = Form("")):
+    member = data.MEMBERS.get(card.strip())
+    if member is None or not pin_matches(member, pin):
+        return layout("Sign in", "<p>That card number and PIN do not match.</p>" + SIGN_IN_FORM, status=401)
+    sid = request.cookies.get("sid") or secrets.token_urlsafe(24)
+    data.SESSIONS[sid] = card.strip()
+    return RedirectResponse("/account", status_code=303)
+
+
+@router.get("/account")
+def account(request: Request):
+    member = signed_in(request)
+    if member is None:
+        return RedirectResponse("/login", status_code=303)
+    loans = "".join(f"<li>{html.escape(data.BOOKS[i]['title'])}</li>" for i in member["loans"]) or "<li>None</li>"
+    return layout("Your account", f"<p>Signed in as {html.escape(member['name'])}.</p><h2>Your loans</h2><ul>{loans}</ul>"
+                  '<form method="post" action="/logout"><button type="submit">Sign out</button></form>')
+
+
+@router.post("/logout")
+def logout(request: Request):
+    data.SESSIONS.pop(request.cookies.get("sid", ""), None)
+    return RedirectResponse("/", status_code=303)

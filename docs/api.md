@@ -87,7 +87,9 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | `POST /api/projects/<id>/agentfix` | `{"finding": id}` | job (202), only when an installed agent is chosen in Settings (400 otherwise, and for a finding that is not open). Copies the project to `LANTERN_HOME/fixes/`, runs the agent there as a fixed argument list (never a shell line) with no `LANTERN*` variables, analyzes the copy offline and compares it with the project's results. Result: `{"fix": id or null, "status": "fixed"\|"fixed_with_new"\|"not_fixed"\|"no_change", "verdict", "agent", "returncode", "files": [{"path", "change": "added"\|"changed"\|"deleted", "diff"}], "new": [{"rank", "title", "file", "line"}], "fixed": N, "contract": {"verdict", "words", "broken", "not_shown", "items": [{"id", "state", "facts"}]}}`. The verdict is the fix contract's (below, "The fix contract"; since 2026-11-16): `not_fixed` also for a change after which the finding no longer shows and was only hidden, or whose scanner read less; the tests are not run here, so `contract.not_shown` holds `tests`. The project is not touched |
 | `POST /api/projects/<id>/agentapply` | `{"fix": id}` | job (202): copies only the fix's changed files into the project, refusing if any of them changed since the copy was made, deletes the copy, and analyzes the project again |
 | `POST /api/projects/<id>/agentdiscard` | `{"fix": id}` | `{"ok": true}`: deletes the copy. An id that is not a fix → 400 |
-| `POST /api/projects/<id>/starter` | `{"name": "Dockerfile"}` | `{"ok", "wrote"}`; never overwrites |
+| `POST /api/projects/<id>/starter` | `{"name": "Dockerfile"}` | `{"ok", "wrote"}`; never overwrites. Since stage 5 of a firm pass or fail (2026-11-21) the names include `tests/test_first.py` for a project with no tests that is a FastAPI app Lantern can import (`lantern/firsttests.py`) |
+| `GET /api/projects/<id>/browser/pictures` | | Since stage 5 of a firm pass or fail (2026-11-21): `{"pictures": [{"page", "name"}]}`, the pictures of the pages the last `lantern browse` kept on this computer (`docs/browser.md`, "Pictures of the pages"), only when `browser.json` carries this computer's seal (else `[]`); `page` is the site's own text, escape it. 404 for an unknown project. Token as on every `/api/` route |
+| `GET /api/projects/<id>/browser/pictures/<name>` | | One of those pictures: `image/png` with `Content-Security-Policy: default-src 'none'`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`; 404 `"no such picture"` for a name that record does not list, one that is not 64 hex digits and `.png`, or a file that is not this user's plain file holding a picture whose SHA-256 is its name (`pictures.read`). The report fetches each with the token and shows it from a `data:` address (its policy allows no other) |
 | `GET /api/projects/<id>/learn` | | Starter progress: `{"steps": [{"title", "done", …}]}` |
 
 ### Pages and files per project
@@ -119,7 +121,13 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 ## Result files (`<project>/.lantern/`)
 
 The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`, `security`, `readiness`,
-`explanations`, `sources`, `stats`). The CLI writes the same files, so a UI can also be built on them directly.
+`explanations`, `sources`, `stats`, `browser`). The CLI writes the same files, so a UI can also be built on them directly.
+`browser` (since stage 5 of a firm pass or fail, 2026-11-21) is what the report shows of `browser.json`
+(`browse.view`): null unless that record carries this computer's seal and is of the code `readiness.json`'s release
+decision is tied to; `{ran: false, why, browser}` for a run that opened nothing; else `{ran: true, why, browser,
+pages, seconds, pictures, checks}`, `pictures` a count only, each check `{id, title, outcome, codes, why, blocks, saw}` (`blocks`: one of the checks that block a release; `saw`: at most three
+rows with at most eight fields each, every text cut to 300 characters, and no `saw` at all in a report made with
+`--privacy structure`, because the rows hold the site's own text). Escape every value.
 
 **How a report holds the map (since 2026-11-12).** Inside `report.html`, and only there, `graph.nodes` and
 `graph.edges` are written column by column (`lantern/columns.py`), because most of the time a phone needs to open a
@@ -1031,7 +1039,7 @@ average (the shop sample, shortened):
 ```
 
 `decision`: `Blocked` (a required criterion `failed`), `Incomplete` (none failed and one is `missing`) or `Passed`
-(every required criterion passed). Five criteria, each with `state` `passed`, `failed`, `missing` or
+(every required criterion passed). Six criteria, each with `state` `passed`, `failed`, `missing` or
 `not-applicable`, a `why` and, when it is not passed, a `fix`: `findings` (failed while a critical or high finding is
 open outside test code; an accepted one does not block and is named in `why`), `scanners` (missing while a scanner
 that applies did not finish or did not cover everything, or while the project keeps code as text that no scanner
@@ -1042,9 +1050,21 @@ no name and version); `not-applicable` and not required where the project lists 
 project's tests ran in this check and ended with 0; failed when they ended with anything else; missing when the
 project has none, they were not run, the sandbox could not be set up or stopped them, it refused something they
 tried, or they ended with an error in a run where the libraries the project names as optional could not be had and
-were left out, `trace.libraries.optional.fetched: false`), `behaviour` (not required where the project has no `lantern-behaviour.json`; else passed only when
+were left out, `trace.libraries.optional.fetched: false`; for a project with none, since 2026-11-21, `write` lists the
+tests to write first, read from the code, at most 50, as `{kind, where, file, line}` (`where` names the route as
+the readiness page's other lists do: `POST /api/notes`, and a Server Action as `the Server Action save`; `file` and
+`line` may be null) with `kind` one of `sign-in`, `signed-in-change`, `open-change`, `paid`, `read`, `page`, `write_count` counts all
+of them, and `fix` names at most three of each kind and, where Lantern offers one, how to write the first test file
+(`lantern starter PATH --write tests/test_first.py`, or the app's starter files); where a browser opened the site on
+this code, `why` says that this does not count in place of tests), `behaviour` (not required where the project has no `lantern-behaviour.json`; else passed only when
 `behaviour.json` carries this computer's seal, is of this plan and this code, and every case held; failed when a
-case came out broken). `blocking` and `missing` name the required criteria in those states. `bound_to` is what the
+case came out broken), `browser` (since 2026-11-21; not required where `lantern browse` would find nothing to open,
+no app Lantern can start and no folder of plain pages; else passed only when `browser.json` carries this computer's
+seal, is of this code (`of.code_sha256` = `bound_to.code.sha256`), opened at least one page, and each of `opens`,
+`script`, `forms`, `visitor` and `protections` held or had nothing to check, with `opens` held (`protections`
+`not-run` for `hosting-unknown` on plain pages is allowed and said); failed when one of those five came out
+`broken`; missing for any other record, one of those five `inconclusive` or `not-run`, or no record; `leads`,
+`outside` and `keyboard` block nothing and are said in `why`; `docs/browser.md`, "In the release decision"). `blocking` and `missing` name the required criteria in those states. `bound_to` is what the
 decision is about: `code.sha256` is one SHA-256 over every file of the project by path and content (the folders no
 reader looks into, and this run's results folder, are not in it), `dependencies.files` has one SHA-256 for each of
 the first 200 files that list libraries and `dependencies.sha256` one over all of them, `settings` holds the run's
@@ -1156,6 +1176,32 @@ first use and keeps in `LANTERN_HOME/seal.key`; it is absent when that folder ca
 usually lies in the project, so a project can bring a `behaviour.json` of its own: without a seal that holds, the
 record counts for nothing. The seal says which Lantern made the record, not that the record is right.
 
+### `browser.json`
+
+Written by `lantern browse PATH` (`lantern/browse.py`, `docs/browser.md`, a firm pass or fail, stage 5): the project's
+own site opened in a real browser, and what each check saw there. It is written whatever came out, through
+`results.write`. The release decision's `browser` criterion and the report's card read it (since step 3, the same
+day), each only when `seal` holds and `of.code_sha256` is this code's.
+
+| Field | Meaning |
+|---|---|
+| `of` | which code: `commit`, `dirty` (`gitfacts.info`), `lantern`, the version that made it, and `code_sha256` (since step 3), the SHA-256 over every file of the project as the release decision counts it (`release.code_digest`, the results folder left out), taken before anything is opened |
+| `ran` | `true` when the pages were opened; `false` with `why_not` (one of `browse.WHY_NOT`'s keys: `not-built`, `no-browser`, `no-browser-sandbox`, `browser-failed`, `no-site`, `not-started`, `no-sandbox`) and `why`, Lantern's own sentence for it |
+| `browser` | `{name, version, own_sandbox, how, keyboard_end}`: the browser as it names itself, whether it kept its own sandbox (always `true` in a record with `ran: true`: without it no page is opened) and how that was told, and what it does when Tab is pressed on the last control of a page, looked at once a run on a page of Lantern's own (`leaves` the page, `wraps` to the first control, `stays`, or `unknown`; the keyboard check reads a trap with it); `null` where no browser was started |
+| `site` | `{how, address, pages}`: `pages` (a folder of plain pages served by Lantern's own code) or `app` (the app started in the sealed box), the address it was opened at (`http://localhost:<port>`, where nothing listens) and how many pages the site says it has |
+| `opened` | each page opened: `{path, status, seconds}` (`status` is the answer's status, `null` where none came) |
+| `checks` | one row a check, in the order of `browse.CHECKS`: `{id, outcome, codes, saw, why}`; `outcome` is one of `held`, `broken`, `inconclusive`, `nothing-to-check`, `not-run` (only `held` counts as held), `codes` the codes of `docs/browser.md` of the decided rows only, `saw` what the browser saw (at most a few rows a check; a row with `undecided: true` came on a page where a script from another computer was refused while it loaded, and may come from that script being missing; a check whose every row is undecided is `inconclusive`); `why` says why a check came out `inconclusive`, `nothing-to-check` or `not-run` (Lantern's own sentence, or the word of `docs/browser.md` for a check that is not run, such as `hosting-unknown`), and is `null` on a check that is `broken` or `held`, except (since 2026-11-22) a held `leads` that left controls not clicked or a held `forms` that left forms not sent, where it says how many (`browse.not_clicked`, `browse.not_sent`: on the page opened anew Lantern could not tell which control or form was the one first seen); a `leads` that clicked nothing and had no link to look at, or a `forms` that sent nothing, for that reason, is `inconclusive` with the same sentence; and a held `outside` that left out requests the browser stopped itself before they were sent, because the page's own policy (its Content-Security-Policy) refused them, where it says how many (`browse.kept_in`, each address counted once a page) |
+| `asked_outside` | every request a page made for another computer, once for each address and page: `{address, host, kind, page, refused}` (`kind` as the browser names it: `script`, `image`, `fetch`, …; `refused` is always `true`: it was refused inside the browser). Since 2026-11-22 not a request the browser stopped itself before it was sent because the page's own policy refused it (`browse.KEPT_IN`): that one was asked of nobody |
+| `browser_own` | what the browser asked for itself, not its pages (method and host), refused at Lantern's door; not counted for the site |
+| `seconds`, `notes` | how long the run took; at most ten notes about the site (pages left out, a part not read) |
+| `pictures` | since step 3: `{set, shots, not_kept}` (and `why`, Lantern's own words, when the pictures' folder could not be made): `set` the run's folder under `LANTERN_HOME/pictures/` (32 hex digits) or `null`, `shots` each page with a picture, in the order opened, `{page, name, bytes}` (`name` the picture's SHA-256 and `.png`; at most ten), `not_kept` how many were not kept (not a PNG, over 8 MB, past ten, or not written). The pictures themselves are never in the results folder (`docs/browser.md`, "Pictures of the pages") |
+| `seal` | since step 3: this computer's seal over the record (`lantern/seal.py`, as on `behaviour.json`); absent where `LANTERN_HOME` cannot be written. Without a seal that holds the record counts for nothing |
+
+Everything in `opened`, `checks[].saw`, `asked_outside` and `browser_own` comes from the site or the browser: escape
+it like any other value. The command ends with 0 only when a check held and every other check held or had nothing to
+check, 1 when a check is broken, undecided or was not run, or none held, 2 when there is nothing to open, 3 when the
+site was not started or no browser could be used.
+
 ### `change/` (the change receipt, `lantern diff`)
 
 Written by `lantern diff [PATH] [BASE..HEAD]`, by the app's "What changed" (`POST /api/projects/<id>/change`) and by
@@ -1182,7 +1228,7 @@ checks into `.lantern/push/<branch>/` of the project (a name made of the ref's o
 | `base`, `head` | each side: `{"label": what the person called it ("main", "the files as they are now", "this pull request"), "commit", "lantern": the version of the Lantern that made this check, as its `run.json` says it, or null (results written before 2026-11-16, or text there that is no version), "code_sha256", "files", "uncommitted_changes"}` |
 | `same` | true when nothing below differs |
 | `counts` | `doors_added`, `doors_removed`, `doors_moved`, `logins_changed`, `logins_weaker`, `doors_added_open`, `links_broken`, `links_unanswered`, `findings_new`, `findings_fixed`, `findings_now_reached`, `findings_raised` (ranked higher than before), `findings_accepted`, `findings_reopened`, `paid_new`, `functions_changed`, `functions_added`, `functions_removed` |
-| `release` | `{"before", "after"}`: each `{"decision", "words", "criteria": {findings, scanners, dependencies, tests, behaviour}, "score", "grade", "counts"}` as `readiness.json` has them; `"changed"`; `"criteria"`: `[{"id", "before", "after"}]` for each criterion that moved; `"why"`: sentences; `"words"`: `"Passed → Blocked"` |
+| `release` | `{"before", "after"}`: each `{"decision", "words", "criteria": {findings, scanners, dependencies, tests, behaviour, browser}, "score", "grade", "counts"}` as `readiness.json` has them; `"changed"`; `"criteria"`: `[{"id", "before", "after"}]` for each criterion that moved; `"why"`: sentences; `"words"`: `"Passed → Blocked"` |
 | `doors` | pages, routes and commands (identity: kind + detail). `added`, `removed`: `[{"kind", "detail", "words", "node", "file", "line", "login": the route's `route_logins` record or null, "login_recorded"}]`; `moved`: the same handler under another address (`before`, `after`); `login_changed`: a route on both sides whose `login` differs (`before`, `after`, `weaker`) |
 | `links` | requests the page makes: `broken` (still made, and no route answers it any more), `unanswered` (new, and no route of the project answers it), `mended` (unanswered before, answered now), `unasked` (a route that is still there and that no page asks any more) |
 | `findings` | by finding id: `new`, `fixed`, `still_open` (on code this change touched, and open as before), `now_reached` (in the code before, and a page or route reaches it only now; `rank_before`), `rank_changed` (`rank_before`, `raised`), `accepted` (`how`: `nosec` for a comment on the line with a written reason, `accepted` for `lantern accept`; `reason`; `came`: true when the finding came with this change, accepted from its first day), `reopened` (accepted before, open now). A finding's id is made from its line's text, so an edited line has its finding under another id: one that is gone while its rule shows again in the same file is listed as `still_open`, `accepted` (a `# nosec` comment is an edit of the line) or `reopened`, and `fixed` is said only where the rule no longer shows in that file |

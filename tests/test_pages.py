@@ -6,6 +6,8 @@ nothing (the browser job in CI caught it). This reads each page's script with th
 and names every plain call (`f()` or `new F()`) whose function the page declares nowhere and that is not one of the
 browser's own. guide.html and the cloud website are left out: they are put together from parts of app.html when the
 server starts, so their files alone are not the whole script."""
+import re
+
 import pytest
 from tree_sitter import Parser
 
@@ -131,3 +133,52 @@ def test_the_check_sees_a_missing_helper_and_only_that():
             b"document.body.innerHTML = `${esc(arr([]).join(','))}`;\n"
             b"</script></body></html>\n")
     assert undefined_calls(page) == {"arr": [7]}
+
+
+
+# what a fold's title (`<summary>`) may not hold: a screen reader reads the whole title as one button, so a control
+# inside it can be neither named nor pressed on its own (axe-core's rule nested-interactive, which it counts serious)
+CONTROL = re.compile(r"<(?:button|a|input|select|textarea|details|summary|label)\b|\btabindex\s*=|\bcontenteditable\b", re.I)
+TITLE = re.compile(r"<summary\b[^>]*>(.*?)</summary>", re.S | re.I)
+
+
+def controls_in_titles(text: str) -> list[int]:
+    """The line of every fold's title that holds another control: a button, a link, a field, a label, another fold,
+    or anything made reachable with Tab."""
+    return [text.count("\n", 0, m.start()) + 1 for m in TITLE.finditer(text) if CONTROL.search(m.group(1))]
+
+
+def files_with_folds() -> dict[str, str]:
+    """{name: text} of every file of Lantern's own that writes a fold: its pages, its modules (the Evidence page, the
+    change receipt, the comment on a pull request), and the website's and the gateway's pages and modules."""
+    paths = [*sorted(VIEWER.glob("*.html")), *lantern_files.modules(deep=True)]
+    for part in ("cloud", "gateway"):
+        paths += sorted((lantern_files.ROOT / part).rglob("*.py")) + sorted((lantern_files.ROOT / part).rglob("*.html"))
+    texts = {lantern_files.named(p): p.read_text(encoding="utf-8") for p in paths}
+    return {name: text for name, text in texts.items() if TITLE.search(text)}
+
+
+def test_no_folds_title_holds_another_control():
+    """2026-11-22: the Advanced readiness page put a "Write file" button inside the title of each starter file's
+    fold (since 2026-11-02). The browser job's accessibility checker first opened that page in the app with starter
+    files to write when the app's "Show the pictures" was checked there (stage 5, step 3 of a firm pass or fail),
+    and failed it: 2 controls nested in another. The Python tests open no browser, so this reads every fold's title
+    in the files that write one; the browser job looks at the real page (`a11y.axe` in tools/viewer_smoke.js)."""
+    found = files_with_folds()
+    assert {"lantern/viewer/app.html", "lantern/viewer/report.html", "lantern/evidence.py",
+            "cloud/lantern_cloud/site/index.html"} <= set(found), sorted(found)       # else the wrong folder was read
+    assert {name: lines for name, text in found.items() if (lines := controls_in_titles(text))} == {}
+
+
+def test_the_fold_check_sees_a_control_in_a_title_and_only_that():
+    """The check itself: a button, a link, a field or a reachable part in a title is named with its line; text, an
+    icon, bold words and a control right after the title are not."""
+    text = ("<details><summary>${icon('file')}<b>Dockerfile</b><span class=\"note\">why</span></summary>"
+            "<pre>x</pre></details><button>Write file</button>\n"
+            "<details><summary>Why?</summary><a href=\"#x\">more</a></details>\n"
+            "<details class=\"starter\"><summary>${n} <button class=\"btn sm\">Write file</button></summary></details>\n"
+            "<details><SUMMARY>a <a href=\"#x\">link</a></SUMMARY></details>\n"
+            "<details><summary>a <input type=\"checkbox\"> box</summary></details>\n"
+            "<details><summary><span tabindex=\"0\">reachable</span></summary></details>\n"
+            "<details><summary>an <abbr title=\"x\">abbr</abbr> and <b>bold</b></summary></details>\n")
+    assert controls_in_titles(text) == [3, 4, 5, 6]

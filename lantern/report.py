@@ -45,6 +45,13 @@ def collect_sources(g: Graph, max_lines: int = 200) -> dict[str, str]:
 
 def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: dict | None,
                  privacy: str = "full", timings: dict | None = None, readiness: dict | None = None) -> Path:
+    from . import browse
+    # What a browser saw (`lantern browse`), read beside the other results: shown only when it carries this computer's
+    # seal and is of the code the release decision is tied to (`browse.view`)
+    seen, _ = results.earlier(out_dir, browse.RESULT_NAME)
+    code = readiness
+    for key in ("release", "bound_to", "code", "sha256"):
+        code = code.get(key) if isinstance(code, dict) else None
     bundle = {
         "version": __version__,
         "generated_at": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z").strip(),   # with the time zone: a report made on a server is read elsewhere
@@ -56,6 +63,7 @@ def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: d
         "privacy": privacy,
         "timings": timings or {},
         "readiness": readiness,
+        "browser": browse.view(seen, code if isinstance(code, str) else None, privacy),
     }
     if privacy != "full":
         for f in bundle["security"]["findings"]:

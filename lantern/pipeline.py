@@ -234,11 +234,14 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
     g.save(out / "graph.json")
     from . import calls
     calls.write(out / "calls.json", g)
-    # What `lantern behave` left in the results folder counts for the release decision only when it is of this code
-    # and this plan and carries this computer's seal (release.py); a file that cannot be used is said, not guessed at.
-    from . import behave, release
+    # What `lantern behave` and `lantern browse` left in the results folder counts for the release decision only when
+    # it is of this code (and this plan) and carries this computer's seal (release.py); a file that cannot be used is
+    # said, not guessed at.
+    from . import behave, browse, release
     record, unread = results.earlier(out, behave.RESULT_NAME)
-    rd = assess(g, sec, run_meta, git=git, behaviour=record, behaviour_unread=unread, out=out)
+    seen, seen_unread = results.earlier(out, browse.RESULT_NAME)
+    rd = assess(g, sec, run_meta, git=git, behaviour=record, behaviour_unread=unread, out=out, browser=seen,
+                browser_unread=seen_unread)
     results.write(out / "readiness.json", json.dumps(rd, indent=1))
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
     log(f"release {release.line(rd['release'])}")

@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, learn, pipeline, release, remote, results, usage
+from . import __version__, learn, pictures, pipeline, release, remote, results, usage
 from .packs import PACK_NAME
 from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
@@ -993,6 +993,21 @@ def detect_test_command(repo: Path, minutes: int | None = None, memory: int | No
     return d
 
 
+def _browser_pictures(app, p: dict) -> tuple[str | None, list[dict]]:
+    """(the run's folder, its pictures) that the browser record in the project's results folder names, when this
+    computer sealed that record (`seal.holds`); (None, []) for a record that came with the project, one that is not
+    there, and a results folder that is a link which came with the project."""
+    from . import browse, seal
+    if results.link_in_project(p["path"], Path(p["path"]) / ".lantern"):
+        return None, []
+    text = results.plain(app.out(p) / browse.RESULT_NAME)[0]
+    try:
+        record = json.loads(text) if text else None
+    except ValueError:
+        return None, []
+    return pictures.listed(record) if isinstance(record, dict) and seal.holds(record) else (None, [])
+
+
 def _csp(nonce: str | None) -> str:
     """Only our own scripts run on Lantern's pages: inline ones carry this response's nonce, and pages without
     a nonce (messages) run none at all."""
@@ -1355,6 +1370,20 @@ class Handler(BaseHTTPRequestHandler):
             ex = _load(app.out(p) / "explanations.json") if p else None
             rec = ((ex or {}).get("explanations") or {}).get((q.get("node") or [""])[0])
             return self._json({"record": rec, "metaphor": (ex or {}).get("metaphor")})
+        m = re.fullmatch(r"/api/projects/(\w+)/browser/pictures(?:/([^/]*))?", path)
+        if m:
+            # the pictures of the pages `lantern browse` opened: kept on this computer only (lantern/pictures.py),
+            # served behind the session key, and only those a record sealed by this computer names
+            p = app.store.project(m.group(1))
+            if not p:
+                return self._err(404, "unknown project")
+            run, shots = _browser_pictures(app, p)
+            if m.group(2) is None:
+                return self._json({"pictures": [{"page": s["page"], "name": s["name"]} for s in shots]})
+            data = pictures.read(run, m.group(2)) if any(s["name"] == m.group(2) for s in shots) else None
+            if data is None:
+                return self._err(404, "no such picture")
+            return self._send(200, data, "image/png", {"Content-Security-Policy": "default-src 'none'"})
         m = RESULT_FILE.fullmatch(path)
         if m:
             p = app.store.project(m.group(1))

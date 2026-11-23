@@ -1,0 +1,42 @@
+(function () {
+  "use strict";
+
+  // The opening times on the home page
+  var toggle = document.getElementById("hours-toggle");
+  if (toggle) {
+    toggle.addEventListener("click", function () {
+      var hours = document.getElementById("hours");
+      var open = hours.hidden;
+      hours.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+    });
+  }
+
+  // The plot list: one size at a time
+  var size = document.getElementById("size");
+  if (size) {
+    size.addEventListener("change", function () {
+      document.querySelectorAll("#plots tbody tr").forEach(function (row) {
+        row.hidden = size.value !== "all" && row.dataset.size !== size.value;
+      });
+      localStorage.setItem("garden-prefs", JSON.stringify({ size: size.value }));
+    });
+  }
+
+  // Events: remember which ones to be reminded of
+  document.querySelectorAll("button.remind").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var note = document.getElementById("note-" + button.dataset.event);
+      note.textContent = "We will remind you.";
+      var saved = JSON.parse(localStorage.getItem("garden-reminders") || "[]");
+      saved.push(button.dataset.event);
+      localStorage.setItem("garden-reminders", JSON.stringify(saved));
+    });
+  });
+
+  // The size picked last time on the plot list
+  var prefs = JSON.parse(localStorage.getItem("garden-prefs") || "{}");
+  if (size && prefs.size) {
+    size.value = prefs.size;
+  }
+})();

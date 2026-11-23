@@ -42,6 +42,16 @@ def poison_only(o, keys: set[str]):
     return o
 
 
+def browser_view() -> dict:
+    """What a browser saw, of the shape `lantern.browse.view` gives the report: every check broken with all its codes
+    and a row it saw. Put into a report that carries none, so that the card that shows it is drawn, and poisoned."""
+    from lantern import browse, release
+    return {"ran": True, "why": None, "browser": "Chrome 157", "pages": 2, "seconds": 4.2,
+            "checks": [{"id": c.id, "title": c.title, "outcome": "broken", "codes": list(c.codes), "why": None,
+                        "blocks": c.id in release.BROWSER_BLOCKS,
+                        "saw": [{"code": c.codes[0], "page": "/", "what": "what the browser saw"}]} for c in browse.CHECKS]}
+
+
 def main(argv: list[str]) -> int:
     only = None
     if len(argv) == 5 and argv[3] == "--only":
@@ -52,6 +62,8 @@ def main(argv: list[str]) -> int:
     src, dst = Path(argv[1]), Path(argv[2])
     dst.parent.mkdir(parents=True, exist_ok=True)
     data = read_bundle(src)
+    if not data.get("browser"):
+        data["browser"] = browser_view()
     dst.write_text(render(poison_only(data, only) if only else poison(data)), encoding="utf-8", newline="\n")
     print(dst)
     return 0

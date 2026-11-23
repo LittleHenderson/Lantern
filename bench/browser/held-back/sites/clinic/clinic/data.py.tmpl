@@ -1,0 +1,20 @@
+"""The clinic's data, kept in memory for the site."""
+import asyncio
+
+CLINIC = {"name": "Harbourside Clinic", "phone": "555-0100",
+          "hours": [["Monday to Friday", "8:00 to 18:00"], ["Saturday", "9:00 to 12:00"]]}
+SLOTS = [
+    {"id": "t1", "time": "Monday 9:00", "doctor": "Dr Okafor"},
+    {"id": "t2", "time": "Monday 9:20", "doctor": "Dr Okafor"},
+    {"id": "t3", "time": "Monday 10:40", "doctor": "Dr Lind"},
+    {"id": "t4", "time": "Tuesday 14:00", "doctor": "Dr Lind"},
+    {"id": "t5", "time": "Wednesday 8:20", "doctor": "Dr Okafor"},
+]
+BOOKED: set[str] = set()
+PATIENTS = {"40218877": {"name": "Ana Reyes", "pin": "4821",
+                         "appointments": [{"time": "Thursday 11:00", "doctor": "Dr Lind"}]}}
+SESSIONS: dict[str, str] = {}      # a visitor's clinic_session -> the card number of whoever signed in with it
+BOOKINGS: list[dict] = []
+QUESTIONS: list[dict] = []
+WAITING = {"minutes": 15}
+CHANGED = asyncio.Event()          # set when the waiting time changes

@@ -18,7 +18,7 @@ import tomllib
 from collections import Counter
 from pathlib import Path
 
-from . import manifest, quick, release, scanresult
+from . import firsttests, manifest, quick, release, scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph, route_words
 from .protections import advise as advise_protections
@@ -1039,9 +1039,12 @@ def advice(shape: str, stack: dict) -> list[str]:
 
 # ---------------------------------------------------------------------------- starter files
 
-def starter_files(repo: Repo, shape: str, stack: dict, env: dict[str, str]) -> dict[str, dict]:
-    """Files Lantern can write for you. Only ones that don't exist yet; nothing is written here."""
+def starter_files(repo: Repo, shape: str, stack: dict, env: dict[str, str], first: dict | None = None) -> dict[str, dict]:
+    """Files Lantern can write for you. Only ones that don't exist yet; nothing is written here. `first`: the first
+    test file for a project with no tests (`firsttests.starter`)."""
     out: dict[str, dict] = {}
+    if first and not repo.has(firsttests.NAME):
+        out[firsttests.NAME] = {"why": first["why"], "content": first["content"]}
     fw = set(stack["frameworks"])
     py = "python" in stack["languages"]
     pkgs = sorted((f for f in repo.project_files if f.rsplit("/", 1)[-1] == "package.json"), key=lambda f: f.count("/"))
@@ -1157,11 +1160,14 @@ def grade(score: float) -> str:
 
 
 def assess(g: Graph, sec: dict | None, run_meta: dict | None = None, *, git: dict | None = None,
-           behaviour: dict | None = None, behaviour_unread: str | None = None, out: Path | None = None) -> dict:
+           behaviour: dict | None = None, behaviour_unread: str | None = None, out: Path | None = None,
+           browser: dict | None = None, browser_unread: str | None = None) -> dict:
     """The readiness file: the checklist, and the release decision made from required criteria (`release.py`).
     `git`: what `gitfacts.info` says of the folder (asked here when not handed over). `behaviour`: the record
-    `lantern behave` left in the results folder, or `behaviour_unread`, why that file could not be used. `out`: this
-    run's results folder, left out of the project's files when it lies in the project."""
+    `lantern behave` left in the results folder, or `behaviour_unread`, why that file could not be used; `browser`
+    and `browser_unread` the same for `lantern browse`. `out`: this run's results folder, left out of the project's
+    files when it lies in the project."""
+    from . import browse
     root = Path(g.repo_root)
     repo = Repo(root, out)
     stack = detect_stack(repo, g)
@@ -1201,9 +1207,15 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None, *, git: dic
     if git is None:
         from .evidence import git_info
         git = git_info(root)
-    rel = release.decide(shape=shape, sec=sec, tests_exist=bool(test_files(repo)[1]), run_meta=run_meta,
+    # a project with no tests is told which to write first, from its code, and offered a first test file
+    tests_exist = bool(test_files(repo)[1])
+    write = None if tests_exist else firsttests.to_write(g, sec)
+    first = firsttests.starter(g, write) if write and not repo.has(firsttests.NAME) else None
+    rel = release.decide(shape=shape, sec=sec, tests_exist=tests_exist, run_meta=run_meta,
                          files=repo.files, bound=release.bind(root, repo.files, sec, run_meta, git),
-                         behaviour=behaviour, behaviour_unread=behaviour_unread)
+                         behaviour=behaviour, behaviour_unread=behaviour_unread, site=browse.site_kind(root, g),
+                         browser=browser, browser_unread=browser_unread, write=write,
+                         first=firsttests.NAME if first else None)
     # The decision does not come from the average, and the average cannot speak over it: 100 is for a passed
     # release, and a release that is blocked is not lifted by points earned elsewhere.
     score = release.score(checklist, rel["decision"])
@@ -1216,7 +1228,7 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None, *, git: dic
         # scanners that apply to this project and did not finish or did not cover everything (scanresult.py)
         "incomplete": scanresult.incomplete((sec or {}).get("tools")),
         "env_vars": sorted(env), "next_steps": todo[:8],
-        "starter": starter_files(repo, shape, stack, env),
+        "starter": starter_files(repo, shape, stack, env, first=first),
     }
 
 

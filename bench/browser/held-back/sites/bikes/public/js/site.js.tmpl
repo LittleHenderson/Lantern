@@ -1,0 +1,104 @@
+// Ridgeline Bikes: the script every page shares.
+(function () {
+  "use strict";
+
+  // The opening hours on the start page
+  var hoursButton = document.getElementById("hours-button");
+  if (hoursButton) {
+    hoursButton.addEventListener("click", function () {
+      var table = document.getElementById("hours");
+      table.hidden = !table.hidden;
+      hoursButton.setAttribute("aria-expanded", String(!table.hidden));
+    });
+  }
+
+  // The group rides and the trail news, from the site's own data folder
+  var rides = document.getElementById("rides");
+  if (rides) {
+    fetch("data/rides.json").then(function (answer) {
+      if (!answer.ok) throw new Error("the ride list answered " + answer.status);
+      return answer.json();
+    }).then(function (list) {
+      rides.replaceChildren.apply(rides, list.map(function (ride) {
+        var item = document.createElement("li");
+        item.textContent = ride.day + ": " + ride.name + " (" + ride.km + " km)";
+        return item;
+      }));
+    }).catch(function (error) {
+      console.error("Ridgeline: the group rides could not be shown.", error.message);
+      var item = document.createElement("li");
+      item.textContent = "Ask in the shop for this week's rides.";
+      rides.replaceChildren(item);
+    });
+  }
+  var news = document.getElementById("news");
+  if (news) {
+    fetch("data/news.json").then(function (answer) {
+      return answer.ok ? answer.json() : [];
+    }).then(function (items) {
+      if (!items.length) return;
+      news.replaceChildren.apply(news, items.map(function (text) {
+        var paragraph = document.createElement("p");
+        paragraph.textContent = text;
+        return paragraph;
+      }));
+    }).catch(function () {});
+  }
+
+  // The photo and the climb on the route pages
+  var photo = document.getElementById("photo");
+  document.querySelectorAll(".zoom").forEach(function (control) {
+    control.addEventListener("click", function () { photo.showModal(); });
+  });
+  document.querySelectorAll(".close-photo").forEach(function (button) {
+    button.addEventListener("click", function () { photo.close(); });
+  });
+  window.showClimb = function (button) {
+    var note = button.closest("main").querySelector(".climb-note");
+    note.hidden = !note.hidden;
+    button.setAttribute("aria-expanded", String(!note.hidden));
+  };
+
+  // The booking form: what was asked for is kept for the page that answers it
+  var booking = document.getElementById("booking");
+  if (booking) {
+    booking.addEventListener("submit", function () {
+      sessionStorage.setItem("ridgeline-booking", JSON.stringify({
+        name: booking.elements.name.value.trim(),
+        tel: booking.elements.tel.value.replace(/[^0-9+]/g, ""),
+        day: booking.elements.day.value,
+        bike: booking.elements.bike.value
+      }));
+    });
+  }
+  var booked = document.getElementById("booked");
+  if (booked) {
+    var saved = JSON.parse(sessionStorage.getItem("ridgeline-booking") || "null");
+    if (saved && saved.day) {
+      booked.textContent = "Your " + saved.bike + " bike is kept for you on " + saved.day + " until ten in the morning.";
+    }
+  }
+
+  // The price list, with or without tax
+  var priceList = document.getElementById("price-list");
+  if (priceList) {
+    var prices = JSON.parse(priceList.textContent);
+    var withTax = false;
+    var show = function () {
+      document.querySelectorAll("#prices tbody tr").forEach(function (row) {
+        var price = prices[row.dataset.bike], rate = withTax ? 1 + prices.tax : 1;
+        row.querySelector(".hour").textContent = "$" + (price[0] * rate).toFixed(2);
+        row.querySelector(".day").textContent = "$" + (price[1] * rate).toFixed(2);
+      });
+    };
+    show();
+    document.addEventListener("click", function (event) {
+      var button = event.target.closest("button.vat");
+      if (!button) return;
+      withTax = !withTax;
+      button.setAttribute("aria-pressed", String(withTax));
+      button.querySelector(".label").textContent = withTax ? "Show the prices without tax" : "Show the prices with tax";
+      show();
+    });
+  }
+})();

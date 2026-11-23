@@ -435,3 +435,69 @@ def test_terminal_drawer_over_http(srv, tmp_path):
     assert code == 403
     code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze"]}, host="evil.example:80")
     assert code == 403
+
+
+def _picture(seed: int) -> bytes:
+    """A small picture in PNG's own form, a different one for each seed."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    rows = b"".join(b"\x00" + bytes((seed % 256, 0, 9)) * 2 for _ in range(2))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def _raw(base, path, token="tok-123"):
+    req = urllib.request.Request(base + path)
+    if token:
+        req.add_header("X-Lantern-Token", token)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+def test_the_app_shows_a_browser_runs_pictures_only_with_its_key_and_only_those_a_sealed_record_names(srv, tmp_path):
+    """The pictures of the pages `lantern browse` opened are on this computer only (lantern/pictures.py): the app
+    lists and serves them behind its session key, and only those a record sealed by this computer names; a record
+    that came with the project names none, and a picture put beside them by hand is not served."""
+    import hashlib
+
+    from lantern import browse, pictures, seal
+    base, store = srv
+    repo = tmp_path / "site"
+    repo.mkdir()
+    (repo / "index.html").write_text("<h1>Notes</h1>", encoding="utf-8")
+    code, proj = call(base, "/api/projects", "POST", {"path": str(repo)})
+    pid = (proj.get("project") or proj)["id"]
+    one, two = _picture(1), _picture(2)
+    kept = pictures.keep([("/", one), ("/about", two)])
+    record = {"of": {"commit": None, "dirty": None, "lantern": "test", "code_sha256": "0" * 64}, "ran": True,
+              "why_not": None, "checks": [], "opened": [{"path": "/", "status": 200, "seconds": 0.1}],
+              "pictures": kept}
+    record["seal"] = seal.sign(record)
+    out = repo / ".lantern"
+    out.mkdir(exist_ok=True)
+    (out / browse.RESULT_NAME).write_text(json.dumps(record), encoding="utf-8")
+    names = [hashlib.sha256(x).hexdigest() + ".png" for x in (one, two)]
+    assert call(base, f"/api/projects/{pid}/browser/pictures") == (
+        200, {"pictures": [{"page": "/", "name": names[0]}, {"page": "/about", "name": names[1]}]})
+    status, heads, body = _raw(base, f"/api/projects/{pid}/browser/pictures/{names[1]}")
+    assert (status, heads.get("Content-Type"), body) == (200, "image/png", two), (status, heads)
+    assert heads.get("X-Content-Type-Options") == "nosniff" and heads.get("Cache-Control") == "no-store", heads
+    assert heads.get("Content-Security-Policy") == "default-src 'none'", heads
+    assert _raw(base, f"/api/projects/{pid}/browser/pictures/{names[1]}", token=None)[0] == 403      # no key
+    assert _raw(base, f"/api/projects/{pid}/browser/pictures", token="wrong")[0] == 403
+    stray = _picture(3)                                  # beside them by hand, named as Lantern names one
+    (pictures.place() / kept["set"] / (hashlib.sha256(stray).hexdigest() + ".png")).write_bytes(stray)
+    assert _raw(base, f"/api/projects/{pid}/browser/pictures/{hashlib.sha256(stray).hexdigest()}.png")[0] == 404
+    for odd in ("..%2F..%2Fsettings.json", "x.png", names[0].upper(), names[0][:-4]):
+        assert _raw(base, f"/api/projects/{pid}/browser/pictures/{odd}")[0] == 404, odd
+    assert _raw(base, "/api/projects/nosuch/browser/pictures")[0] == 404
+    planted = {k: v for k, v in record.items() if k != "seal"}                  # the same record, not sealed here
+    (out / browse.RESULT_NAME).write_text(json.dumps(planted), encoding="utf-8")
+    assert call(base, f"/api/projects/{pid}/browser/pictures") == (200, {"pictures": []})
+    assert _raw(base, f"/api/projects/{pid}/browser/pictures/{names[0]}")[0] == 404

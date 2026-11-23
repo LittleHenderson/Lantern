@@ -424,7 +424,12 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     can run a step as another user, so the first pass names them as skipped), through sudo like the second, and no
     test may be skipped there either. Since 2026-11-20 a Windows job of its own runs the sealed box's tests for
     Windows alone, so that what the box does there is known minutes in (GitHub hands out a job's log only once the
-    job has ended), and the Windows job runs them again with the whole suite."""
+    job has ended), and the Windows job runs them again with the whole suite. Since 2026-11-21 the browser job runs
+    the browser checks' tests on a real browser as the ordinary user, with the machine's rule against user namespaces
+    taken away for that one command and put back after it (the browser keeps its own sandbox); no test may be skipped
+    there, and the step looks in the run's own words for the browser its tests started. The same day the macOS job
+    and the Windows box's job run them too, each on the Chrome its machine comes with, with the tests of how the
+    browser is started and ended (and on Windows of the starter itself), under the same two looks."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -434,7 +439,7 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
         assert all(" -rs" in line for line in mine), (path.name, mine)
         assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
         runs += [(path.name, line) for line in mine]
-    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 8, runs
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 11, runs
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
     first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network
@@ -491,7 +496,7 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert ci.count("github.com/zricethezav/gitleaks/v8@v8.30.1") == built
     mac = ci[ci.index("\n  macos:"): ci.index("\n  browser:")]
     its = [line.strip() for line in mac.splitlines() if re.search(r"\bpython -m pytest\b", line)]
-    assert "runs-on: macos-latest" in mac and len(its) == 1 and ("ci.yml", its[0]) in runs and " -k " in its[0], mac
+    assert "runs-on: macos-latest" in mac and len(its) == 2 and ("ci.yml", its[0]) in runs and " -k " in its[0], mac
     # The type checkers: the same two versions in the three jobs, install scripts off, each version read back from
     # what was installed before it is named; named by the variables Lantern itself reads and by the tests' rule.
     # Nothing comes with them: neither package needs another, and the one pyright would take if it could (a file
@@ -510,6 +515,34 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert ("grep -q '^programs these tests started: .*pyright 1\\.1\\.414 (node at .*typescript 6\\.0\\.2 (node at ' "
             "pytest.log ||") in ci
     assert "tests/test_typecheck.py" in its[0] and " or test_typecheck" in its[0], its[0]      # macOS: the whole file
+    # The browser checks' tests: the ordinary user's, like the third pass, with the rule put back whatever they
+    # ended with, no test skipped, and the browser they started named in the run's own words.
+    browse = ci[ci.index("\n  browser:"):]
+    browse = browse[browse.index("The browser checks' tests on a real browser"):]
+    browse = browse[: browse.index("\n  install:")]
+    lines = [line.strip() for line in browse.splitlines() if re.search(r"\bpython -m pytest\b", line)]
+    assert lines == ['LANTERN_TESTS_BROWSER="$browser" python -m pytest -q -rs -p no:cacheprovider tests/test_browse.py '
+                     '| tee "$RUNNER_TEMP/browse.log" || status=$?'], lines
+    assert "set -o pipefail" in browse and not re.search(r"\bsudo\b[^\n]*\bpython\b", browse), browse
+    assert browse.index('sudo sysctl -w "$rule=0"') < browse.index(lines[0]) < browse.index('sudo sysctl -w "$rule=$was"') \
+        < browse.index('[ "$status" -eq 0 ] || exit "$status"') < browse.index("grep -q '^SKIPPED'") \
+        < browse.index("grep -q '^programs these tests started: .*browser '"), browse
+    # The same tests on the Chrome the macOS and Windows machines come with, each at the end of its job: no test may be
+    # skipped there either, and the browser they started is named in the run's own words.
+    box = ci[ci.index("\n  windows-box:"): ci.index("\n  macos:")]
+    for job, browser, files in (
+            (box, "C:/Program Files/Google/Chrome/Application/chrome.exe",
+             "tests/test_browse.py tests/test_browser_driver.py tests/test_winspawn.py"),
+            (mac, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+             "tests/test_browse.py tests/test_browser_driver.py")):
+        step = job[job.index("The browser checks' tests on a real browser"):]
+        lines = [line.strip() for line in step.splitlines() if re.search(r"\bpython -m pytest\b", line)]
+        assert lines == [f'LANTERN_TESTS_BROWSER="$browser" python -m pytest -q -rs -p no:cacheprovider {files} '
+                         '| tee "$RUNNER_TEMP/browse.log"'], lines
+        assert f'browser="{browser}"' in step and "set -o pipefail" in step, step
+        assert step.index(lines[0]) < step.index("grep -q '^SKIPPED'") \
+            < step.index("grep -q '^programs these tests started: .*browser '"), step
+        assert "\n      - name:" not in step and "sudo" not in step, step      # the job's last step, as its own user
     assert [what for what, _ in _rules_gates()] == [
         "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required"
         ".*LANTERN_TESTS_TYPECHECK=required",
@@ -637,7 +670,8 @@ def test_only_these_tests_may_try_the_network(request):
 # ----------------------------------------------------------------------------- benchmarks and the audit script
 BENCHMARKS = ("bench/run_bench.py", "bench/mobile/run_mobile.py", "bench/heldout/run_heldout.py", "bench/fuzz.py",
               "bench/manifests.py", "bench/links.py", "bench/behaviour/run_behaviour.py", "tools/large_apps.py",
-              "tools/mutation.py", "tools/load_test.py", "bench/speed.py", "bench/workspace.py", "bench/push_check.py")
+              "tools/mutation.py", "tools/load_test.py", "bench/speed.py", "bench/workspace.py", "bench/push_check.py",
+              "bench/browser/run_browser.py")
 LIVE_SUITE = ("bench/explain_eval.py", "bench/ask_eval.py")          # they go through bench/live.py's gate instead
 
 
@@ -855,11 +889,13 @@ def test_what_ends_at_the_proxy_is_counted_only_where_it_is_known_and_fails_the_
     browser asks for that is not listed fails the check."""
     assert _console_handlers("p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });\np.on('pageerror', e => 1);") \
         == ["p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });"]
-    app, report = _console_handlers((ROOT / "tools" / "viewer_smoke.js").read_text(encoding="utf-8"))
+    app, pictures, report = _console_handlers((ROOT / "tools" / "viewer_smoke.js").read_text(encoding="utf-8"))
     (site,) = _console_handlers((ROOT / "tools" / "cloud_site_smoke.js").read_text(encoding="utf-8"))
     assert "!outside.refusedFont(m)" in app and "!outside.refusedFont(m)" in site
+    # the pictures check (2026-11-21) starts on the app's home page, which may ask for the font sheet, as the app's check does
+    assert "!outside.refusedFont(m)" in pictures and "pictures console: " in pictures
     assert "refusedFont" not in report and "if (m.type() === 'error') errs.push(" in report
-    for line in (app, report, site):
+    for line in (app, pictures, report, site):
         assert "${outside.where(m)}" in line                   # an error line says which address it is about
     assert _console_handlers((ROOT / "tools" / "report_perf.js").read_text(encoding="utf-8")) == []
     helper = (ROOT / "tools" / "outside.js").read_text(encoding="utf-8")

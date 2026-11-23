@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join - Elm Street Community Garden</title>
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+<header>
+<nav aria-label="Main">
+<a href="index.html">Home</a>
+<a href="plots.html">Plots</a>
+<a href="events.html">Events</a>
+<a href="join.html">Join</a>
+</nav>
+</header>
+<main>
+<h1>Join the garden</h1>
+<form id="join" action="joined.html" method="get">
+<p><label for="name">Your name</label> <input id="name" name="name" autocomplete="name" required></p>
+<p><label for="email">E-mail address</label> <input id="email" name="email" type="email" autocomplete="email" required></p>
+<p><label for="plot">Plot you would like</label>
+<select id="plot" name="plot">
+<option value="small">Small</option>
+<option value="large">Large</option>
+</select></p>
+<p><input type="checkbox" id="rules" name="rules" value="yes" required> <label for="rules">I have read the garden rules</label></p>
+<p><button type="submit">Ask for a plot</button></p>
+</form>
+</main>
+<script src="js/main.js"></script>
+</body>
+</html>

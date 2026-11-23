@@ -1,0 +1,22 @@
+// A patient's own page: their appointments, or a word that they should sign in first.
+(function () {
+  "use strict";
+  function showSignIn() {
+    document.getElementById("appointments").hidden = true;
+    document.getElementById("me-note").hidden = false;
+  }
+  function show(appointments) {
+    var list = document.getElementById("appointments");
+    list.replaceChildren.apply(list, appointments.map(function (appointment) {
+      var item = document.createElement("li");
+      item.textContent = appointment.time + " with " + appointment.doctor;
+      return item;
+    }));
+  }
+  fetch("/api/me/appointments").then(function (answer) {
+    if (answer.status === 401) { showSignIn(); return null; }
+    return answer.json();
+  }).then(function (body) {
+    if (body) show(body.appointments);
+  });
+})();

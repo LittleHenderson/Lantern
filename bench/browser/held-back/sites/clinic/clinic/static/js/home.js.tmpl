@@ -1,0 +1,30 @@
+// The start page: the notice, the way to the clinic, and the opening hours from the API.
+(function () {
+  "use strict";
+  var notice = document.getElementById("notice");
+  var close = document.getElementById("close-notice");
+  if (close) close.addEventListener("click", function () { notice.hidden = true; });
+  var directions = document.getElementById("directions");
+  if (directions) {
+    directions.addEventListener("click", function (event) {
+      event.preventDefault();
+      var text = document.getElementById("directions-text");
+      text.hidden = !text.hidden;
+    });
+  }
+  fetch("/api/clinic").then(function (answer) {
+    return answer.json();
+  }).then(function (clinic) {
+    var table = document.getElementById("hours");
+    table.replaceChildren.apply(table, clinic.hours.map(function (pair) {
+      var row = document.createElement("tr");
+      pair.forEach(function (text) {
+        var cell = document.createElement("td");
+        cell.textContent = text;
+        row.appendChild(cell);
+      });
+      return row;
+    }));
+    document.getElementById("phone").textContent = clinic.phone;
+  }).catch(function () {});
+})();

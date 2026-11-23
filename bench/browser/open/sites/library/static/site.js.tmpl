@@ -1,0 +1,26 @@
+(function () {
+  "use strict";
+
+  // The catalogue: only the books that are on the shelf
+  var toggle = document.getElementById("on-shelf");
+  if (toggle) {
+    toggle.addEventListener("click", function () {
+      var only = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", String(only));
+      document.querySelectorAll("#books tbody tr").forEach(function (row) {
+        row.hidden = only && row.dataset.shelf !== "yes";
+      });
+    });
+  }
+
+  // Signing in: the PIN can be shown while it is typed
+  var show = document.getElementById("show-pin");
+  if (show) {
+    show.addEventListener("click", function () {
+      var pin = document.getElementById("pin");
+      var hidden = pin.type === "password";
+      pin.type = hidden ? "text" : "password";
+      show.textContent = hidden ? "Hide PIN" : "Show PIN";
+    });
+  }
+})();

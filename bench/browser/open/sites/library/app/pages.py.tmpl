@@ -1,0 +1,24 @@
+"""The page around every answer, and the pieces pages share."""
+import html
+
+from fastapi.responses import HTMLResponse
+
+NAV = (("/", "Home"), ("/catalogue", "Catalogue"), ("/events", "Events"), ("/suggest", "Suggest a book"),
+       ("/account", "Your account"))
+
+
+def layout(title: str, body: str, status: int = 200) -> HTMLResponse:
+    links = " ".join(f'<a href="{href}">{html.escape(name)}</a>' for href, name in NAV)
+    return HTMLResponse(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{html.escape(title)} - Riverside Library</title>"
+        '<link rel="stylesheet" href="/static/site.css"></head><body>'
+        '<header><a href="/" class="logo"><img src="/static/logo.svg" alt="Riverside Library, home" width="32" height="32"></a>'
+        f'<nav aria-label="Main">{links}</nav></header>'
+        f"<main><h1>{html.escape(title)}</h1>{body}</main>"
+        '<script src="/static/site.js"></script></body></html>', status_code=status)
+
+
+SEARCH_FORM = ('<form class="search" action="/search" method="get"><label for="q">Title or author</label> '
+               '<input id="q" name="q" type="search"> <button type="submit">Search</button></form>')

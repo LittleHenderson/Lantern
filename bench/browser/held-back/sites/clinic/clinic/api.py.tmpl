@@ -1,0 +1,93 @@
+"""The clinic's API: what the pages' scripts ask for, and what the forms send."""
+import asyncio
+import hmac
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+from . import data, settings
+from .pages import SIGNIN, page
+
+router = APIRouter()
+
+
+def signed_in_patient(request: Request) -> dict:
+    """The patient this request comes from; anybody else is refused."""
+    card = data.SESSIONS.get(request.cookies.get("clinic_session", ""))
+    if card is None:
+        raise HTTPException(status_code=401, detail="Please sign in")
+    return data.PATIENTS[card]
+
+
+async def json_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Send the form as JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Send the form as JSON")
+    return body
+
+
+@router.get("/api/clinic")
+def clinic():
+    return data.CLINIC
+
+
+@router.get("/api/slots")
+async def slots():
+    await asyncio.sleep(0.3)                    # the booking system answers in its own time
+    per_hour = 60 // settings.SLOT_MINUTES
+    return [dict(slot, per_hour=per_hour) for slot in data.SLOTS if slot.get("id") not in data.BOOKED]
+
+
+@router.get("/api/waiting")
+async def waiting():
+    """The walk-in waiting time for the screen in the waiting room: answered when it changes, or after a moment."""
+    try:
+        await asyncio.wait_for(data.CHANGED.wait(), timeout=settings.WAIT_TIMEOUT)
+    except asyncio.TimeoutError:
+        pass
+    return data.WAITING
+
+
+@router.get("/api/me/appointments")
+def my_appointments(patient: dict = Depends(signed_in_patient)):
+    return {"name": patient["name"], "appointments": patient["appointments"]}
+
+
+@router.post("/api/bookings")
+async def book(request: Request):
+    body = await json_body(request)
+    email = str(body.get("email", "")).strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=422, detail="Give an e-mail address")
+    slot = next((s for s in data.SLOTS if s.get("id") and s.get("id") == body.get("slot")), None)
+    if slot is None or slot["id"] in data.BOOKED:
+        raise HTTPException(status_code=409, detail="That time is no longer free")
+    data.BOOKED.add(slot["id"])
+    data.BOOKINGS.append({"name": str(body.get("name", "")), "email": email, "slot": slot["id"],
+                          "reason": str(body.get("reason", ""))})
+    return {"booked": slot["time"]}
+
+
+@router.post("/api/question")
+async def question(request: Request):
+    body = await json_body(request)
+    text = str(body.get("question", "")).strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Write your question first")
+    data.QUESTIONS.append({"email": str(body.get("email", "")), "question": text})
+    return {"received": True}
+
+
+@router.post("/api/signin")
+def signin(request: Request, card: str = Form(""), pin: str = Form("")):
+    patient = data.PATIENTS.get(card.strip())
+    if patient is None or not hmac.compare_digest(pin.encode("utf-8"), patient["pin"].encode("utf-8")):
+        return HTMLResponse(page("Sign in", '<p class="error">That card number and PIN do not match.</p>' + SIGNIN,
+                                 "signin"), status_code=401)
+    session = request.cookies.get("clinic_session")
+    if session:
+        data.SESSIONS[session] = card.strip()
+    return RedirectResponse("/me", status_code=303)

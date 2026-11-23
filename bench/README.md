@@ -3,7 +3,9 @@
 This file: the Python map benchmark (edges against a trace). Also here: `heldout/` (the frozen held-out set of 2026-11-09:
 five documented-vulnerable public apps, three clean ones and safe/unsafe twins, scored by `heldout/run_heldout.py`;
 `heldout/baseline.md` is the before), `behaviour/` (a throw-away app, safe and with each of 31 planted problems, run
-by `lantern behave` in the test sandbox: `behaviour/README.md`, `behaviour/results.md`), `mobile/` (findings precision on real phone
+by `lantern behave` in the test sandbox: `behaviour/README.md`, `behaviour/results.md`), `browser/` (2026-11-22: sites
+made for the purpose, safe, with planted problems and look-alikes, opened by `lantern browse` in a real browser with no
+network, an open part built against and a held-back part: `browser/README.md`, `browser/open/results.md`), `mobile/` (findings precision on real phone
 apps, labelled by engineers), `explain_eval.py` (explanation pass rate with a real model), `ask_eval.py` (Ask Lantern
 answers), `fuzz.py` (random file mutation), `manifests.py` (project files of the wrong shape), `links.py` (every file
 of the samples as a link out of the project, a pipe, a link to itself; `links_results.md` is the last run),

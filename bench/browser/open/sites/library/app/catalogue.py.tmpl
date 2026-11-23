@@ -1,0 +1,63 @@
+"""The catalogue, one book, the search and the events."""
+import asyncio
+import html
+
+from fastapi import APIRouter, HTTPException
+
+from . import data
+from .pages import SEARCH_FORM, layout
+
+router = APIRouter()
+CATALOGUE_READY = asyncio.Event()
+CATALOGUE_READY.set()           # the books are read in when the app starts
+
+
+def book_row(book_id: int, book: dict) -> str:
+    where = "yes" if book["shelf"] else "no"
+    return (f'<tr data-shelf="{where}"><td><a href="/books/{book_id}">{html.escape(book["title"])}</a></td>'
+            f'<td>{html.escape(book["author"])}</td><td>{"On the shelf" if book["shelf"] else "Lent out"}</td></tr>')
+
+
+@router.get("/")
+def home():
+    book = data.BOOKS[data.FEATURED]
+    return layout("Welcome", f'<p>Book of the week: <a href="/books/{data.FEATURED}">{html.escape(book["title"])}</a> '
+                  f'by {html.escape(book["author"])}.</p>{SEARCH_FORM}'
+                  '<p>Open Monday to Saturday, 9 to 6.</p>')
+
+
+@router.get("/catalogue")
+async def catalogue():
+    await CATALOGUE_READY.wait()
+    rows = "".join(book_row(i, b) for i, b in data.BOOKS.items())
+    return layout("Catalogue", '<p><button type="button" id="on-shelf" aria-pressed="false">Show only books on the '
+                  'shelf</button></p><table id="books"><thead><tr><th scope="col">Title</th><th scope="col">Author</th>'
+                  f'<th scope="col">Where</th></tr></thead><tbody>{rows}</tbody></table>')
+
+
+@router.get("/books/{book_id}")
+def book(book_id: int):
+    found = data.BOOKS.get(book_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="No such book")
+    return layout(found["title"], f'<p>By {html.escape(found["author"])}.</p>'
+                  f'<p>{"On the shelf" if found["shelf"] else "Lent out"}.</p><p><a href="/catalogue">The catalogue</a></p>')
+
+
+@router.get("/search")
+def search(q: str = ""):
+    words = q.strip().lower()
+    if not words:
+        return layout("Search", SEARCH_FORM + "<p>Type a title or an author.</p>")
+    hits = [(i, b) for i, b in data.BOOKS.items() if words in (b["title"] + " " + b["author"]).lower()]
+    found = "".join(f'<li><a href="/books/{i}">{html.escape(b["title"])}</a></li>' for i, b in hits)
+    return layout("Search", SEARCH_FORM + (f"<ul>{found}</ul>" if hits else "<p>No book matches.</p>"))
+
+
+@router.get("/events")
+def events():
+    planned = data.EVENTS_BY_BRANCH.get(data.BRANCH)
+    if planned is None:
+        raise HTTPException(status_code=404, detail="No such branch")
+    items = "".join(f"<li><strong>{day}</strong> {html.escape(what)}</li>" for day, what in planned)
+    return layout("Events", f"<ul>{items}</ul>")

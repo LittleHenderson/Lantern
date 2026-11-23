@@ -9,6 +9,133 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Browser checks: seven faults that the browser benchmark's first whole run found (a firm pass or fail, stage 5, step
+  5), each fixed after a failing test. That run opened each of the open part's 67 versions twice, with no way to the
+  network: 60 as written down; planted problems found 45 of 46; safe sites and look-alikes as written down 18 of 21.
+  Each difference was a fault of the checks, none a version written down wrong. A request the browser stops itself
+  before it is sent, because the page's own policy (its Content-Security-Policy) refuses it, was counted as asked of
+  another computer: it is now left out, named in the log and counted in the held `outside` check's reason, and it makes
+  nothing undecided. A switched-off button, and a print button, each read as a button that does nothing: a switched-off
+  control is not clicked, counted or asked to be reached, and the browser's print dialog is something a click did. A
+  page with no link, button or field gave the `keyboard` check `held` (twice): it is `nothing-to-check` now, with the
+  reason. An outline set to 0 read as a place that shows, because a number of it changed: the ring is judged by what
+  is drawn. The button after a trapped field read as out of the keyboard's reach: `not-reached` is said only where the
+  walk went round the page. The failing tests, written first: eight versions of the test sites in
+  `tests/browse_sites.py` (an outline set to 0; a trap before the page's buttons; a chat widget the page's own policy
+  keeps out, in the page and sent by an app; a switched-off button with a handler; a print button; a page with more
+  links than the walk presses Tab for, then a button; and beside them a script from another computer that the page's
+  own policy lets in, which stays counted), a site with no control at all, and a test of the counting with no browser.
+  9 of the 10 failed on the checks as they were; the one that must stay as it was passed. The open part, run again
+  whole on the fixed checks (each version twice, with no way to the network): 67 of 67 as written down; planted
+  problems found 46 of 46; safe sites and look-alikes as written down 21 of 21; nothing tried outside this computer.
+- Browser checks: each step is a first visit (a firm pass or fail, stage 5, step 5). The browser benchmark's first
+  trial found a working button of its task list reported as a button that does nothing: every step of a run but the
+  visitor's was made in one tab, so what a click had kept in the browser changed the pages of the steps after it, and
+  a click went to the control, and a form to the form, at the same place on the page opened anew, whatever it was. Now
+  the first load of a page, each click and each form is made in a browser context of its own, thrown away after it; a
+  click finds the control first seen again by its kind, its words and, for a link, its address, and a form is found
+  again by its address, its method and the names of its fields (not by what they hold: a token made anew at each
+  visit). Where Lantern cannot tell which it is, it clicks or sends none, and the check's reason says how many (a
+  `leads` check that clicked nothing and had no link to look at, or a `forms` check that sent nothing, is
+  `inconclusive`, not `held`). What an app keeps on its own server is not emptied between steps. Fixed after failing
+  tests: six look-alikes in `tests/browse_sites.py`: a button on two pages that keeps in the browser that it was used,
+  two orders a click marks collected on the app's server, a button whose words count the visits to its page, and a
+  form whose address does (each of these four failed on the checks as they were); two orders each with a form of its
+  own, and a form with a hidden token made anew at each visit (which guard the new way of finding a form again).
+- The starter files' "Write file" button on the report's Advanced readiness page stands beside its fold, no longer
+  inside the fold's title (since 0.9.0): a screen reader reads a fold's title as one button, so the button inside it
+  could be neither named nor pressed on its own. The browser job's accessibility checker found it the first time it
+  opened that page in the app with files to write; `tests/test_pages.py` now reads every fold's title in the files
+  of Lantern's own that write one.
+- What a browser saw, in the release decision and the report (a firm pass or fail, stage 5, step 3). The release
+  decision has a sixth criterion, `browser`, required wherever `lantern browse` finds something to open (an app
+  Lantern can start, or a folder of plain pages): a page that does not open, the page's own script failing, a form
+  that cannot be sent, a visitor let in where the code asks for a sign-in and a protection the code sets that the
+  site does not send block a release; dead links and buttons, things asked of another computer and what keeps the
+  site from being used without a mouse are said beside the decision and block nothing (the owner's answer of
+  2026-11-21). `browser.json` now says which code it is of (`of.code_sha256`, taken before anything is opened) and
+  carries this computer's seal, as `behaviour.json` does, and a record counts only for exactly this code and with
+  that seal: the results folder usually lies in the project, which can bring a record of its own. The Evidence
+  Report's limits say when a project has nothing a browser can open. The report's Advanced readiness page has a card
+  "What the browser saw" (only for a record this computer sealed on this code; the site's own text left out of a
+  report made with `--privacy structure`); Simple gets nothing new. Lantern's own check (`tools/self_readiness.py`)
+  may miss the browser's part only for the reason it is missing there.
+- A project with no tests is told which tests to write first (the same step; the owner's answer of 2026-11-21: what
+  a browser saw never counts in place of tests). The `tests` criterion of the release decision names them, read from
+  the code (`lantern/firsttests.py`: the sign-in, the changes only a signed-in person may make, the changes anyone can
+  make, the routes that reach a paid service, what the routes that only read answer, and that each page and screen
+  opens; at most three named of each kind, the rest counted), and says, where a browser opened the site on this
+  code, that this does not count in their place. For a FastAPI app Lantern can import, a first test file is offered
+  with the other starter files (`tests/test_first.py`): each page answers without an error of the server, a visitor
+  who is not signed in cannot make a change the code shows needs a sign-in, and the other tests of the list written
+  out as still to write; a secret the app signs with is made by the file each time it runs, never written in it.
+  On the app it is written from it passes; on the same app with the sign-in taken off one route it fails that
+  route's test.
+- Pictures of the pages, kept on this computer only (the same step). A browser run keeps one picture of each page
+  that shows something, taken by the browser itself once the page has settled (at most 10 a run, each a PNG of at
+  most 8 MB), in `LANTERN_HOME/pictures/`, in a folder of the run's own closed to other users, each picture a new
+  file named by its own SHA-256 and written never through a link (`lantern/pictures.py`); the 20 newest runs are
+  kept, and an older run's folder is removed only when it is a plain folder of this user's that Lantern named.
+  `browser.json` names them by their fingerprint only, and nothing of them goes into the results folder, the report,
+  the Evidence Report, Ask Lantern or the connector: the report says how many there are, and `lantern browse` says
+  where. The app shows them behind its session key ("Show the pictures" on the report's card, Advanced; `GET
+  /api/projects/<id>/browser/pictures`), only those a record sealed by this computer names, each read back only as a
+  plain file of this user's whose content is what its name says. `tools/audit.sh` opens them in a real browser,
+  one of them for a page whose name is written like markup, which stays text.
+- Browser checks, written down before they are built (a firm pass or fail, stage 5, step 1): `docs/browser.md` says
+  what a real browser will check on the project's own site (pages that do not open, errors in the page's own script,
+  links and buttons that lead nowhere, forms, what a visitor who is not signed in can open, the protections the site
+  really sends against what its code says, anything a page asks another computer for, the basics of use without a
+  mouse), each check with its codes, a broken example and its safe twin, where it runs and where it never does, and
+  its limits. `lantern/browse.py` holds the same list; `tests/browse_sites.py` writes two small sites, each safe or
+  with one of 25 planted problems; `tests/test_browse.py` holds the checks to the page, and its 27 tests with a real
+  browser (CI's browser job, as the ordinary user, with the browser's own sandbox) fail until the checks are built.
+- Browser checks, built for Linux (the same stage, step 2): `lantern.browse.run` opens the project's own site in a
+  real browser and says what each of the eight checks saw. An app (the one `lantern behave` starts) is started in the
+  sealed box by Lantern's own driver (`lantern/_browse_inside.py`) and asked through a folder of the box's own; a
+  folder of plain pages is served by Lantern's own code, the project's own files only. The browser is driven through
+  a pipe by `lantern/_cdp.py` (no port), as an ordinary user, with its own sandbox (its own page about it must say
+  so) and an empty profile of the run's own; every request of a page is stopped inside the browser, the site's own
+  address answered by Lantern and every other refused there and written down; the browser's one way out is a door
+  of Lantern's own that forwards nothing. On the two small sites the safe versions break no check and each of the 25
+  planted problems breaks its own check with its own code, and no other. Not yet on macOS and Windows (`not-built`;
+  since the next entry, they are).
+  `lantern browse PATH` runs them and writes what they saw to `browser.json` in the results folder (its shape is in
+  `docs/api.md`), also when nothing could be opened; it ends with 0 only when a check held and none was broken,
+  undecided or not run, and prints what the site showed with anything that is not printable replaced.
+- Browser checks on macOS and Windows too (the same stage, the rest of step 2): on macOS the browser is started the
+  way it is on Linux; on Windows `lantern/winspawn.py` makes it paused, with the two ends of its pipe where its own C
+  library looks for them (its descriptors 3 and 4) and no other handle of Lantern's, puts it in a job of its own
+  (`winjob.Job`, 4 GB) and only then lets it run. On every system the same switches and the same profile, and when the
+  run ends the browser is closed and whatever it started is ended with it: its process group on Linux and macOS, its
+  job on Windows. On Windows the sealed box's two folders are known by their disk numbers when they are made and
+  looked at again before each use, and a request is written under a name of its own before it is put in place.
+  Tests: `tests/test_browser_driver.py` (8, a stand-in browser that speaks the same pipe, on every system: what it is
+  handed, what it starts ends with it, and one that does not close when asked, says nothing or cannot have its sandbox
+  is not used; on the code before, 6 of the 8 failed), `tests/test_winspawn.py` (20, the Windows starter with a
+  stand-in for Windows' own calls on every system, 1 on Windows itself) and 3 tests of the box's folders in
+  `tests/test_browse.py`. CI runs the browser checks' tests on the Chrome GitHub's macOS and Windows machines come
+  with, at the end of the macOS job and of the Windows box's job (job limits 70 and 60 minutes), where no test may be
+  skipped and the run must name the browser it started.
+- Browser checks: what GitHub's macOS machine and Lantern's own landing page showed (the same stage, step 2). On the
+  Chrome 157 of GitHub's macOS machine 17 of the 72 browser tests failed, in both runs, each with "Tab cannot leave
+  this control" on the one page of the plain pages that has a single link (GitHub's Windows machine, on its Chrome
+  157, passed all 92 in both runs); and Lantern's own landing page, opened twice on the same code, gave two different
+  answers. Each fixed after failing tests: seven look-alikes in `tests/browse_sites.py` (`LOOKALIKES`), each with what
+  it must give: a page of the site in a frame, a date field, a part with a tree of its own, a page with one link that
+  listens for keys, a hidden element that answers a click, a library from another computer that the run refuses, and
+  a cover that fades away as the page opens. A trap is now a place where Tab and Shift+Tab both leave the keyboard
+  where it is and the page's own script listens for keys or focus there or above it; what the browser does at the
+  end of a page is looked at once a run, on a page of Lantern's own (`keyboard_end` in the record: the keyboard
+  leaves the page, goes back to the first control, or stays), so a page with one link in a browser that brings the
+  keyboard back to it is no trap. Tab moving on inside a frame, a player or a date field is no trap, and whether the
+  place of the keyboard shows is not judged there or inside a part with a tree of its own; a control that cannot be
+  seen is not asked to be reached. What a script from another computer, refused by the run, could have done on a
+  page is undecided there: such a thing is kept, marked `undecided`, and gives no code, and a check whose every thing
+  is undecided is `inconclusive`. A page counts as settled only when nothing on it is still moving (no transition or
+  animation that ends is running, by the browser's own list of them): until then the landing page's cover, which
+  fades away over 0.9 seconds as the page opens, was looked at and clicked while it was still there or after it had
+  gone. `tests/test_browse.py` has 78 tests now, 34 of them with a real browser.
 - Completing the guard's coverage on Windows: a project's own Python tests on the libraries fetched for them now run
   inside a wall of Windows' own made for the run (an AppContainer, `lantern/wincontainer.py`), on the whole Python of
   the run's own, and so does every program those tests start, Python or not. Inside it a program reads the run's own

@@ -3,20 +3,27 @@
 It is worked out from required criteria, never from the average score:
 
     Blocked      a required criterion failed: a critical or high finding is open outside test code, the project's
-                 tests failed, a behaviour check came out broken
+                 tests failed, a behaviour check came out broken, a browser saw a fault that blocks a release
     Incomplete   nothing failed, and something required is missing: a scanner did not finish or did not cover
                  everything, libraries were not checked, the tests were not run, the behaviour plan was not run on
-                 this code
+                 this code, no browser opened the site on this code or what it saw could not be decided
     Passed       every required criterion that applies to this kind of project has passed
 
 What is required is the project's profile: `findings`, `scanners` and `tests` for every project, `dependencies`
-where the project lists libraries, `behaviour` where it brings a behaviour plan (`lantern-behaviour.json`). What the
+where the project lists libraries, `behaviour` where it brings a behaviour plan (`lantern-behaviour.json`),
+`browser` where it has a site `lantern browse` opens (an app Lantern can start, or a folder of plain pages). What the
 profile does not ask for is named with the reason (`not_required`), so "Passed" does not read as more than it is.
+
+What a browser saw (`browser.json`, `lantern browse`): a page that does not open, the page's own script failing, a
+form that cannot be sent, a visitor let in where the code asks for a sign-in and protections the code sets that were
+not sent block a release (`BROWSER_BLOCKS`); dead links and buttons, things asked of another computer and what keeps
+the site from being used without a mouse are said beside the decision and block nothing (`BROWSER_SHOWN`).
 
 The record is tied to what was tested (`bind`): the commit and whether files differ from it, a SHA-256 over every
 file of the project (path and content), one for each dependency file, the settings of the run, and every tool with
 its version and how its run ended. A behaviour record counts only when it is of this plan and this code and carries
-this computer's seal (`seal.py`): `behaviour.json` lies in the results folder, which a project can bring along.
+this computer's seal (`seal.py`), and a browser record only when it is of this code and carries that seal:
+`behaviour.json` and `browser.json` lie in the results folder, which a project can bring along.
 
 Nothing here creates, closes or re-ranks a finding. `readiness.assess` calls `decide` and applies the two rules the
 score has: it reads 100 only when the decision is Passed, and a Blocked release cannot score above `BLOCKED_CAP`.
@@ -64,9 +71,21 @@ TITLES = {
     "dependencies": "Every library was checked against the advisory databases",
     "tests": "The project's tests were run and passed",
     "behaviour": "The behaviour checks held when the app was started",
+    "browser": "A browser opened the site and saw nothing that blocks a release",
 }
 NO_PLAN = (f"The project has no behaviour plan ({PLAN_NAME}), so no app was started: nothing in this decision says "
            "what the app does when it runs.")
+# What a browser saw stands beside missing tests and never in their place (the owner's answer of 2026-11-21).
+SEEN_NOT_TESTS = ("A browser opened the site on this code (the site's part, beside this one): that shows what a "
+                  "visitor sees, not what the code does when it is asked, so it does not count in place of tests.")
+NO_SITE = ("Lantern found nothing to open in a browser: no app it can start (a FastAPI app) and no folder of plain "
+           "pages. Sites of other kinds are not opened yet, so nothing in this decision says what a browser shows of "
+           "them.")
+# The browser's checks (browse.CHECKS) that block a release when they come out broken, and those that are said beside
+# the decision and block nothing (the owner's answer of 2026-11-21: real faults block; dead links, things asked of
+# another computer and keyboard issues are shown).
+BROWSER_BLOCKS = ("opens", "script", "forms", "visitor", "protections")
+BROWSER_SHOWN = ("leads", "outside", "keyboard")
 LEFT_OUT = ("the folders no reader of Lantern looks into: version control, installed libraries, build output, Python "
             "environments and Lantern's own results")
 
@@ -288,14 +307,17 @@ def _dependencies(sec: dict | None, files: list[str]) -> dict:
                  "is ranked like any other.")
 
 
-def _tests(tests_exist: bool, run_meta: dict) -> dict:
+def _tests(tests_exist: bool, run_meta: dict, write: list | None = None, first: str | None = None) -> dict:
+    """`write`: the tests a project with no tests should get first, read from its code (`firsttests.to_write`);
+    `first`: the name of the first test file Lantern offers for it, or None."""
     tr = run_meta.get("trace") if isinstance(run_meta.get("trace"), dict) else None
     how = ("Run them under Lantern: `lantern analyze PATH --trace -- <your test command>`, or “Watch my tests "
            "run” in the app.")
     if not tests_exist:
-        return _crit("tests", "missing", "The project has no tests.",
-                     "Write tests for the most important flows first (sign-in, payments, changes to data), then "
-                     "run them under Lantern.")
+        from . import firsttests
+        items = [w for w in (write or []) if isinstance(w, dict)]
+        return _crit("tests", "missing", "The project has no tests.", firsttests.words(items, first),
+                     write=items[:firsttests.MOST_KEPT], write_count=len(items))
     if not tr:
         return _crit("tests", "missing", "The tests were not run in this check. Lantern runs a project's code only "
                                          "when asked, and tests that were not run prove nothing.", how)
@@ -414,12 +436,109 @@ def _behaviour(record: dict | None, bound: dict, unread: str | None = None) -> d
                                         "the sandbox, on this code and this plan.")
 
 
+def _seen_as(c: dict | None) -> str:
+    """How one browser check came out, in a few words, for a sentence of the decision."""
+    from .browse import BY_ID
+    if c is None:
+        return "not in the record"
+    o = c.get("outcome")
+    if o == "broken":
+        known = BY_ID[c["id"]].codes
+        codes = [k for k in c.get("codes") or [] if isinstance(k, str) and k in known] \
+            if isinstance(c.get("codes"), list) else []
+        return "broken" + (f" ({', '.join(codes)})" if codes else "")
+    return {"held": "held", "inconclusive": "could not be decided", "not-run": "not run",
+            "nothing-to-check": "had nothing to check"}.get(o if isinstance(o, str) else "", "of an outcome this "
+                                                                                          "version does not know")
+
+
+def _browser(record: dict | None, bound: dict, site: str | None, unread: str | None = None) -> dict:
+    """The site's part of the decision: what a browser saw when `lantern browse` opened it on this code. `site` is
+    what a run would open (`browse.site_kind`): `app`, `pages`, or None when there is nothing to open."""
+    from .browse import BY_ID, OUTCOMES, RESULT_NAME, WHY_NOT
+    if site is None:
+        return _crit("browser", "not-applicable", NO_SITE, required=False)
+    what = "an app Lantern can start" if site == "app" else "a folder of plain pages"
+    run = "Run `lantern browse PATH` on this code, then check again."
+    if unread:
+        return _crit("browser", "missing", f"The record of the last browser run could not be used: {unread}.", run)
+    if not isinstance(record, dict):
+        return _crit("browser", "missing", f"The project has a site ({what}) and no browser has opened it: there is "
+                                           f"no {RESULT_NAME} in the results folder.", run)
+    if not seal.holds(record):
+        return _crit("browser", "missing", "The browser record in the results folder does not carry this "
+                                           "computer's seal: it was made somewhere else, or changed since it was "
+                                           "made.", run)
+    of = record.get("of") if isinstance(record.get("of"), dict) else {}
+    if of.get("code_sha256") != bound["code"]["sha256"]:
+        return _crit("browser", "missing", "The browser record was made on other code than this: a file of the "
+                                           "project changed since.", run)
+    if record.get("ran") is not True:
+        why = record.get("why_not")
+        said = WHY_NOT.get(why) if isinstance(why, str) else None
+        return _crit("browser", "missing", "The browser checks were not run" + (f". {said}" if said else
+                                                                                " (`lantern browse PATH` says why)."), run)
+    opened = record.get("opened")
+    if not isinstance(opened, list) or not opened:
+        return _crit("browser", "missing", "No page was opened in the browser run, so it says nothing of what the "
+                                           "site shows.", run)
+    checks: dict[str, dict] = {}
+    for c in record.get("checks") if isinstance(record.get("checks"), list) else []:
+        if isinstance(c, dict) and isinstance(c.get("id"), str) and c["id"] in BY_ID and c["id"] not in checks:
+            checks[c["id"]] = c
+    absent = [cid for cid in BROWSER_BLOCKS if cid not in checks]
+    if absent:
+        return _crit("browser", "missing", f"The browser record has no {_more(absent)} check, so it does not say "
+                                           "what a release needs.", run)
+    outcome = {cid: c.get("outcome") if isinstance(c.get("outcome"), str) and c.get("outcome") in OUTCOMES else None
+               for cid, c in checks.items()}
+    broken = [cid for cid in BROWSER_BLOCKS if outcome[cid] == "broken"]
+    if broken:
+        return _crit("browser", "failed", f"{len(broken)} of the {len(BROWSER_BLOCKS)} checks that block a release "
+                                          f"came out broken when a browser opened the site on this code: "
+                                          f"{_more([f'{cid} {_seen_as(checks[cid])}' for cid in broken])}.",
+                     "Fix what each broken check shows (`lantern browse PATH` prints what the browser saw), then "
+                     "run it again.")
+    # Plain pages: the headers a site sends are set where it is hosted, and that is not in the project's folder.
+    hosting = outcome["protections"] == "not-run" and checks["protections"].get("why") == "hosting-unknown"
+    open_ = [cid for cid in BROWSER_BLOCKS if outcome[cid] in (None, "inconclusive", "not-run")
+             and not (cid == "protections" and hosting)]
+    if open_:
+        return _crit("browser", "missing", f"Of the checks that block a release, "
+                                           f"{_more([f'{cid} {_seen_as(checks[cid])}' for cid in open_])}: so the "
+                                           "browser run does not say the site is free of those faults.", run)
+    if outcome["opens"] != "held":
+        return _crit("browser", "missing", "No page of the site was seen to open in the browser run.", run)
+    held = [cid for cid in BROWSER_BLOCKS if outcome[cid] == "held"]
+    nothing = [cid for cid in BROWSER_BLOCKS if outcome[cid] == "nothing-to-check"]
+    why = (f"A browser opened {_n(len(opened), 'page')} of the site on this code and saw nothing that blocks a "
+           f"release: {', '.join(held)} held" + (f"; {', '.join(nothing)} had nothing to check" if nothing else "")
+           + ".")
+    if hosting:
+        why += (" The protections a site sends with plain pages are set by whatever is hosting them, so they are not "
+                "checked here.")
+    shown = [cid for cid in BROWSER_SHOWN if outcome.get(cid) not in ("held", "nothing-to-check")]
+    if shown:
+        why += (" What the browser saw that blocks nothing is shown beside this: "
+                + "; ".join(f"{cid} {_seen_as(checks.get(cid))}" for cid in shown) + ".")
+    return _crit("browser", "passed", why)
+
+
 # ------------------------------------------------------------------------------------------------ the decision
 def decide(*, shape: str, sec: dict | None, tests_exist: bool, run_meta: dict | None, files: list[str],
-           bound: dict, behaviour: dict | None = None, behaviour_unread: str | None = None) -> dict:
-    """The release decision with every criterion, the profile it was made for and what it is tied to."""
-    criteria = [_findings(sec), _scanners(sec), _dependencies(sec, files), _tests(tests_exist, run_meta or {}),
-                _behaviour(behaviour, bound, behaviour_unread)]
+           bound: dict, behaviour: dict | None = None, behaviour_unread: str | None = None, site: str | None = None,
+           browser: dict | None = None, browser_unread: str | None = None, write: list | None = None,
+           first: str | None = None) -> dict:
+    """The release decision with every criterion, the profile it was made for and what it is tied to. `site`: what
+    a browser run of the project opens (`browse.site_kind`); `browser`: the record `lantern browse` left in the
+    results folder, or `browser_unread`, why that file could not be used. `write` and `first`: for a project with
+    no tests, the tests to write and the first test file offered (`_tests`)."""
+    tests = _tests(tests_exist, run_meta or {}, write, first)
+    seen = _browser(browser, bound, site, browser_unread)
+    if not tests_exist and seen["state"] in ("passed", "failed"):
+        tests["why"] += " " + SEEN_NOT_TESTS      # shown beside it, and never in its place
+    criteria = [_findings(sec), _scanners(sec), _dependencies(sec, files), tests,
+                _behaviour(behaviour, bound, behaviour_unread), seen]
     required = [c for c in criteria if c["required"]]
     failed = [c for c in required if c["state"] == "failed"]
     missing = [c for c in required if c["state"] == "missing"]

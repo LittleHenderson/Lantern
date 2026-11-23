@@ -1,0 +1,29 @@
+"""What the library keeps: books, events, members and who is signed in (in memory)."""
+
+BOOKS = {
+    1: {"title": "The Long Garden", "author": "Mira Okafor", "shelf": True},
+    2: {"title": "Salt and Iron", "author": "Tomas Varga", "shelf": False},
+    3: {"title": "A Map of Small Rivers", "author": "Jun Ito", "shelf": True},
+    4: {"title": "Night Trains", "author": "Elsa Brandt", "shelf": True},
+    5: {"title": "The Clockmaker's Year", "author": "Ravi Menon", "shelf": False},
+    6: {"title": "Open Water", "author": "Ada Lindqvist", "shelf": True},
+}
+FEATURED = 3                    # the book of the week
+
+BRANCH = "riverside"
+EVENTS_BY_BRANCH = {
+    "riverside": [
+        ("Tuesday", "Story time for under-fives"),
+        ("Thursday", "Help with phones and tablets"),
+        ("Saturday", "The book club: Night Trains"),
+    ],
+}
+
+MEMBERS = {
+    "100200": {"name": "Ada Example", "pin_digest": "", "loans": [2, 5]},
+}
+DEMO_MEMBER = {"name": "Demo reader", "loans": []}
+DEBUG = False                   # True only on a developer's own computer
+
+SESSIONS: dict[str, str] = {}   # session id -> card number of who signed in
+SUGGESTIONS: list[dict] = []

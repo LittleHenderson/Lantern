@@ -222,6 +222,10 @@ EOF
   # three fixed words and the box is drawn only for one of them, so a poisoned word would hide what is to be proved
   check "viewer: a poisoned release decision stays text (criteria, profile, what it is tied to)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-rel/report.html' --only criteria,profile,bound_to,blocking,missing && node tools/viewer_smoke.js '$W/poison-rel/report.html' '$W/relshot'"
+  # what a browser saw (lantern browse), on the Advanced readiness page: poison_report.py puts a record's view into a
+  # report that has none, so the card is drawn
+  check "viewer: a poisoned browser record stays text (What the browser saw)" \
+    bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-br/report.html' --only browser && node tools/viewer_smoke.js '$W/poison-br/report.html' '$W/brshot'"
   # an Android app: the "On the phone" card, phone stories and entry details, poisoned, with the platform kept
   check "viewer: poisoned Android data stays text (On the phone card, screens, stories)" \
     bash -c "'$PY' tools/poison_report.py '$W/aa/report.html' '$W/poison-aa/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-aa/report.html' '$W/ashot'"
@@ -268,6 +272,47 @@ PYEOF
     node tools/viewer_smoke.js --app "$URL" "$W/app" --image "$A/shot.png" "${EXPECT[@]}" \
       --slow-tests "python -m pytest -q tests/stop_check.py"
   cat "$W/log"
+  kill $SPID 2>/dev/null; wait $SPID 2>/dev/null
+  # the app's "Show the pictures" (lantern/pictures.py): a browser record of this code sealed by this computer, with two
+  # pictures kept in LANTERN_HOME and one page named like markup; the app hands them over only with its key
+  B="$W/pics"; mkdir -p "$B/site"; printf '<!doctype html><title>Notes</title><h1>Notes</h1>\n' > "$B/site/index.html"
+  LANTERN_HOME="$B/home" "$PY" - "$B/site" <<'PYEOF'
+import io
+import json
+import sys
+from pathlib import Path
+
+from PIL import Image
+
+from lantern import browse, pictures, release, seal
+
+repo = Path(sys.argv[1])
+
+
+def shot(colour):
+    buf = io.BytesIO()
+    Image.new("RGB", (320, 200), colour).save(buf, "PNG")
+    return buf.getvalue()
+
+
+kept = pictures.keep([("/", shot("teal")), ('/<img src=x onerror="document.title=1" data-pwn>', shot("orange"))])
+record = {"of": {"commit": None, "dirty": None, "lantern": "audit", "code_sha256": release.code_digest(repo)["sha256"]},
+          "ran": True, "why_not": None, "browser": {"name": "Chromium", "version": "audit", "own_sandbox": True, "how": "audit"},
+          "site": {"how": "pages", "address": "http://localhost:20001", "pages": 2},
+          "opened": [{"path": "/", "status": 200, "seconds": 0.1}],
+          "checks": [{"id": c.id, "outcome": "held", "codes": [], "saw": [], "why": None} for c in browse.CHECKS],
+          "asked_outside": [], "browser_own": [], "seconds": 1.0, "pictures": kept}
+record["seal"] = seal.sign(record)
+(repo / ".lantern").mkdir(exist_ok=True)
+(repo / ".lantern" / browse.RESULT_NAME).write_text(json.dumps(record), encoding="utf-8")
+PYEOF
+  LANTERN_HOME="$B/home" LANTERN_OFFLINE=1 lantern analyze "$B/site" > "$B/analyze.log" 2>&1
+  LANTERN_HOME="$B/home" LANTERN_OFFLINE=1 lantern serve "$B/site" --no-open --port 8874 > "$B/serve.log" 2>&1 &
+  SPID=$!
+  for _ in $(seq 100); do grep -q 'token=' "$B/serve.log" && break; sleep 0.2; done
+  URL="$(grep -o 'http://[^ ]*token=[^ ]*' "$B/serve.log" | head -1)"
+  check "app: the pictures of the pages come back only through the app's key, each named by its page as text" \
+    node tools/viewer_smoke.js --pictures "$URL" "$W/pics" / '/<img src=x onerror="document.title=1" data-pwn>'
   kill $SPID 2>/dev/null; wait $SPID 2>/dev/null
   # the cloud website: signed out, sign-in sheet, My runs, progress, report; every run field carries an HTML payload
   if "$PY" -c "import fastapi, httpx, uvicorn" 2>/dev/null; then

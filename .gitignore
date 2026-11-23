@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+# the browser benchmark's sites hold built folders of their own, made to be read (bench/browser/README.md)
+!bench/browser/**/dist/
 demo-out/
 node_modules/
 .venv/
