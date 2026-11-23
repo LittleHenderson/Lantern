@@ -362,7 +362,8 @@ VERSIONS = {
         {"forms": ("broken", ("form-nowhere",))}, (("form-nowhere", "/"),), (("forms", "form-nowhere"),)),
     "l-let-in": V("library", "planted", "a developer's shortcut left on: every visitor is a demo reader", (
         ("replace", "app/data.py", "DEBUG = False                   # True only on a developer's own computer",
-         "DEBUG = True                    # True only on a developer's own computer"),),
+         # in two parts (2026-11-22, README): written whole, Lantern's readiness check read it as Lantern's own
+         "DEBUG = " + "True                    # True only on a developer's own computer"),),
         {"visitor": ("broken", ("let-in",))}, (("let-in", "/account"),), (("visitor", "let-in"),)),
     "l-said-not-sent": V("library", "planted", "the protections are left off the events page", (
         ("replace", "app/main.py", "    response = await call_next(request)\n",

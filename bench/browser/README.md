@@ -80,6 +80,17 @@ got to read as out of its reach (`l-trapped`). They were fixed in the checks, te
 part was changed for them, and the open part was run again on the fixed code (Results). The held-back part has still
 not been opened.
 
+**One line of the open part's definitions written in two parts (a dated note, 2026-11-22).** Before the open part was
+run again, Lantern's check of itself (`lantern analyze .`, then `tools/self_readiness.py`) failed on the benchmark: the
+line that `l-let-in` plants stood whole in `open/cases.py` (`DEBUG = True`, the text the version writes into its
+`app/data.py`), and Lantern's readiness check, which reads every code file of Lantern as Lantern's own, read it as
+Lantern's debug switch left on ("Debug mode is off" failed; readiness 93 of 100, where it is 96 without that line).
+The line is now written in two parts there, test first (`tests/test_browser_bench.py`: no Python file of the
+benchmark reads as a debug switch or a bare `except:`, and the version still plants the line). Nothing a part builds
+or must give changed: each of the 121 versions was built from the files before and after, and each came out byte for
+byte the same. The open part's fingerprint is taken over the bytes of its files, so it changed from `693d745feb7e932c`
+to `8e257c494883877d`; the held-back part's, `348593e68cbe85b8`, did not.
+
 ## What each version is
 
 A family is one site, written safe, in `<part>/sites/<family>/`: every file a `.tmpl` and dot-files as `dot.<name>`

@@ -102,6 +102,30 @@ def test_every_code_is_planted_in_each_part(part):
     assert planted == {code for codes in define.CODES.values() for code in codes}
 
 
+def test_no_python_file_of_the_benchmark_reads_as_lanterns_own_debug_switch():
+    """Lantern's readiness check reads each code file of Lantern as Lantern's own (`readiness.DEBUG_ON`, and
+    `BARE_EXCEPT` beside it): a planted line written whole in a part's `cases.py` read as Lantern's debug switch left on
+    and failed Lantern's check of itself (2026-11-22). The line still stands in the version it plants (the next test)."""
+    from lantern import readiness
+    found = []
+    for p in sorted(BENCH.rglob("*.py")):
+        text = p.read_text(encoding="utf-8")
+        for rx in (readiness.DEBUG_ON, readiness.BARE_EXCEPT):
+            found += [f"{p.relative_to(ROOT).as_posix()}:{text.count(chr(10), 0, m.start()) + 1}"
+                      for m in rx.finditer(text)]
+    assert found == []
+
+
+def test_the_shortcut_left_on_is_still_planted_in_its_version():
+    from lantern import readiness
+    _families, versions = _part("open")
+    sites = BENCH / "open" / "sites"
+    planted = define.files(sites, "library", versions["l-let-in"])["app/data.py"]
+    safe = define.files(sites, "library", versions["library"])["app/data.py"]
+    assert readiness.DEBUG_ON.search(planted)
+    assert not readiness.DEBUG_ON.search(safe)
+
+
 @pytest.mark.parametrize("part", PARTS)
 def test_the_readme_counts_each_part_as_its_cases_do(part):
     families, versions = _part(part)
