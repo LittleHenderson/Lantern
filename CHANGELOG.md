@@ -25,7 +25,9 @@ file. New entries go under `## Unreleased`, on top.
   keeps out, in the page and sent by an app; a switched-off button with a handler; a print button; a page with more
   links than the walk presses Tab for, then a button; and beside them a script from another computer that the page's
   own policy lets in, which stays counted), a site with no control at all, and a test of the counting with no browser.
-  9 of the 10 failed on the checks as they were; the one that must stay as it was passed.
+  9 of the 10 failed on the checks as they were; the one that must stay as it was passed. The open part, run again
+  whole on the fixed checks (each version twice, with no way to the network): 67 of 67 as written down; planted
+  problems found 46 of 46; safe sites and look-alikes as written down 21 of 21; nothing tried outside this computer.
 - Browser checks: each step is a first visit (a firm pass or fail, stage 5, step 5). The browser benchmark's first
   trial found a working button of its task list reported as a button that does nothing: every step of a run but the
   visitor's was made in one tab, so what a click had kept in the browser changed the pages of the steps after it, and

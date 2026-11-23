@@ -201,3 +201,11 @@ own, and its numbers stand.
   other differences: `t-chunk-missing` and `t-blank-render` gave `keyboard` held where nothing-to-check is written
   down, and `l-trapped` gave `not-reached` beside its `trapped`. The two runs of every version agreed. Each was a fault
   of the checks (the second dated note above).
+* **Open part, second whole run** (`open/results.md`: 2026-11-23 01:38 UTC, Lantern a6d3348, definition
+  `8e257c494883877d`, every version byte for byte that of the first whole run (the third dated note above), Chrome
+  153.0.8010.12, Python 3.13.18 on Linux, every version opened twice, 913 s; tried outside this computer: 0 by the
+  run's guard, 0 by the recorder): 67 of 67 versions as written down. Planted problems found: 46 of 46. Safe sites and
+  look-alikes as written down: 21 of 21. No code given that was not written down, none written down and not given;
+  the two runs of every version agreed. What the sites' pages asked of another computer, refused inside the browser:
+  30, where the first whole run counted 44: the 14 fewer are `ll-csp-blocks-widget`'s 7 a run, which its page's own
+  policy stops in the browser before they are sent, and which are no longer counted as asked.
