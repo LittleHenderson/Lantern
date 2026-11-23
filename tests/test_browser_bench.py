@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -220,6 +221,20 @@ def test_the_counts_are_the_readmes():
     assert "Planted problems found: 1 of 2." in words and "Safe sites and look-alikes as written down: 2 of 2." in words
     table = runner.table(rows, t, families)
     assert f"| `{planted[0]}` |" in table and "NO: " in table and "| Code | Planted in | Found in |" in table
+
+
+def test_git_leaves_out_no_file_of_the_benchmark():
+    """Every file a part is made of is one the repository keeps. The repository's `.gitignore` leaves out every folder
+    named `dist`, and until 2026-11-22 the task list's built folder (`open/sites/tasks/dist/`) was in no commit: the
+    benchmark was built whole on the computer it was written on and not from GitHub's checkout (README, a dated note)."""
+    if not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout: what git leaves out cannot be asked of it")
+    files = [p.relative_to(ROOT).as_posix() for p in sorted(BENCH.rglob("*"))
+             if p.is_file() and "__pycache__" not in p.parts]
+    asked = subprocess.run(["git", "check-ignore", "--no-index", "--stdin"], cwd=ROOT, input="\n".join(files) + "\n",
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert asked.returncode in (0, 1), asked.stderr           # 1: git leaves out none of them
+    assert asked.stdout.split() == []
 
 
 def test_the_fingerprint_follows_every_file_of_a_part(tmp_path):

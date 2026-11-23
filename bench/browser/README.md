@@ -91,6 +91,17 @@ or must give changed: each of the 121 versions was built from the files before a
 byte the same. The open part's fingerprint is taken over the bytes of its files, so it changed from `693d745feb7e932c`
 to `8e257c494883877d`; the held-back part's, `348593e68cbe85b8`, did not.
 
+**Three files of the task list were in none of the commits (a dated note, 2026-11-22).** The repository's `.gitignore`
+leaves out every folder named `dist`, so the task list's built folder (`open/sites/tasks/dist/`: its page, its script
+and its stylesheet) was in none of the benchmark's commits. The three files were on the computer the benchmark was
+written on from 1:55 PM PST (the last changed at 2:14 PM), before the definitions were saved (3:03 PM) and before the
+first run, and every run there read them (each run's fingerprint counts them). GitHub's checkout had no such folder,
+and the benchmark's own test failed there (`test_every_version_builds_from_its_family_and_differs_from_it[open]`: 1
+failed, 6,959 passed in the Python 3.11 job; 1 failed, 6,948 passed in the browser job). They are committed now,
+unchanged: the open part's fingerprint taken from a fresh copy of that commit is `8e257c494883877d`, the second whole
+run's, and 000bb39's files with the three put back give `693d745feb7e932c`, the first whole run's. `.gitignore` keeps
+the benchmark's `dist` folders now, and a test asks git that it leaves out no file of the benchmark.
+
 ## What each version is
 
 A family is one site, written safe, in `<part>/sites/<family>/`: every file a `.tmpl` and dot-files as `dot.<name>`

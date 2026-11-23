@@ -1,0 +1,109 @@
+// Tasks: a list kept in this browser, one view per list (built from src/main.js)
+const KEY = "tasks-v1";
+const FIRST = [
+  { id: 1, title: "Water the tomatoes", list: "today", note: "The pots by the door" },
+  { id: 2, title: "Post the parcel", list: "today", note: "Before the 4 o'clock collection" },
+  { id: 3, title: "Book the car service", list: "later", note: "Any garage in town" },
+  { id: 4, title: "Return the library books", list: "done", note: "" },
+];
+const LISTS = { today: "Today", later: "Later", done: "Done" };
+
+function load() {
+  const saved = localStorage.getItem(KEY);
+  return saved ? JSON.parse(saved) : FIRST.slice();
+}
+
+function save(tasks) {
+  localStorage.setItem(KEY, JSON.stringify(tasks));
+}
+
+let tasks = load();
+
+function el(tag, attrs, text) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (text) e.textContent = text;
+  return e;
+}
+
+function header() {
+  const head = el("header");
+  head.append(el("h1", {}, "Tasks"));
+  const nav = el("nav", { "aria-label": "Lists" });
+  for (const [name, label] of Object.entries(LISTS)) nav.append(el("a", { href: "#/" + name }, label));
+  head.append(nav);
+  return head;
+}
+
+function row(task) {
+  const li = el("li", { class: "task" });
+  li.append(el("span", { class: "title" }, task.title));
+  if (task.list === "today") {
+    li.append(el("button", { type: "button", "data-done": String(task.id) }, "Done"));
+  } else if (task.list === "later") {
+    li.append(el("button", { type: "button", "data-today": String(task.id) }, "Move to today"));
+  }
+  const note = el("p", { class: "note", hidden: "" }, task.note || "No note");
+  li.append(note);
+  return li;
+}
+
+function addForm() {
+  const form = el("form", { id: "add" });
+  form.append(el("label", { for: "task-title" }, "New task"));
+  form.append(el("input", { id: "task-title", name: "title", required: "" }));
+  form.append(el("button", { type: "submit" }, "Add"));
+  return form;
+}
+
+function view(name) {
+  const main = el("main", { id: "view" });
+  main.append(el("h2", {}, LISTS[name]));
+  const list = el("ul", { class: "tasks" });
+  for (const task of tasks.filter((t) => t.list === name)) list.append(row(task));
+  main.append(list);
+  if (name === "today") main.append(addForm());
+  if (name === "done") main.append(el("button", { type: "button", id: "clear-done" }, "Clear done"));
+  return main;
+}
+
+function render() {
+  const name = location.hash.replace(/^#\//, "") || "today";
+  if (!LISTS[name]) return;
+  document.getElementById("app").replaceChildren(header(), view(name));
+}
+
+const app = document.getElementById("app");
+
+app.addEventListener("click", (event) => {
+  const done = event.target.closest("button[data-done]");
+  const today = event.target.closest("button[data-today]");
+  if (done) {
+    tasks.find((t) => t.id === Number(done.dataset.done)).list = "done";
+  } else if (today) {
+    tasks.find((t) => t.id === Number(today.dataset.today)).list = "today";
+  } else if (event.target.id === "clear-done") {
+    tasks = tasks.filter((t) => t.list !== "done");
+  } else {
+    return;
+  }
+  save(tasks);
+  render();
+});
+
+app.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.target;
+  const title = form.elements.title.value.trim();
+  if (!title) return;
+  tasks.push({ id: Date.now(), title, list: "today", note: "" });
+  save(tasks);
+  render();
+});
+
+window.addEventListener("hashchange", render);
+render();
+
+// The way the list is shown, as it was left
+const settings = JSON.parse(localStorage.getItem("tasks-settings") || "{}");
+document.body.classList.toggle("compact", Boolean(settings.compact));
