@@ -288,6 +288,28 @@ PLANTED: dict[str, Planted] = {
     "no-focus-ring": Planted("pages", "keyboard", "no-focus-ring", "no outline on any control", (
         ("style.css", "a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid #0F7B74; outline-offset: 2px; }",
          "a:focus, button:focus, input:focus { outline: none; }"),)),
+    # 2026-11-22, the browser benchmark's first whole run: each of these three was missed or given another code there
+    # an outline set to 0 changes its width and, like `outline: none`, draws nothing
+    "no-focus-ring-zero": Planted("pages", "keyboard", "no-focus-ring", "the outline set to 0 on every control", (
+        ("style.css", "a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid #0F7B74; outline-offset: 2px; }",
+         "a:focus, button:focus, input:focus { outline: 0; }"),)),
+    # a field that swallows Tab before the page's buttons: the trap is the problem, and what Tab never got to past it
+    # is not called out of reach
+    "focus-trap-first": Planted("pages", "keyboard", "trapped", "a field that swallows Tab, before the page's buttons", (
+        ("index.html", "<p>Fresh bread every morning.</p>",
+         '<p>Fresh bread every morning.</p>\n<p><label for="code">Discount code</label> <input id="code" name="code"></p>'),
+        _then('document.getElementById("code").addEventListener("keydown", function (event) {\n'
+              '  if (event.key === "Tab") { event.preventDefault(); }\n});'))),
+    # a script from another computer that the page's own policy lets in: the browser asks for it (the twin of the
+    # look-alike `policy-keeps-out`)
+    "outside-script-let-in": Planted("pages", "outside", "outside-script",
+                                     "an analytics script from another computer that the page's own policy lets in", (
+        ("index.html", "<title>Corner bakery</title>",
+         '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\' '
+         'https://stats.example.org">\n<title>Corner bakery</title>'),
+        ("index.html", '<script src="app.js"></script>',
+         '<script src="https://stats.example.org/count.js" async></script>\n<script src="app.js"></script>')),
+        asks="stats.example.org"),
     # app: a FastAPI app, started in the sealed box
     "route-raises": Planted("app", "opens", "server-error", "a route that divides by zero", (
         ("app.py", "sold, days = 120, 4", "sold, days = 120, 0"),)),
@@ -602,6 +624,47 @@ LOOKALIKES: dict[str, Lookalike] = {
     # same form at every visit, so it is found again and sent (2026-11-22)
     "form-token": Lookalike("app", "a form with a hidden token the app makes anew at each visit", (
         ("app.py", ACCOUNT, ACCOUNT + TOKEN_APP),)),
+    # 2026-11-22, the browser benchmark's first whole run. A script from another computer that the page's own policy
+    # keeps out (here written in the page): the browser stops it before it is sent, so nothing is asked of that
+    # computer, and the outside check's reason says how many such requests it did not count
+    "policy-keeps-out": Lookalike("pages", "a chat widget from another computer that the page's own policy keeps out", (
+        ("index.html", "<title>Corner bakery</title>",
+         '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'">\n<title>Corner bakery</title>'),
+        ("index.html", '<script src="app.js"></script>',
+         '<script src="https://chat.example.net/widget.js" async></script>\n<script src="app.js"></script>')),
+        says=(("outside", "1 request for another computer not counted"),)),
+    # the same with the policy the app sends with every answer; the page now names a script, so the script check
+    # has one to look at
+    "policy-keeps-out-app": Lookalike("app", "a chat widget from another computer that the app's own policy keeps out", (
+        ("app.py", '"</main></body></html>"',
+         "\"</main><script src='https://chat.example.net/widget.js' async></script></body></html>\""),),
+        gives=(("script", "held", ()),), says=(("outside", "for another computer not counted"),)),
+    # a button the page has switched off, with a handler for when it is switched on: nobody can use it, so it is not
+    # clicked, and it is not asked to be reached with Tab
+    "switched-off": Lookalike("pages", "a button that is switched off, with a handler for when it is switched on", (
+        ("index.html", '<p id="hours-text" hidden>',
+         '<p><button type="button" id="preorder" disabled>Pre-order (opens on Monday)</button></p>\n'
+         '<p id="hours-text" hidden>'),
+        _then('document.getElementById("preorder").addEventListener("click", function () {\n'
+              '  document.getElementById("preorder").textContent = "Asked for";\n});'))),
+    # a button that prints the page: what the click does is the browser's own print dialog
+    "print-button": Lookalike("pages", "a button that prints the page", (
+        ("about.html", '<p><a href="index.html">Back to the shop</a></p>',
+         '<p><button type="button" id="print">Print this page</button></p>\n'
+         '<p><a href="index.html">Back to the shop</a></p>'),
+        ("about.html", "</main>\n</body>",
+         '</main>\n<script>\ndocument.getElementById("print").addEventListener("click", function () {\n'
+         '  window.print();\n});\n</script>\n</body>'))),
+    # a page with more controls than the keyboard walk presses Tab for, then a button: what the walk did not get to is
+    # not called out of reach
+    "long-page": Lookalike("pages", "a page with more links than the keyboard walk presses Tab for, then a button", (
+        ("about.html", "<p>Baking since 1987.</p>",
+         "<p>Baking since 1987.</p>\n<ul>\n" + "".join(f'<li><a href="index.html">Loaf {n}</a></li>\n'
+                                                     for n in range(1, 91)) + "</ul>\n"
+         '<p><button type="button" id="more">Show more years</button></p>\n<p id="years" hidden>1987 to now.</p>'),
+        ("about.html", "</main>\n</body>",
+         '</main>\n<script>\ndocument.getElementById("more").addEventListener("click", function () {\n'
+         '  document.getElementById("years").hidden = false;\n});\n</script>\n</body>'))),
 }
 
 

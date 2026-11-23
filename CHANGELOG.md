@@ -9,6 +9,23 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Browser checks: seven faults that the browser benchmark's first whole run found (a firm pass or fail, stage 5, step
+  5), each fixed after a failing test. That run opened each of the open part's 67 versions twice, with no way to the
+  network: 60 as written down; planted problems found 45 of 46; safe sites and look-alikes as written down 18 of 21.
+  Each difference was a fault of the checks, none a version written down wrong. A request the browser stops itself
+  before it is sent, because the page's own policy (its Content-Security-Policy) refuses it, was counted as asked of
+  another computer: it is now left out, named in the log and counted in the held `outside` check's reason, and it makes
+  nothing undecided. A switched-off button, and a print button, each read as a button that does nothing: a switched-off
+  control is not clicked, counted or asked to be reached, and the browser's print dialog is something a click did. A
+  page with no link, button or field gave the `keyboard` check `held` (twice): it is `nothing-to-check` now, with the
+  reason. An outline set to 0 read as a place that shows, because a number of it changed: the ring is judged by what
+  is drawn. The button after a trapped field read as out of the keyboard's reach: `not-reached` is said only where the
+  walk went round the page. The failing tests, written first: eight versions of the test sites in
+  `tests/browse_sites.py` (an outline set to 0; a trap before the page's buttons; a chat widget the page's own policy
+  keeps out, in the page and sent by an app; a switched-off button with a handler; a print button; a page with more
+  links than the walk presses Tab for, then a button; and beside them a script from another computer that the page's
+  own policy lets in, which stays counted), a site with no control at all, and a test of the counting with no browser.
+  9 of the 10 failed on the checks as they were; the one that must stay as it was passed.
 - Browser checks: each step is a first visit (a firm pass or fail, stage 5, step 5). The browser benchmark's first
   trial found a working button of its task list reported as a button that does nothing: every step of a run but the
   visitor's was made in one tab, so what a click had kept in the browser changed the pages of the steps after it, and

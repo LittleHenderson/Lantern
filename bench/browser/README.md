@@ -64,6 +64,22 @@ by reading the code (three more look-alikes); no definition of either part was c
 still not been opened in a browser; the fix was made by the author of its sites, who knows them, which is one more
 reason its results are a weaker test.
 
+**And again after the open part's first whole run (a dated note, 2026-11-22).** The open part was run whole at 4:00 PM
+PST (Lantern 000bb39, definition `693d745feb7e932c`, every version opened twice, no way to the network; its results
+are kept as `open/results-first-whole-run.md`, and stand): 60 of 67 versions as written down; planted problems found
+45 of 46; safe sites and look-alikes as written down 18 of 21. Each of the 7 differences was looked at in the browser
+by hand, and each was a fault of the checks, none a version written down wrong. Two went against readings listed below
+before the first run (`gl-disabled-button`: a switched-off button was clicked and read as dead; `ll-csp-blocks-widget`:
+a script the page's own policy keeps out was counted as asked of another computer), and one against the words of
+`docs/browser.md` (`t-no-focus-ring`: an outline set to 0 shows nothing, and it read as a ring because a number of it
+changed). The others: a print button read as dead, because the check did not see the browser's print dialog
+(`gl-print-button`); the keyboard check said held on two task lists whose page stays empty, with no control at all
+(`t-chunk-missing`, `t-blank-render`; nothing to check is written down); and after a trap the button the keyboard never
+got to read as out of its reach (`l-trapped`). They were fixed in the checks, test first (`docs/browser.md`, the
+`leads`, `outside` and `keyboard` sections, and eight versions of `tests/browse_sites.py`); no definition of either
+part was changed for them, and the open part was run again on the fixed code (Results). The held-back part has still
+not been opened.
+
 ## What each version is
 
 A family is one site, written safe, in `<part>/sites/<family>/`: every file a `.tmpl` and dot-files as `dot.<name>`
@@ -156,4 +172,21 @@ why. They are:
 ## Results
 
 `open/results.md` and `held-back/results.md`, written by `--results`, with the date, the commit of Lantern, the
-definition's fingerprint, the browser and the system. None yet: this file was written before the first run.
+definition's fingerprint, the browser and the system. A file of an earlier run is kept beside it under a name of its
+own, and its numbers stand.
+
+* **Open part, first trial** (its three safe sites only, 2026-11-22 3:04 PM PST, Lantern 564eb35, no way to the
+  network): 2 of 3 as written down; the task list's working "Done" button read as `dead-button`. A fault of the
+  checks, fixed in 000bb39 (the first dated note above). Not a whole run, so no results file.
+* **Open part, first whole start** (3:56 PM PST): void, no results. Two minutes in, the recorder of the network that
+  holds only this computer (`tools/netless.py --watch`, with this computer's strace 6.8) stopped with a fault of its
+  own that its makers have since fixed, and the run with it. It was started again with strace 7.3, built as GitHub's
+  checks build it.
+* **Open part, first whole run** (`open/results-first-whole-run.md`: 2026-11-23 00:16 UTC, Lantern 000bb39, definition
+  `693d745feb7e932c`, Chrome 153.0.8010.12, Python 3.13.18 on Linux, every version opened twice, 944 s; tried outside
+  this computer: 0 by the run's guard, 0 by the recorder): 60 of 67 versions as written down, 7 not. Planted problems
+  found: 45 of 46 (missed: `t-no-focus-ring`). Safe sites and look-alikes as written down: 18 of 21
+  (`gl-disabled-button` and `gl-print-button` gave `dead-button`; `ll-csp-blocks-widget` gave `outside-script`). The
+  other differences: `t-chunk-missing` and `t-blank-render` gave `keyboard` held where nothing-to-check is written
+  down, and `l-trapped` gave `not-reached` beside its `trapped`. The two runs of every version agreed. Each was a fault
+  of the checks (the second dated note above).

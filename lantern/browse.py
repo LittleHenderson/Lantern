@@ -96,6 +96,21 @@ def not_clicked(n: int) -> str:
             "control was the one first seen (none had its kind, its words and, for a link, its address, or more than "
             "one had)")
 
+
+# Why the browser stopped a request itself, before it was sent, as Chrome tells it (`blockedReason` of
+# `Network.loadingFailed`): the page's own policy (its Content-Security-Policy, as a header or a `<meta>` tag)
+# refused it. Such a request never reached Lantern's door and was not asked of another computer (2026-11-22, the
+# browser benchmark's first whole run: until then every one was counted as asked, and a chat widget that the page's
+# own policy keeps out read as a page asking another computer for a script).
+KEPT_IN = ("csp",)
+
+
+def kept_in(n: int) -> str:
+    """The `outside` check's reason where requests were not counted because the page's own policy stopped them in the
+    browser before they were sent (`KEPT_IN`; `n` counts each address once a page)."""
+    return (f"{n} request{'' if n == 1 else 's'} for another computer not counted: the page's own policy (its "
+            f"Content-Security-Policy) stopped {'it' if n == 1 else 'each'} in the browser before it was sent")
+
 # Why a check, or a whole run, was not run: Lantern's own words, never text of a page, a browser or an app.
 WHY_NOT = {
     "not-built": "The browser checks are not built for this system yet.",
@@ -592,12 +607,18 @@ class _Door:
 
 
 # ================================================================================================== the walk
+# What Lantern's own world in each page counts: the changes to the page, and the times the browser was asked to print
+# it (`beforeprint`, which the browser sends when the page's script calls `print()`: the browser's own print dialog,
+# 2026-11-22; until then a print button read as a button that does nothing).
 OBSERVER = """(() => {
-  const s = {changes: 0, last: performance.now()};
+  const s = {changes: 0, prints: 0, last: performance.now()};
   Object.defineProperty(window, '__lantern', {value: s});
   new MutationObserver((list) => { s.changes += list.length; s.last = performance.now(); })
     .observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+  window.addEventListener('beforeprint', () => { s.prints += 1; s.last = performance.now(); });
 })();"""
+# What a step reads of Lantern's own count before and after it (`_before`, `_effect`).
+COUNTS = "({changes: window.__lantern.changes, prints: window.__lantern.prints})"
 
 MEASURE = """(() => {
   const b = document.body;
@@ -612,6 +633,9 @@ CONTROL_SEL = "a[href], area[href], button, input[type=button], input[type=submi
 ABOUT_CONTROL = """(e) => ({tag: e.tagName.toLowerCase(),
   text: (e.innerText || e.value || e.getAttribute('aria-label') || '').trim().slice(0, 60),
   href: e.matches('a[href], area[href]') ? e.getAttribute('href') : null})"""
+# The controls of a page as first seen. `off`: switched off (`disabled`, `aria-disabled`), so it is not clicked and not
+# counted (2026-11-22: until then a switched-off button was clicked, did nothing, and read as a button that does
+# nothing).
 CONTROLS = """(() => { const about = %s;
   return Array.from(document.querySelectorAll(%s)).map((e, i) => {
   const d = about(e), link = d.href !== null;
@@ -619,6 +643,7 @@ CONTROLS = """(() => { const about = %s;
   const frag = link && e.hash ? decodeURIComponent(e.hash.slice(1)) : '';
   return {i, link, href: d.href, url: link ? e.href : null,
           inForm: !link && !!(e.form || e.closest('form')),
+          off: e.matches(':disabled') || e.getAttribute('aria-disabled') === 'true',
           shown: r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden',
           named: !!(frag && (document.getElementById(frag) || document.getElementsByName(frag).length)),
           tag: d.tag, text: d.text};
@@ -693,9 +718,18 @@ FILL = """((i, want) => {
   return {submitter: true, at, x: r.left + r.width / 2, y: r.top + r.height / 2};
 })""" % ABOUT_FORM
 
-STYLE = """(e) => { const c = getComputedStyle(e); return [c.outlineStyle, c.outlineWidth, c.outlineColor, c.outlineOffset,
-  c.boxShadow, c.borderTopColor, c.borderTopWidth, c.borderBottomColor, c.borderBottomWidth, c.backgroundColor, c.color,
-  c.textDecorationLine].join('|'); }"""
+# How a control is drawn, to tell whether reaching it with Tab changes what shows. An outline or a border is a part of
+# it only where it draws: a style that draws, a width above 0 and a colour that can be seen (2026-11-22, the browser
+# benchmark's first whole run: until then the numbers were compared as they are, and `outline: 0` on focus, which
+# draws nothing, changed the outline's width from 3px to 0 and read as a ring that shows).
+STYLE = """(e) => { const c = getComputedStyle(e), px = (v) => parseFloat(v) || 0;
+  const seen = (col) => !/^(transparent|rgba\\([^)]*,\\s*0(\\.0+)?\\))$/.test(col);
+  const line = (style, width, colour, more) => style === 'none' || style === 'hidden'
+    || (style !== 'auto' && !px(width)) || !seen(colour) ? 'none' : [style, width, colour, more].join(' ');
+  return [line(c.outlineStyle, c.outlineWidth, c.outlineColor, c.outlineOffset), c.boxShadow,
+    line(c.borderTopStyle, c.borderTopWidth, c.borderTopColor, ''),
+    line(c.borderBottomStyle, c.borderBottomWidth, c.borderBottomColor, ''),
+    c.backgroundColor, c.color, c.textDecorationLine].join('|'); }"""
 
 FOCUSABLES = """(() => {
   const style = %s;
@@ -741,10 +775,19 @@ PROBE = "data:text/html;charset=utf-8," + urllib.parse.quote(
 KEYBOARD_ENDS = ("leaves", "wraps", "stays")
 MOST_PRESSES = 80               # Tab presses on one page
 
-REACHED = """function () { const F = window.__lanternFocus; if (!F) return false;
-  for (const r of F.reached) { if (r === this || this.contains(r) || r.contains(this)) return true; } return false; }"""
+# Was the element reached with Tab? true, false, or null where the walk stopped before it went round the page (`cut`:
+# a trap, the page gone, the press limit) and the element is, or holds, a control Tab can be put on: the walk did not
+# get to it, which says nothing of whether Tab can (2026-11-22, the browser benchmark's first whole run: the button
+# after a trapped field read as out of reach).
+REACHED = """function (cut) { const F = window.__lanternFocus; if (!F) return false;
+  for (const r of F.reached) { if (r === this || this.contains(r) || r.contains(this)) return true; }
+  if (cut) for (const f of F.list) { if (f === this || this.contains(f) || f.contains(this)) return null; }
+  return false; }"""
 
+# Can the element be seen, and is it not switched off (`disabled`, `aria-disabled`: nobody can click it, and Tab need
+# not reach it; 2026-11-22, until then a switched-off button with a handler read as out of the keyboard's reach)?
 SHOWN = """function () { const r = this.getBoundingClientRect();
+  if (this.matches(':disabled') || this.getAttribute('aria-disabled') === 'true') return false;
   return r.width > 0 && r.height > 0 && getComputedStyle(this).visibility !== 'hidden'; }"""
 
 DESCRIBE = """function () { return {tag: this.tagName.toLowerCase(), id: this.id || '',
@@ -802,6 +845,7 @@ class _Walk:
         self.answers: list[dict] = []
         self.errors: list[dict] = []
         self.outside: list[dict] = []
+        self.kept: list[dict] = []          # requests the page's own policy stopped in the browser (`KEPT_IN`)
         self.asked: list[tuple] = []        # (phase, kind) of each request for the site, when it was stopped
         self.fetched: set[str] = set()
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="lantern-browse-answer")
@@ -834,11 +878,13 @@ class _Walk:
             url = str((params.get("request") or {}).get("url") or "")
             if not self._ours(url) and urllib.parse.urlsplit(url).scheme in ("http", "https", "ws", "wss") \
                     and params.get("requestId") not in self.fetched:
-                self._out(tab, url, str(params.get("type") or "Other"))
+                self._out(tab, url, str(params.get("type") or "Other"), net=(session, params.get("requestId")))
         elif method in ("Network.loadingFinished", "Network.loadingFailed") and tab is not None:
             with self.lock:
                 tab.inflight.discard(params.get("requestId"))
                 tab.last_net = now
+            if method == "Network.loadingFailed" and params.get("blockedReason") in KEPT_IN:
+                self._kept(tab, (session, params.get("requestId")))
         elif method == "Network.webSocketCreated" and tab is not None:
             url = str(params.get("url") or "")
             if not self._ours(url.replace("ws://", "http://", 1)):
@@ -903,12 +949,30 @@ class _Walk:
     def _ours(self, url: str) -> bool:
         return url == self.origin or url.startswith(self.origin + "/") or url.startswith(self.origin + "?")
 
-    def _out(self, tab: _Tab, url: str, kind: str) -> None:
+    def _out(self, tab: _Tab, url: str, kind: str, net: tuple | None = None) -> None:
         parts = urllib.parse.urlsplit(url)
         address = urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))[:300]
         with self.lock:
             self.outside.append({"tab": tab.session, "phase": tab.phase, "address": address,
-                                 "host": (parts.hostname or "")[:200], "kind": kind})
+                                 "host": (parts.hostname or "")[:200], "kind": kind, "net": net})
+
+    def _kept(self, tab: _Tab, net: tuple) -> None:
+        """The browser stopped the request `net` (the event's session and the request's id) itself, before it was
+        sent, because the page's own policy refused it (`KEPT_IN`): it is taken off what was asked of another computer,
+        kept apart (`kept`, counted in the `outside` check's reason) and said in the log with its page. Only a request
+        the browser told of (`Network.requestWillBeSent`) is such: one that reached Lantern's door was sent."""
+        with self.lock:
+            gone = [o for o in self.outside if o.get("net") == net and o["tab"] == tab.session]
+            if not gone:
+                return
+            self.outside = [o for o in self.outside if not any(o is g for g in gone)]
+            for o in gone:
+                self.kept.append({"address": o["address"], "host": o["host"], "kind": o["kind"],
+                                  "page": o["phase"][1] if len(o["phase"]) > 1 else ""})
+        for o in gone:
+            page = o["phase"][1] if len(o["phase"]) > 1 else ""
+            self.log(f"browse: the page's own policy stopped a request for {o['address'][:200]} on {page[:200]} "
+                     "before it was sent: not counted as asked of another computer")
 
     def _error(self, tab: _Tab, how: str, text: str) -> None:
         with self.lock:
@@ -1160,6 +1224,8 @@ class _Walk:
         for c in controls:
             if not isinstance(c, dict) or not c.get("shown"):
                 continue
+            if c.get("off"):
+                continue                # switched off (`disabled`, `aria-disabled`): not clicked, not counted
             if c.get("link"):
                 url = str(c.get("url") or "")
                 parts = urllib.parse.urlsplit(url)
@@ -1202,16 +1268,21 @@ class _Walk:
             within = tab.in_document > before["in_document"]
             dialogs = tab.dialogs > before["dialogs"]
             windows = tab.windows > before["windows"]
-        changes = None if moved else self.eval(tab, "window.__lantern.changes")
-        changed = isinstance(changes, (int, float)) and changes > before.get("changes", 0)
+        now = None if moved else self.eval(tab, COUNTS)
+        now = now if isinstance(now, dict) else {}
+        changed, printed = (isinstance(now.get(k), (int, float)) and now[k] > before.get(k, 0)
+                            for k in ("changes", "prints"))
         return {"asked": asked, "raised": raised, "moved": moved, "within": within, "dialogs": dialogs,
-                "windows": windows, "changed": changed}
+                "windows": windows, "changed": changed, "printed": printed}
 
     def _before(self, tab: _Tab) -> dict:
         with self.lock:
             out = {"navigations": tab.navigations, "in_document": tab.in_document, "dialogs": tab.dialogs,
                    "windows": tab.windows}
-        out["changes"] = self.eval(tab, "window.__lantern.changes") or 0
+        now = self.eval(tab, COUNTS)
+        now = now if isinstance(now, dict) else {}
+        for k in ("changes", "prints"):
+            out[k] = now.get(k) if isinstance(now.get(k), (int, float)) else 0
         return out
 
     def _press(self, tab: _Tab, x: float, y: float) -> None:
@@ -1255,7 +1326,8 @@ class _Walk:
             self.saw["leads"].append({"code": "button-raises", **what,
                                       "what": "a click raised an error in the site's script: "
                                               + effect["raised"][0]["text"][:120]})
-        elif not (effect["asked"] or effect["moved"] or effect["dialogs"] or effect["windows"] or effect["changed"]):
+        elif not (effect["asked"] or effect["moved"] or effect["dialogs"] or effect["windows"] or effect["changed"]
+                  or effect["printed"]):
             if link:
                 self.saw["leads"].append({"code": "empty-link", **what, "link": str(c.get("href"))[:200],
                                           "what": "a link that leads nowhere: the click changed nothing"
@@ -1348,17 +1420,19 @@ class _Walk:
         with self.lock:
             self.k += 1
             tab.phase = ("keyboard", path, self.k)
-        self.looked["keyboard"] += 1
         found = self._names(tab, path)
         focusables = self.eval(tab, FOCUSABLES) or []
         reached: set[int] = set()
         ringless: set[int] = set()
         left: set = set()               # where Tab stayed and Shift+Tab moved on: the keyboard can leave it
         budget, presses = len(focusables) + 2, 0
+        cut = False                     # the walk did not go round the page: what it did not get to is not known
+        ended = False                   # the walk ended by itself, not at the presses' limit
         while focusables and presses < min(budget, MOST_PRESSES):
             presses += 1
             now = self._tab(tab)
             if now is None:
+                cut = ended = True      # the page went away under the key
                 break
             i = now.get("i")
             if now.get("same"):
@@ -1367,13 +1441,19 @@ class _Walk:
                     continue
                 key = (i, now.get("tag"))
                 if key in left:
+                    ended = True
                     break               # back where Tab stays: the keyboard goes no further on this page
                 held = self._held(tab, focusables)
                 if held == "trapped":
                     found.append({"code": "trapped", "page": path, "control": self._said(focusables, i, now),
                                   "what": "Tab cannot leave this control"})
+                    cut = ended = True
+                    break
+                if held == "gone":
+                    cut = ended = True  # the page went away under the key
                     break
                 if held == "browser":
+                    ended = True
                     break               # the browser itself keeps the keyboard there: nothing more to reach
                 left.add(key)
                 budget += 1
@@ -1387,7 +1467,11 @@ class _Walk:
                     ringless.add(i)
                     found.append({"code": "no-focus-ring", "page": path, "control": self._said(focusables, i, now),
                                   "what": "nothing shows where the keyboard is when this control is reached"})
-        found += self._unreached(tab, path)
+        if not ended and presses >= MOST_PRESSES and budget > MOST_PRESSES:
+            cut = True                  # at the presses' limit, with controls still ahead
+        found += self._unreached(tab, path, cut)
+        if focusables or found:
+            self.looked["keyboard"] += 1    # a page with no link, button or field gives the keyboard nothing to check
         self.saw["keyboard"] += found
         try:
             self.b.call("Runtime.releaseObjectGroup", {"objectGroup": "lantern"}, tab.session)
@@ -1415,10 +1499,11 @@ class _Walk:
         """Tab left the keyboard where it was. "left" when Shift+Tab moves it on (it can be left with the keyboard),
         "trapped" when Shift+Tab cannot move it either and the page's own script listens for keys or focus there or
         above it, else "browser": what this browser does by itself (on a page with one control, a browser that brings
-        the keyboard back to the first control, or keeps it on the last, keeps it on that one)."""
+        the keyboard back to the first control, or keeps it on the last, keeps it on that one). "gone" when the page
+        went away under the key."""
         back = self._tab(tab, shift=True)
         if back is None:
-            return "browser"
+            return "gone"
         if not back.get("same"):
             return "left"
         if len(focusables) == 1 and self.keyboard_end in ("wraps", "stays"):
@@ -1536,11 +1621,13 @@ class _Walk:
                 bits.append(f'{key}="{str(pairs[key])[:40]}"')
         return ("<" + " ".join(bits) + ">")[:100]
 
-    def _unreached(self, tab: _Tab, path: str) -> list[dict]:
-        """What answers a click, can be seen, and was not reached with Tab. The elements are listed by the browser's
-        own calls (no script of the page runs for it), their listeners read in the page's own world, where its script
-        put them, and whether they can be seen and whether Tab reached them in Lantern's world, where the walk wrote
-        it down."""
+    def _unreached(self, tab: _Tab, path: str, cut: bool = False) -> list[dict]:
+        """What answers a click, can be seen, is not switched off, and was not reached with Tab. The elements are listed
+        by the browser's own calls (no script of the page runs for it), their listeners read in the page's own world,
+        where its script put them, and whether they can be seen and whether Tab reached them in Lantern's world, where
+        the walk wrote it down. Where the walk was `cut` (a trap, the page gone, the presses' limit), a control the
+        keyboard can be given and that the walk did not get to is not known to be out of its reach, and is left out
+        (`REACHED`, 2026-11-22: until then it was named beside the trap)."""
         out: list[dict] = []
         with self.lock:
             main, world = tab.main, tab.world
@@ -1567,8 +1654,9 @@ class _Walk:
                 shown = self.b.call("Runtime.callFunctionOn", {"objectId": obj, "functionDeclaration": SHOWN,
                                                                "returnByValue": True}, tab.session)
                 if (shown.get("result") or {}).get("value") is not True:
-                    continue            # hidden: nobody can click it either
+                    continue            # hidden or switched off: nobody can click it either
                 r = self.b.call("Runtime.callFunctionOn", {"objectId": obj, "functionDeclaration": REACHED,
+                                                           "arguments": [{"value": bool(cut)}],
                                                            "returnByValue": True}, tab.session)
                 reached = (r.get("result") or {}).get("value")
                 if reached is not False:
@@ -1711,9 +1799,12 @@ class _Walk:
                                         "address": o["address"], "kind": o["kind"].lower(),
                                         "what": "the page asked another computer for it, and Lantern refused"})
         self.saw["outside"] = _unique(self.saw["outside"])
-        put("outside", "held")
+        with self.lock:
+            kept = len({(k["address"], k["page"]) for k in self.kept})
+        put("outside", "held", kept_in(kept) if kept else None)
         self.saw["keyboard"] = _unique(self.saw["keyboard"])
-        put("keyboard", "held" if self.looked["keyboard"] else "nothing-to-check")
+        put("keyboard", "held" if self.looked["keyboard"] else "nothing-to-check",
+            None if self.looked["keyboard"] else "the pages have no link, button or field")
         return [checks[c.id] for c in CHECKS]
 
     def asked_outside(self) -> list[dict]:

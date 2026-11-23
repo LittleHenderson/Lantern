@@ -149,6 +149,54 @@ def test_a_control_or_form_not_found_again_is_left_and_said_and_a_check_that_did
         walk.pool.shutdown(wait=False)
 
 
+def test_a_request_the_pages_own_policy_stopped_is_not_counted_as_asked(tmp_path):
+    """The browser tells of a request it stopped itself before sending it, because the page's own policy (its
+    Content-Security-Policy) refused it: such a request never reached Lantern's door and was not asked of another
+    computer, so the outside check does not count it, its reason says how many it left out, and it makes nothing on
+    the page undecided (a script the page's own policy refuses is missing on the live site too). A request the browser
+    tells of that ended any other way, or that it told no end of, stays counted (2026-11-22, the browser benchmark's
+    first whole run: until then every such request was counted as asked)."""
+    lines: list[str] = []
+    walk = browse._Walk(None, browse.Site("pages", tmp_path, ["/"]), None, 1.0, "http://localhost:1", lines.append)
+    try:
+        tab = browse._Tab("s1", "t1", phase=("load", "/", 1))
+        walk.tabs["s1"] = tab
+
+        def asked(rid: str, url: str, kind: str = "Script") -> None:
+            walk.event("Network.requestWillBeSent", {"requestId": rid, "request": {"url": url}, "type": kind}, "s1")
+
+        def check(name: str) -> dict:
+            return next(c for c in walk.judge() if c["id"] == name)
+
+        asked("1", "https://chat.example.net/widget.js")
+        walk.event("Network.loadingFailed", {"requestId": "1", "blockedReason": "csp", "errorText": ""}, "s1")
+        tab.phase = ("reload", "/", 2)                   # the same page opened anew for a click: the same request
+        asked("2", "https://chat.example.net/widget.js")
+        walk.event("Network.loadingFailed", {"requestId": "2", "blockedReason": "csp", "errorText": ""}, "s1")
+        walk.saw["keyboard"].append({"code": "no-name", "page": "/", "control": "<button>", "what": "no name"})
+        assert walk.asked_outside() == []
+        assert (check("outside")["outcome"], check("outside")["why"]) == ("held", browse.kept_in(1))
+        assert browse.kept_in(1).startswith("1 request for another computer not counted")
+        assert browse.kept_in(2).startswith("2 requests for another computer not counted")
+        assert check("keyboard")["outcome"] == "broken"   # decided: no script of another computer was refused there
+        assert any("chat.example.net" in line and "/" in line for line in lines), lines
+
+        # its twins: stopped for another reason, failed at Lantern's door, or with no end told: counted as asked
+        walk.saw = {c.id: [] for c in browse.CHECKS}
+        tab.phase = ("load", "/", 3)
+        asked("3", "https://stats.example.org/count.js")
+        walk.event("Network.loadingFailed", {"requestId": "3", "blockedReason": "other", "errorText": ""}, "s1")
+        asked("4", "https://api.example.org/collect", "Fetch")
+        walk.event("Network.loadingFailed", {"requestId": "4", "errorText": "net::ERR_BLOCKED_BY_CLIENT"}, "s1")
+        asked("5", "https://pixel.example.net/p.gif", "Image")
+        assert [a["host"] for a in walk.asked_outside()] == ["stats.example.org", "api.example.org",
+                                                             "pixel.example.net"]
+        outside = check("outside")
+        assert (outside["outcome"], outside["codes"]) == ("broken", ["outside-file", "outside-script"]), outside
+    finally:
+        walk.pool.shutdown(wait=False)
+
+
 def test_every_code_is_planted_and_every_site_says_each_check():
     planted = {(p.check, p.code) for p in PLANTED.values()}
     assert planted == {(c.id, code) for c in browse.CHECKS for code in c.codes}
@@ -650,6 +698,28 @@ def test_each_site_written_safe_breaks_no_check(tmp_path, site, the_browser):
         data = pictures.read(kept["set"], s["name"])
         assert data is not None and data[:8] == pictures.PNG and len(data) == s["bytes"], s
     assert not [p for p in tmp_path.rglob("*") if p.is_file() and p.read_bytes()[:8] == pictures.PNG]
+
+
+@needs_browser
+def test_a_site_with_no_control_gives_the_keyboard_nothing_to_check(tmp_path, the_browser):
+    """A site whose pages have no link, button or field, and nothing that answers a click, gives the keyboard nothing
+    to look at: nothing-to-check with the reason, not a held that nothing was looked at for (2026-11-22, the browser
+    benchmark's first whole run: until then each page opened counted, and a task list that draws nothing read held)."""
+    site = tmp_path / "closed"
+    site.mkdir()
+    (site / "index.html").write_text(
+        '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Closed</title>\n</head>\n<body>\n'
+        "<main>\n<h1>Closed for the holidays</h1>\n<p>We open again on Monday.</p>\n</main>\n</body>\n</html>\n",
+        encoding="utf-8", newline="\n")
+    record = browse.run(site, browser=BROWSER)
+    the_browser(record)
+    assert record["ran"] is True, (record.get("why_not"), record.get("why"))
+    keyboard = next(c for c in record["checks"] if c["id"] == "keyboard")
+    assert (keyboard["outcome"], keyboard["why"]) == ("nothing-to-check", "the pages have no link, button or field"), \
+        _told(record)
+    assert _outcomes(record) == {"opens": "held", "script": "nothing-to-check", "leads": "nothing-to-check",
+                                 "forms": "nothing-to-check", "visitor": "nothing-to-check", "protections": "not-run",
+                                 "outside": "held", "keyboard": "nothing-to-check"}, _told(record)
 
 
 @needs_browser

@@ -114,9 +114,12 @@ click does.
 Broken when a link points at an address the site does not have (`dead-link`: no route of the code, no file of the
 folder; a page the site does have and that does not open is the `opens` check's), a link leads nowhere (`empty-link`:
 `href="#"` and the like, and the click changes nothing but the part of the address after `#`), a button changes
-nothing when it is clicked (`dead-button`: no change to the page, no new address, no request and no dialog), or a
-click raises an error in the site's script (`button-raises`). Links to another computer are not followed and are not
-counted; a form's own buttons are the `forms` check's.
+nothing when it is clicked (`dead-button`: no change to the page, no new address, no request and no dialog, the
+browser's own print dialog among them), or a click raises an error in the site's script (`button-raises`). Links to
+another computer are not followed and are not counted; a form's own buttons are the `forms` check's; a control that
+is switched off (`disabled`, or `aria-disabled="true"`) is not clicked and not counted. (2026-11-22, the browser
+benchmark's first whole run: until then a switched-off button, and a print button, each read as a button that does
+nothing.)
 Broken example: a link to `old-prices.html`, which is not there; `<a href="#">More news</a>`; a button whose handler
 is never put on; a handler that looks for an element under a misspelt id. Safe twin: links to pages that are there,
 and buttons whose handlers work.
@@ -164,7 +167,12 @@ Codes: `said-not-sent`, `cookie-open`.
 
 Looks at every request a page makes that is not for the site: scripts, styles, fonts, pictures, frames, and what the
 page's script sends (`fetch`, `XMLHttpRequest`, beacons, WebSockets). Each one is refused at Lantern's door and
-written down with its address and the page.
+written down with its address and the page. A request the browser stops itself before it is sent, because the page's
+own policy (its `Content-Security-Policy`, sent as a header or written in a `<meta>` tag) refuses it, never reaches the
+door and is not asked of another computer: it is not counted, the log names it with its page, and a check that holds
+says in its reason how many it left out (`1 request for another computer not counted: …`, each address counted once a
+page). A script stopped that way is missing on the live site too, so it makes nothing on the page undecided (below).
+(2026-11-22, the browser benchmark's first whole run: until then each was counted as asked.)
 Broken when a page asks another computer for a script (`outside-script`) or for anything else (`outside-file`).
 Another address on this computer counts as another computer.
 Broken example: an analytics script from a content network; a tracking picture; a `fetch` to another service. Safe
@@ -177,10 +185,18 @@ Looks at every page opened, walked with the Tab key (once for each control of th
 limit), and at the names the browser itself gives its controls.
 Broken when a link or button has no name the browser can tell (`no-name`: an icon button with no label, a picture
 link with no `alt`), a form field has no label (`no-label`), something that answers a click and can be seen cannot be
-reached with Tab (`not-reached`: a `div` with a click handler; a hidden one, with no size or `visibility: hidden`, is
-not asked for, since nobody can click it either), the place the keyboard is at does not show (`no-focus-ring`:
-nothing changes when a control is reached), or Tab cannot leave a place (`trapped`). These are the basics, not a
-whole accessibility review: colours, headings and reading order are not judged.
+reached with Tab (`not-reached`: a `div` with a click handler; a hidden one, with no size or `visibility: hidden`, and
+a switched-off one are not asked for, since nobody can click them either), the place the keyboard is at does not show
+(`no-focus-ring`: nothing that is drawn changes when a control is reached), or Tab cannot leave a place (`trapped`).
+These are the basics, not a whole accessibility review: colours, headings and reading order are not judged.
+What is drawn is an outline, a shadow, a border, the colours and an underline; an outline whose style is `none` or
+whose width is 0 (`outline: 0`) draws nothing, whatever its other numbers say. `not-reached` is said only where the
+walk went round the page: where it stopped first (at a trap, the page gone, or the limit of presses), a control Tab
+can be put on that the walk did not get to is not asked for, since the walk says nothing of it. A site whose pages
+have no link, button or field gives the check nothing to check ("the pages have no link, button or field").
+(2026-11-22, the browser benchmark's first whole run: until then an outline set to 0 read as a place that shows,
+because a number of it changed, the button after a trapped field read as out of the keyboard's reach, and a page with
+no control at all read as held.)
 A trap is a place where Tab and Shift+Tab both leave the keyboard where it is and the page's own script listens for
 keys or focus there or above it. What a browser does by itself at the end of a page differs: the keyboard leaves the
 page, goes back to the first control, or stays on the last. Lantern looks at it once a run, on a page of its own with
@@ -202,7 +218,8 @@ Codes: `no-name`, `no-label`, `not-reached`, `no-focus-ring`, `trapped`.
 * `inconclusive`: everything the check saw is undecided (below): it may come from something the run itself refused;
   or every control it was to click (`leads`, which had no link to look at either), or every form it was to send
   (`forms`), was not found again on the page opened anew (above).
-* `nothing-to-check`: the site has nothing of this kind (no form, no page that asks for a sign-in), with why.
+* `nothing-to-check`: the site has nothing of this kind (no form, no page that asks for a sign-in, no link, button or
+  field), with why.
 * `not-run`, with the reason: `not-built` (not built for this system yet), `no-browser` (no browser Lantern can drive
   was found), `no-browser-sandbox`, `browser-failed` (the browser stopped, or did not answer, before the pages were
   looked at), `no-site` (nothing to open), `not-started` (the app could not be started in the sealed box), `no-sandbox`
